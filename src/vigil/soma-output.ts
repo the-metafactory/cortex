@@ -32,17 +32,19 @@ function relativeSomaRef(ref: string, directory: SomaFileDirectory): string | nu
 }
 
 async function openWithin(root: string, relative: string): Promise<FileHandle | null> {
+  let file: FileHandle | null = null;
   try {
     const base = await realpath(root);
     const target = await realpath(join(base, relative));
     if (base === target || !isWithin(base, target)) return null;
-    const file = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    file = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     if (!(await file.stat()).isFile()) {
       await file.close();
       return null;
     }
     return file;
   } catch {
+    if (file !== null) await file.close().catch(() => undefined);
     return null;
   }
 }
@@ -54,8 +56,10 @@ async function readTitleWithin(root: string, relative: string): Promise<string |
     const buffer = Buffer.alloc(TITLE_PREFIX_BYTES);
     const { bytesRead } = await file.read(buffer, 0, TITLE_PREFIX_BYTES, 0);
     return titleFromPrefix(buffer.subarray(0, bytesRead).toString("utf8"), bytesRead === TITLE_PREFIX_BYTES);
+  } catch {
+    return null;
   } finally {
-    await file.close();
+    await file.close().catch(() => undefined);
   }
 }
 
@@ -66,8 +70,10 @@ export async function readSomaFile(ref: string, directory: SomaFileDirectory, ho
   if (file === null) return null;
   try {
     return await file.readFile("utf8");
+  } catch {
+    return null;
   } finally {
-    await file.close();
+    await file.close().catch(() => undefined);
   }
 }
 

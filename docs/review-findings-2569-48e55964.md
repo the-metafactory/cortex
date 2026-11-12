@@ -1,3 +1,4 @@
+<!-- glossary-ignore: node, path, body, agent, run, host -->
 # Result attention review dispositions
 
 This record covers all nineteen findings from Sage round 1 on [PR #2665](https://github.com/the-metafactory/cortex/pull/2665), reviewed at `48e55964fa29643fc3d12e0c8e03cc3291adeb29`, for [Review findings left open by node #2569](https://github.com/the-metafactory/cortex/issues/2667). Locations below refer to that reviewed commit, so subsequent line movement does not change which finding is addressed. The checkpoint is `review-findings-2569-48e55964`.
@@ -42,6 +43,15 @@ Every finding has a correction or an explicit decline with a reason. Wire fields
 
 [What is the Vigil contract: run-ledger envelope, tick, routing and attention budget?](https://github.com/the-metafactory/soma/issues/787) defines the execution reporting vocabulary and the attention contract these dispositions preserve.
 
+## Round 2
+
+Sage round 2 at `ec30cd89` raised one important finding and six glossary nits.
+
+| ID | Reviewed location and finding | Disposition and reason |
+| --- | --- | --- |
+| G1 | `src/vigil/soma-output.ts:55`, read failures reject instead of falling back | Fixed: `readTitleWithin` and `readSomaFile` catch a failed handle read and return null, so a result or proposal presentation falls back to the reference as it did before the bounded-prefix change. `openWithin` also closes a handle whose stat fails. Covered by `src/vigil/__tests__/soma-output.test.ts`, which injects handle read failures and fails on the reviewed commit. |
+| G2 | `docs/review-findings-2569-48e55964.md`, aliases `node`, `path`, `body`, `agent`, `run`, `host` | Fixed: the record opens with one `glossary-ignore` marker naming those six words. They are the reviewed finding's own vocabulary (node numbers, filesystem locations, file contents, an agent config key, run envelopes, the host that ran the checks), so substituting the canonical terms would misdescribe the record. |
+
 ## Verification
 
-On 2026-11-12, `bun run check` passed on this host: lint, duplication, typecheck, vocabulary, SDK, shippable hygiene, XDG, tests and branch ancestry. The test runner reported 15,671 passed, 31 skipped and 201 todo tests across 956 files, zero failures. A disposition audit confirmed F1-F19 appear exactly once: eleven corrected on this branch, four already fixed by merged changes (F1 by node #2589, F9 by node #2570, F10 and F11 by node #2661) and four declined with a reason. Every relative source link in this record resolves.
+On 2026-11-13, `bun run check` passed on this host: lint, duplication, typecheck, vocabulary, SDK, shippable hygiene, XDG, tests and branch ancestry. The test runner reported 15,675 passed, 30 skipped and 201 todo tests across 957 files, zero failures. A disposition audit confirmed F1-F19 appear exactly once: eleven corrected on this branch, four already fixed by merged changes (F1 by node #2589, F9 by node #2570, F10 and F11 by node #2661) and four declined with a reason. Every relative source link in this record resolves.
