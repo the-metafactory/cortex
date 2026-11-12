@@ -2,18 +2,9 @@ import assert from "node:assert/strict";
 import { withTempHome } from "./probe-temp-home";
 import { STALE_OUTLINE } from "../src/surface/mc/desk/balance-outline";
 import { operationUuid } from "../src/conversations/conversation-ids";
-import { balanceTaskApprovedSnapshot, balanceTaskLegacyResult } from "../src/conversations/domain-adapters/balance/task-binding";
-import { BALANCE_TASK_CONNECTION, BALANCE_TASK_NOW, balanceTaskAuthority, createTaskRequest, operationId, openBalanceTaskRig, taskFields, type BalanceTaskRig } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-task-fixtures";
+import { balanceTaskLegacyResult } from "../src/conversations/domain-adapters/balance/task-binding";
+import { approveBalanceTask, balanceTaskAuthority, createTaskRequest, operationId, openBalanceTaskRig, taskFields } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-task-fixtures";
 import { objectRef } from "../src/conversations/domain-adapters/fixtures";
-
-async function approveRefusal(rig: BalanceTaskRig, operation: string): Promise<void> {
-  const snapshot = balanceTaskApprovedSnapshot({
-    connectionId: BALANCE_TASK_CONNECTION,
-    provenance: { conversationId: "conversation-example", proposalId: "probe-refusal", revision: 1, entryId: null, link: "?desk=probe" },
-    input: { area: objectRef("balance", "area", "area-example"), project: objectRef("balance", "project", "studio-thread:missing"), title: "Probe refusal" },
-  });
-  await rig.journal.approve({ operationId: operation, idempotencyKey: operation, ownerRequestId: operationUuid(operation), snapshot, authority: balanceTaskAuthority, at: new Date(BALANCE_TASK_NOW).toISOString() });
-}
 
 await withTempHome(async () => {
   const rig = await openBalanceTaskRig();
@@ -63,7 +54,7 @@ await withTempHome(async () => {
     console.log("request-id redispatch: the owner receipt returns the same task and adds no effect");
 
     const refusalId = operationId("probe-refusal");
-    await approveRefusal(rig, refusalId);
+    await approveBalanceTask(rig, refusalId, { area: objectRef("balance", "area", "area-example"), project: objectRef("balance", "project", "studio-thread:missing"), title: "Probe refusal" });
     assert.equal(await rig.lifecycle().activate(), true);
     assert.equal((await rig.lifecycle().dispatch(refusalId)).kind, "settled");
     const refused = await rig.journal.read(refusalId);
