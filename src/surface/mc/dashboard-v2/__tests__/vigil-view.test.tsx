@@ -1,3 +1,4 @@
+// glossary-ignore: server, run
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { VigilView } from "../components/vigil-view";
@@ -18,7 +19,7 @@ describe("VigilView", () => {
       value: "overdue", healthy: false, expectedBy: null,
     }]} />);
     expect((html.match(/<tr>/g) ?? []).length).toBe(3);
-    for (const label of ["Subject", "Kind", "Vocabulary", "Reference", "Goal", "State", "Healthy", "Last result", "Last run", "Last ended", "Expected by"]) {
+    for (const label of ["Vigil subject", "Kind", "Vocabulary", "Reference", "Goal", "State", "Healthy", "Last result", "Last run", "Last ended", "Expected by"]) {
       expect(html).toContain(`scope="col">${label}</th>`);
     }
     for (const value of ["state:goal:default:G1", ">state<", ">goal<", "Example goal", "on-track", ">Yes<", "run-123", "soma:outputs/example.md", "state:escalation:default:example/project#604", ">escalation<", "overdue", ">No<"]) {
@@ -48,11 +49,11 @@ describe("VigilView", () => {
   });
 
   it("shows empty, loading, disabled and error states truthfully", () => {
-    expect(renderToStaticMarkup(<VigilView loaded subjects={[]} />)).toContain("No subjects watched yet.");
+    expect(renderToStaticMarkup(<VigilView loaded subjects={[]} />)).toContain("No Vigil subjects watched yet.");
     expect(renderToStaticMarkup(<VigilView loaded={false} subjects={[]} />)).toContain("Loading…");
     expect(renderToStaticMarkup(<VigilView loaded enabled={false} subjects={[]} />)).toContain("Vigil is not enabled on this stack.");
     const error = renderToStaticMarkup(<VigilView loaded subjects={[]} error="Could not load watched subjects." />);
     expect(error).toContain('role="alert"');
-    expect(error).not.toContain("No subjects watched yet.");
+    expect(error).not.toContain("No Vigil subjects watched yet.");
   });
 });

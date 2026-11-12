@@ -91,8 +91,8 @@ describe("startMissionControl (embed)", () => {
     expect(wsRegistry.size).toBe(0);
   });
 
-  it("passes Vigil wording and cadence options to its local server", async () => {
-    const key = "run:job:default:harness-gate";
+  it("passes Vigil wording and cadence options to its local Cortex runtime", async () => {
+    const key = "run:job:default:harness-gate";  // glossary-ignore: run
     handle = await startMissionControl({
       configPath: writeMcYaml(), dbPath: join(tmpDir, "mc.db"),
       vigil: { enabled: true, resolveGoalWording: () => "Example goal", cadence: { [key]: 3_600_000 } },
