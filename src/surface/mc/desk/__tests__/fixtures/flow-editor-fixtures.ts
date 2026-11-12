@@ -69,7 +69,6 @@ export async function openFlowEditorRig(options: { script?: string; conversation
   ] });
   const key = writerBindingKey(flow.binding.writerBinding);
   const bridge = flow.host.lifecycleBridge(flow.registry, flow.bindings, snapshot => snapshot.adapterId === "flow" && snapshot.connectionId === connectionId && snapshot.capabilityId === "flow.saved.create" ? flow.binding.support : undefined);
-  const openSessions: { close(): void }[] = [];
   const sessions = new Map<string, Awaited<ReturnType<typeof flow.openSession>>>();
   const draftEditor = deskFlowDraftEditor(flow.host, { registry: flow.registry, sources: state.sources, policy: state.policy, model: state.model }, {
     connectionId, stack, audience: "local", authority: flow.authority,
@@ -78,7 +77,7 @@ export async function openFlowEditorRig(options: { script?: string; conversation
       const record = await flow.host.lifecycleWriters().read(key);
       if (!record) return null;
       const opened = sessions.get(conversationId) ?? await flow.openSession(flow.actor, conversationId);
-      if (!sessions.has(conversationId)) { sessions.set(conversationId, opened); openSessions.push(opened); }
+      if (!sessions.has(conversationId)) sessions.set(conversationId, opened);
       return { runner: { create: () => Promise.reject(new Error("Flow drafts run no queries.")), run: () => Promise.reject(new Error("Flow drafts run no queries.")) }, context: opened.context, sink: { kind: "web", conversationId }, lease: writerLease(record), principal: flow.actor.principal };
     },
     sourceRestrictions: () => Promise.resolve([{ ref: destination, restrictionRef }]),
@@ -114,7 +113,7 @@ export async function openFlowEditorRig(options: { script?: string; conversation
     send: (seq: number, type: string, body: unknown) => frames.exchange(ASSET_OWNER, "local", instance, { ...identity, seq, type, body }),
     async close() {
       registered.remove();
-      for (const session of openSessions) session.close();
+      for (const session of sessions.values()) session.close();
       await assets.close();
       await flow.close();
     },
