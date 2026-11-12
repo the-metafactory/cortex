@@ -1,6 +1,6 @@
 import type { AuthorityMediator, WriterLease } from "../../../conversations/authority";
 import type { ConversationHost } from "../../../conversations/host";
-import { draftOperationId, DraftingBindings, type DraftingBindingDocument, type DraftDestinations, type DraftServiceDeps, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
+import { draftOperationId, DraftingBindings, type DraftingBindingDocument, type DraftDestinations, type DraftServiceDeps, type DraftView, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
 import type { OperationBridge } from "../../../conversations/domain-adapters/operations/dispatch";
 import type { StoredOperation } from "../../../conversations/domain-adapters/operations/journal";
 import { receiptStatus } from "../../../conversations/domain-adapters/operations/reconciliation";
@@ -60,17 +60,18 @@ export function ownerDraftEditor<Session extends OwnerDraftSession, Input, Desti
     const definitivelyRefused = (status.state === "failed" || status.state === "refused") && status.effects.length === 0 && !status.investigation;
     return !definitivelyRefused;
   };
+  const storedOperation = (draft: DraftView["draft"]) => host.lifecycleJournal(deps.registry).read(draftOperationId(draft));
   const editor = deskDraftEditor(host, { ...deps, bindings, destinations }, {
     audience: options.audience,
     targets: () => [{ connectionId: options.connectionId, capabilityId: owner.capabilityId, label: owner.label }],
     hasOperation: async view => {
-      const stored = await host.lifecycleJournal(deps.registry).read(draftOperationId(view.draft));
+      const stored = await storedOperation(view.draft);
       return stored !== null && holdsDraft(stored);
     },
     receipt: async view => {
       const draft = view.draft;
       const operationId = draftOperationId(draft);
-      const stored = await host.lifecycleJournal(deps.registry).read(operationId);
+      const stored = await storedOperation(draft);
       if (!stored || !holdsDraft(stored)) return null;
       const session = await options.session(draft.conversationId);
       if (!session || view.withheld.length) return { kind: "withheld" };

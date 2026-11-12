@@ -26,6 +26,7 @@ import { buildAllowedHostnames } from "../../api/mutation-guard";
 import type { DeskDraftEditor } from "../draft-editor";
 import { DESK_DRAFTS_PATH, type DraftConfirmation } from "../draft-editor-contract";
 import type { OwnerDraftDeps, OwnerDraftEntryOptions, OwnerDraftSession, OwnerDraftSetup } from "../owner-draft-entry";
+import type { QueryRunner } from "../../../../conversations/domain-adapters/reads/query";
 
 export type DraftServeOptions = Pick<StartServerOptions, "drafts">;
 
@@ -162,23 +163,11 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
     connectors,
     sinks, readBindings,
   };
-  let authority = host.lifecycleAuthority(registry, bindings);
-  await authority.publishHostRecord({ kind: "principal", value: principal }, 0);
-  await authority.publishHostRecord({ kind: "connection", value: connection }, 0);
   const restrictions: RestrictionRecord[] = [];
   for (const destination of refs()) {
     const restriction: RestrictionRecord = { version: 1, status: "active", restrictionRef: randomUUID(), source: destination, ownerRevision: "1", decisionRef: "synthetic-scope", audiences: ["web", "discord", "model", "view"], egress: "cloud", readScope: [principal.principalRef], resolverBinding: "draft-restriction", revision: "1" };
     restrictions.push(restriction);
-    await authority.publishHostRecord({ kind: "restriction", value: restriction }, 0);
   }
-  let bridge = host.lifecycleBridge(registry, bindings, () => binding.support);
-  if (!await bridge.activate(binding.writerBinding, lease)) throw new Error("Synthetic writer not active");
-  let runner = host.readQueries(registry, bindings);
-  const session = async (conversationId: string): Promise<Session | null> => {
-    if (conversationId !== conversation.id) return null;
-    const context: HostContext | null = await authority.authenticate("draft-session");
-    return context ? target.session({ context, runner, sink: { kind: "web", conversationId }, lease, principal: principal.principal }, refs(), read) : null;
-  };
   const sourceRestriction = restrictions[0];
   if (!sourceRestriction) throw new Error("Synthetic source restriction missing");
   const deps: OwnerDraftDeps = { registry,
@@ -187,8 +176,33 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
     model: { lanes: () => Promise.resolve(state.lanes), generate: async request => { state.requests.push(request); await state.onGenerate?.(); if (state.modelFails) throw new Error("Synthetic model unavailable"); return { modelId: "synthetic-model", output: state.output }; } },
     now: () => new Date(at), timeZone: "Europe/Zurich",
   };
-  let options: OwnerDraftEntryOptions<Session> = { connectionId, audience: "cloud", authority, bridge, session, sourceRestrictions: () => Promise.resolve(state.sourceRestrictionsAvailable ? [{ ref: sourceRestriction.source, restrictionRef: sourceRestriction.restrictionRef }] : null) };
-  let editor = target.createEditor({ host, deps, options });
+  let authority!: AuthorityMediator;
+  let bridge!: OperationBridge;
+  let runner!: QueryRunner;
+  let session!: (conversationId: string) => Promise<Session | null>;
+  let options!: OwnerDraftEntryOptions<Session>;
+  let editor!: Editor;
+  const wireHost = (next: ConversationHost) => {
+    host = next;
+    journal = host.lifecycleJournal(registry);
+    binding = target.createBinding(journal);
+    connectors.set(connection.connectorId, trustedConnector());
+    authority = host.lifecycleAuthority(registry, bindings);
+    bridge = host.lifecycleBridge(registry, bindings, () => binding.support);
+    runner = host.readQueries(registry, bindings);
+    session = async (conversationId: string): Promise<Session | null> => {
+      if (conversationId !== conversation.id) return null;
+      const context: HostContext | null = await authority.authenticate("draft-session");
+      return context ? target.session({ context, runner, sink: { kind: "web", conversationId }, lease, principal: principal.principal }, refs(), read) : null;
+    };
+    options = { connectionId, audience: "cloud", authority, bridge, session, sourceRestrictions: () => Promise.resolve(state.sourceRestrictionsAvailable ? [{ ref: sourceRestriction.source, restrictionRef: sourceRestriction.restrictionRef }] : null) };
+    editor = target.createEditor({ host, deps, options });
+  };
+  wireHost(host);
+  await authority.publishHostRecord({ kind: "principal", value: principal }, 0);
+  await authority.publishHostRecord({ kind: "connection", value: connection }, 0);
+  for (const restriction of restrictions) await authority.publishHostRecord({ kind: "restriction", value: restriction }, 0);
+  if (!await bridge.activate(binding.writerBinding, lease)) throw new Error("Synthetic writer not active");
   const servers: ReturnType<typeof startServer>[] = [];
   const core: OwnerDraftCore<Editor, Session> = {
     root, db, registry, policy, state, makeInput: { conversationId: conversation.id, entryId, capabilityId: spec.capabilityId, connectionId }, connectionId, principal, ref, target, session, lease,
@@ -196,15 +210,7 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
     async reopen() {
       await bridge.settled();
       await host.close();
-      host = await openHost();
-      journal = host.lifecycleJournal(registry);
-      binding = target.createBinding(journal);
-      connectors.set(connection.connectorId, trustedConnector());
-      authority = host.lifecycleAuthority(registry, bindings);
-      bridge = host.lifecycleBridge(registry, bindings, () => binding.support);
-      runner = host.readQueries(registry, bindings);
-      options = { ...options, authority, bridge };
-      editor = target.createEditor({ host, deps, options });
+      wireHost(await openHost());
     },
     async restrict(canonicalId, patch) {
       const restriction = restrictions.find(item => item.source.canonicalId === canonicalId);
