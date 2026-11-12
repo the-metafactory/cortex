@@ -8,7 +8,7 @@ import { VIGIL_ATTENTION_RESOLVED_TYPE, validateVigilAttentionResolved } from "@
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
 import { ingestFromSourceStack, ENDED_AT, ledgerEnvelope } from "../../../vigil/__tests__/fixtures";
 import { LEDGER_REPLAY_HANDLERS } from "../../../vigil/replay";
-import { readSomaOutput } from "../../../vigil/soma-output";
+import { readSomaFile } from "../../../vigil/soma-output";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
 import { TABLE_NAMES } from "../db/schema";
@@ -113,7 +113,7 @@ test("escaping realpaths and traversal never open a file", async () => {
   const open = spyOn(fs, "open");
   try {
     for (const ref of ["soma:outputs/escape.md", "soma:outputs/../outside.md", "soma:outputs//outside.md", "soma:outputs/missing.md"]) {
-      expect(await readSomaOutput(ref, home)).toBeNull();
+      expect(await readSomaFile(ref, "outputs", home)).toBeNull();
     }
     expect(open).not.toHaveBeenCalled();
   } finally {

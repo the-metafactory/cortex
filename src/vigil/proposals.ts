@@ -1,13 +1,27 @@
 import type { Database } from "bun:sqlite";
+import { DEFAULT_RESULT_BASE_URL } from "../common/result-base-url";
 import type { VigilRefRow } from "./ref-attention";
-import { DEFAULT_RESULT_BASE_URL, type ResultRenderOptions } from "./result-render";
-import { readSomaFile, somaFileTitle } from "./soma-output";
+import type { ResultRenderOptions } from "./result-render";
+import { readSomaProposalTitle } from "./soma-output";
 
 export interface VigilProposalRow extends VigilRefRow {
   proposal_ref: string;
+  filing_error: string | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function getProposal(db: Database, ref: string): VigilProposalRow | null {
+  return db.query<VigilProposalRow, [string]>("SELECT * FROM vigil_proposals WHERE proposal_ref = ?").get(ref);
+}
+
+export function getProposalByAttentionId(db: Database, attentionId: string): VigilProposalRow | null {
+  return db.query<VigilProposalRow, [string]>("SELECT * FROM vigil_proposals WHERE attention_id = ?").get(attentionId);
+}
+
+export function setProposalFilingError(db: Database, attentionId: string, error: string | null): void {
+  db.query("UPDATE vigil_proposals SET filing_error = ? WHERE attention_id = ?").run(error, attentionId);
+}
 
 export function openProposals(db: Database, now: number): VigilProposalRow[] {
   return db.query<VigilProposalRow, [number]>(`SELECT p.* FROM vigil_proposals p
@@ -16,8 +30,7 @@ export function openProposals(db: Database, now: number): VigilProposalRow[] {
 }
 
 export async function proposalPresentation(proposal: VigilProposalRow, options: ResultRenderOptions): Promise<{ label: string; url: string }> {
-  const content = await readSomaFile(proposal.proposal_ref, "proposals", options.somaHome);
-  const label = somaFileTitle(content, proposal.proposal_ref);
+  const label = (await readSomaProposalTitle(proposal.proposal_ref, options.somaHome)) ?? proposal.proposal_ref;
   const url = `${(options.resultBaseUrl ?? DEFAULT_RESULT_BASE_URL).replace(/\/$/, "")}/proposals/${encodeURIComponent(proposal.proposal_ref)}`;
   return { label, url };
 }
