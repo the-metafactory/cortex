@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Threva · Mail-Aktionen</title>
+<style>/* Layout: persona sheet on the left, a framed clickable prototype on the right; one column on a phone. Tokens follow Mission Control's own (hue 260 neutrals, blue accent). */
+:root{
+  --bg:oklch(0.975 0.004 260); --panel:oklch(1 0 0); --sunk:oklch(0.955 0.005 260);
+  --line:oklch(0.89 0.008 260); --fg:oklch(0.23 0.012 260); --dim:oklch(0.45 0.012 260); --faint:oklch(0.60 0.010 260);
+  --accent:oklch(0.52 0.16 240); --accent-soft:oklch(0.94 0.03 240); --on-accent:oklch(1 0 0);
+  --local:oklch(0.48 0.10 185); --local-soft:oklch(0.95 0.03 185);
+  --wait:oklch(0.50 0.14 60); --wait-soft:oklch(0.95 0.045 80);
+  --ok:oklch(0.48 0.13 155); --ok-soft:oklch(0.95 0.04 155);
+  --sans:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif; --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:oklch(0.17 0.008 260); --panel:oklch(0.215 0.008 260); --sunk:oklch(0.19 0.008 260);
+  --line:oklch(0.31 0.010 260); --fg:oklch(0.94 0.005 260); --dim:oklch(0.72 0.010 260); --faint:oklch(0.56 0.010 260);
+  --accent:oklch(0.74 0.13 240); --accent-soft:oklch(0.29 0.05 240); --on-accent:oklch(0.17 0.02 240);
+  --local:oklch(0.78 0.10 185); --local-soft:oklch(0.27 0.04 185);
+  --wait:oklch(0.82 0.13 80); --wait-soft:oklch(0.29 0.05 80);
+  --ok:oklch(0.78 0.13 155); --ok-soft:oklch(0.27 0.04 155); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:oklch(0.17 0.008 260); --panel:oklch(0.215 0.008 260); --sunk:oklch(0.19 0.008 260);
+  --line:oklch(0.31 0.010 260); --fg:oklch(0.94 0.005 260); --dim:oklch(0.72 0.010 260); --faint:oklch(0.56 0.010 260);
+  --accent:oklch(0.74 0.13 240); --accent-soft:oklch(0.29 0.05 240); --on-accent:oklch(0.17 0.02 240);
+  --local:oklch(0.78 0.10 185); --local-soft:oklch(0.27 0.04 185);
+  --wait:oklch(0.82 0.13 80); --wait-soft:oklch(0.29 0.05 80);
+  --ok:oklch(0.78 0.13 155); --ok-soft:oklch(0.27 0.04 155); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding-block:28px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:22px}
+h1{font-size:28px;line-height:1.15;margin:0;letter-spacing:-.02em;text-wrap:balance}
+h2{font-size:19px;margin:0;letter-spacing:-.01em;text-wrap:balance}
+h3{font-size:15px;margin:0}
+p{margin:0}
+.lede{color:var(--dim);max-width:66ch;font-size:16px}
+.eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:10px}
+.tab{background:none;border:1px solid transparent;border-radius:8px;padding:7px 13px;color:var(--dim);font-weight:500}
+.tab[aria-selected="true"]{background:var(--panel);border-color:var(--line);color:var(--fg)}
+.tab small{display:block;font-weight:400;font-size:12px;color:var(--faint)}
+.split{display:grid;grid-template-columns:minmax(0,320px) minmax(0,1fr);gap:26px;align-items:start}
+@media (max-width:860px){.split{grid-template-columns:minmax(0,1fr)}}
+.sheet{display:flex;flex-direction:column;gap:16px;min-width:0}
+.sheet ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;color:var(--dim)}
+.sheet li b{color:var(--fg);font-weight:600}
+.who{display:flex;gap:12px;align-items:center}
+.ava{width:44px;height:44px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:700;flex:none}
+.who span{display:block;color:var(--dim);font-size:13.5px}
+.quote{font-size:15.5px;color:var(--fg);border-left:2px solid var(--line);padding-left:12px}
+.frame{background:var(--panel);border:1px solid var(--line);border-radius:14px;min-width:0;overflow:hidden}
+.bar{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);background:var(--sunk);font-size:12.5px;color:var(--faint)}
+.bar b{color:var(--dim);font-weight:600}
+.body{padding:22px;display:flex;flex-direction:column;gap:16px}
+@media (max-width:520px){.body{padding:16px}}
+.btn{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 13px;font-weight:500;font-size:14px}
+.btn:hover{border-color:var(--faint)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.quiet{border-color:transparent;color:var(--dim);padding-inline:6px}
+.btn[disabled]{opacity:.45;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;white-space:nowrap}
+.pill.wait{background:var(--wait-soft);color:var(--wait)} .pill.think{background:var(--accent-soft);color:var(--accent)}
+.pill.calm{background:var(--sunk);color:var(--dim)} .pill.local{background:var(--local-soft);color:var(--local)} .pill.ok{background:var(--ok-soft);color:var(--ok)}
+input[type=text],input[type=date],textarea{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 12px;width:100%;min-width:0}
+textarea{min-height:74px;resize:vertical}
+label{font-size:13px;font-weight:600;color:var(--dim);display:flex;flex-direction:column;gap:5px}
+.card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:7px;background:var(--panel);text-align:left;width:100%}
+button.card:hover{border-color:var(--faint)}
+.card .q{font-weight:600;font-size:15.5px}
+.card .sub{color:var(--dim);font-size:14px}
+.ivy{background:var(--accent-soft);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:9px}
+.ivy .from{font-size:12.5px;font-weight:600;color:var(--accent)}
+.sunk{background:var(--sunk);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.muted{color:var(--dim);font-size:14px} .faint{color:var(--faint);font-size:13px}
+.toast{background:var(--ok-soft);color:var(--ok);border-radius:8px;padding:8px 12px;font-size:14px;font-weight:500}
+.big{font-size:21px;font-weight:600;letter-spacing:-.01em;line-height:1.3;text-wrap:balance}
+details summary{cursor:pointer;color:var(--dim);font-weight:500;font-size:14px}
+details ul{margin:8px 0 0;padding-left:18px;color:var(--dim);font-size:14px}
+/* Luca */
+.two{display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr);gap:0}
+@media (max-width:700px){.two{grid-template-columns:minmax(0,1fr)}}
+.queue{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+@media (max-width:700px){.queue{border-right:0;border-bottom:1px solid var(--line)}}
+.qi{background:none;border:0;border-bottom:1px solid var(--line);padding:12px 16px;text-align:left;display:flex;flex-direction:column;gap:3px}
+.qi[aria-current="true"]{background:var(--accent-soft)}
+.qi .k{font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--faint)}
+.qi .t{font-weight:500;font-size:14px}
+.qi.done .t{text-decoration:line-through;color:var(--faint)}
+.src{font-family:var(--mono);font-size:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 7px;color:var(--dim)}
+.opt{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:var(--panel);font-weight:400;color:var(--fg);flex-direction:row;font-size:14.5px}
+.opt:has(input:checked){border-color:var(--accent)}
+.steps{display:flex;gap:6px;flex-wrap:wrap;font-size:12.5px;font-weight:600;color:var(--faint)}
+.steps span[data-on="true"]{color:var(--accent)}
+pre.note{font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;margin:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;color:var(--dim)}
+/* dense list */
+.meter{display:flex;gap:4px;align-items:center}
+.meter i{width:16px;height:8px;border-radius:2px;background:var(--line)} .meter i.on{background:var(--accent)}
+.tr{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:10px 14px;border-bottom:1px solid var(--line);background:none;border-left:0;border-right:0;border-top:0;text-align:left;width:100%}
+.tr[aria-current="true"]{background:var(--accent-soft)}
+.tr .n{font-family:var(--mono);font-size:12.5px;color:var(--faint)}
+.tr .q{font-weight:500}
+.tr .meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.exp{padding:12px 14px 16px 46px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px;background:var(--sunk)}
+@media (max-width:600px){.exp{padding-left:14px}.tr{grid-template-columns:22px minmax(0,1fr)}.tr .meta{grid-column:2;justify-content:flex-start}}
+.diff{font-size:14px;display:flex;flex-direction:column;gap:3px}
+.diff del{color:var(--faint)} .diff ins{text-decoration:none;color:var(--fg);font-weight:500}
+kbd{font-family:var(--mono);font-size:11.5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 5px;background:var(--panel);color:var(--dim)}
+.keys{display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--faint)}
+/* Overview */
+.three{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+@media (max-width:1000px){.three{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.three{grid-template-columns:minmax(0,1fr)}}
+.stack{display:flex;flex-direction:column;gap:8px}
+.card.dashed{border-style:dashed}
+.ar{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ar label{flex-direction:row;align-items:center;gap:10px;font-weight:500}
+.ar input[type=range]{accent-color:var(--accent);flex:1;max-width:220px;min-width:0}
+.balbar{position:relative;height:8px;border-radius:4px;background:var(--sunk);max-width:420px}
+.balbar i{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--accent)}
+.balbar b{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--fg)}
+.pj{display:flex;flex-direction:column;padding-left:14px;border-left:2px solid var(--line)}
+.pj>b{font-size:13px;color:var(--dim);padding-top:6px}
+.vrow.dr{grid-template-columns:auto minmax(0,1.2fr) minmax(0,1fr) auto;cursor:grab}
+.hd{background:none;border:0;color:var(--faint);font-size:12px;letter-spacing:-2px;padding:4px 6px 4px 2px;cursor:grab;border-radius:5px}
+.hd:hover,.hd[aria-expanded="true"]{color:var(--fg);background:var(--sunk)}
+.vrow[data-zone="before"]{box-shadow:0 -2px 0 var(--accent)}
+.vrow[data-zone="after"]{box-shadow:0 2px 0 var(--accent)}
+.vrow[data-zone="into"],.anch[data-zone="into"]{background:var(--accent-soft);color:var(--accent);border-radius:6px}
+.gchip{background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:4px 12px;font-size:13.5px;color:var(--dim);font-weight:500}
+.gchip:hover{border-color:var(--accent);color:var(--fg)}
+@media (max-width:640px){.vrow.dr{grid-template-columns:auto minmax(0,1fr) auto}}
+.anc{border:1px solid var(--line);border-radius:14px;padding:6px 8px 8px;display:flex;flex-direction:column;gap:6px;background:var(--sunk)}
+.anc .anc{background:var(--bg)}
+.anch{background:none;border:0;text-align:left;font-size:13px;font-weight:600;color:var(--dim);padding:3px 6px;align-self:flex-start;border-radius:6px}
+.anch:hover{color:var(--fg);text-decoration:underline}
+.cur{border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--panel);display:flex;flex-direction:column;gap:12px}
+.anc>.cur{border-color:var(--accent)}
+@media (max-width:520px){.cur{padding:12px}.anc{padding:4px 5px 5px}}
+.daygrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,300px);gap:22px;align-items:start}
+@media (max-width:900px){.daygrid{grid-template-columns:minmax(0,1fr)}.daygrid .rail{order:-1}}
+.rail{display:flex;flex-direction:column;gap:6px;min-width:0}
+.slot{display:grid;grid-template-columns:40px minmax(0,1fr);gap:8px;padding:8px 10px;border-radius:8px;font-size:13.5px;border:1px solid transparent}
+.slot.ev{background:var(--sunk)}
+.slot.free{border:1px dashed var(--line)}
+.slot.cur{border-color:var(--accent)}
+.slot.past{opacity:.5}
+.tm{font-family:var(--mono);font-size:12px;color:var(--faint)}
+.chip{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;background:var(--accent-soft);border-radius:7px;padding:5px 8px;margin-top:6px}
+.chip .linkq{font-size:13px;font-weight:500}
+.chip.off{opacity:.45}
+.evb{background:none;border:0;padding:0;text-align:left}
+.evb:hover b{text-decoration:underline}
+.evd{grid-column:1/-1;display:flex;flex-direction:column;gap:7px;padding-top:6px;align-items:flex-start;min-width:0}
+.evd .lk{background:var(--wait-soft);color:var(--wait);border:0;border-radius:6px;padding:4px 7px;text-align:left;font-size:12.5px;font-weight:600}
+.evd input{padding:6px 9px;font-size:13.5px}
+.chip .x{background:none;border:0;color:var(--dim);padding:0 3px;font-size:12.5px}
+.chip .x:hover{color:var(--fg)}
+.week{display:grid;grid-template-columns:repeat(7,minmax(132px,1fr));gap:8px}
+.wd{border:1px solid var(--line);border-radius:8px;padding:9px 10px;display:flex;flex-direction:column;gap:6px;font-size:13px;min-height:128px;min-width:0}
+.wd.today{border-color:var(--accent)}
+.wd .lk{background:var(--wait-soft);color:var(--wait);border:0;border-radius:6px;padding:4px 7px;text-align:left;font-size:12.5px;font-weight:600}
+.vrow{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}
+.vrow.wide{grid-template-columns:minmax(0,1fr) auto auto}
+.vrow .linkq{font-size:14.5px}
+@media (max-width:640px){.vrow,.vrow.wide{grid-template-columns:minmax(0,1fr) auto}.vrow>.faint{grid-column:1/-1;grid-row:2}}
+.seg{display:inline-flex;background:var(--sunk);border:1px solid var(--line);border-radius:9px;padding:2px;gap:2px;flex-wrap:wrap}
+.seg button{background:none;border:0;border-radius:7px;padding:4px 11px;font-size:13.5px;font-weight:500;color:var(--dim)}
+.seg button[aria-selected="true"]{background:var(--panel);color:var(--fg);box-shadow:0 0 0 1px var(--line)}
+ul.plain{margin:4px 0 0;padding-left:18px;color:var(--dim)}
+.sum{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;background:var(--panel)}
+.sum ul{margin:4px 0 0;padding-left:18px;color:var(--dim);font-size:14px}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media (max-width:520px){.cols{grid-template-columns:minmax(0,1fr)}}
+.turns{display:flex;flex-direction:column;gap:10px;margin-top:12px;max-width:62ch}
+.turn{display:grid;grid-template-columns:34px minmax(0,1fr);gap:8px;font-size:14px}
+.turn b{font-size:12px;color:var(--accent);padding-top:2px}
+.turn.me b{color:var(--faint)}
+.turn p{color:var(--dim)}
+.linkq{background:none;border:0;padding:0;text-align:left;font-weight:600;font-size:15.5px}
+.linkq:hover{text-decoration:underline}
+button.src{cursor:pointer}
+button.src[aria-expanded="true"]{border-color:var(--accent);color:var(--fg)}
+.src.flag{text-decoration:line-through}
+.excerpt{border-left:2px solid var(--line);padding-left:12px;display:flex;flex-direction:column;gap:8px;align-items:flex-start;font-size:14px;color:var(--dim)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:560px}
+th,td{text-align:left;padding:8px 12px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:600}
+td code,.code{font-family:var(--mono);font-size:12.5px;color:var(--faint)}
+.find{display:grid;grid-template-columns:34px minmax(0,1fr);gap:4px 10px}
+.find .c{font-family:var(--mono);font-size:12.5px;color:var(--accent);padding-top:2px}
+.find p{color:var(--dim)} .find b{color:var(--fg)}
+section{display:flex;flex-direction:column;gap:14px}
+@media (prefers-reduced-motion:no-preference){.frame .body{animation:in .18s ease-out}@keyframes in{from{opacity:.6;transform:translateY(3px)}to{opacity:1;transform:none}}}
+
+html{color-scheme:light dark}body{margin:0;font-size:14px}[hidden]{display:none!important}
+.bar1{position:relative}
+.bar1 input{width:100%;font-size:17px;padding:13px 14px;border:1.5px solid var(--accent);border-radius:10px;box-sizing:border-box}
+.sugg{position:absolute;top:100%;left:0;right:0;z-index:20;display:flex;flex-direction:column;border:1px solid var(--line);border-top:0;border-radius:0 0 10px 10px;background:var(--panel);margin-top:-4px;overflow:hidden;box-shadow:0 10px 24px rgba(0,0,0,.14)}
+.interrupt{display:flex;flex-direction:column;gap:5px;border:1.5px solid var(--warn,#c77d00);border-radius:10px;padding:12px 14px;background:var(--panel)}
+.say{display:flex;flex-direction:column;gap:8px;min-width:0}
+.say p{margin:0}
+.chatlist{margin:0}
+.chatlist li{display:flex;flex-direction:column;gap:2px;margin:6px 0}
+.chatlist strong{font-weight:600;color:var(--text,inherit)}
+.keyhint{display:flex;gap:14px;align-items:center;color:var(--dim);font-size:12.5px}
+.keyhint kbd{font:inherit;font-size:11.5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--panel)}
+.sugg button{display:flex;justify-content:space-between;gap:12px;padding:9px 14px;border:0;border-top:1px solid var(--line);background:transparent;text-align:left;color:inherit;font:inherit;cursor:pointer}
+.sugg button:hover{background:var(--panel-2,var(--accent-soft))}
+.sugg button.sg-on{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+.sugg button.sg-on>span:first-child::before{content:"↵ "}
+.sugg:empty{display:none}
+.nextline{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline}
+.slotcard{display:flex;flex-direction:column;gap:4px}
+.slotcard>.card{border-color:var(--accent)}
+@media (max-width:900px){.daygrid.one .rail{order:1}}
+.nextline .lk,.card .lk{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;text-underline-offset:3px;font:inherit;cursor:pointer;text-align:left}
+.proto-ctl{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+
+.mailproto{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:860px){.mailproto{grid-template-columns:1fr}}
+.ivy.ask{border:1.5px solid var(--accent)}
+.warnline{color:var(--wait);font-weight:500}
+.plain{margin:0;padding-left:18px}
+.mailproto>*{min-width:0}
+.proto-ctl,.proto-ctl .row,.seg{max-width:100%;min-width:0}
+.eyebrow{white-space:normal;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:10px">
+    <span class="eyebrow">Threva · Prototyp Mail-Aktionen · alle Daten sind erfunden</span>
+    <div class="proto-ctl"><span class="row"><span class="faint">Der Anbieter antwortet beim nächsten Klick mit</span><div class="seg" role="tablist" id="ctl-sim"></div></span></div>
+  </header>
+  <main id="view"></main>
+</div>
+<script>
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+/* ---------- Prototype for cortex#3356: Mail actions under host authority ---------- */
+/* Shows what is new for Mail beyond the My Day prototype: warnings for actions with outside effects (report, */
+/* invitation reply, unsubscribe), the sweep preview with scope and count, and the Undo conflict state. */
+/* The simulation switch decides how the provider answers the next action. All data is made up. */
+const CONN = "Privat";
+const FAM = {
+  move: { label: "Archivieren, Spam, Löschen und Wiederherstellen", note: "Löschen heisst Papierkorb, nie endgültig. Jede Aktion hat ein Rückgängig." },
+  "report:phishing": { label: "Phishing beim Anbieter melden", warn: "Die Meldung geht an deinen Mailanbieter. Rückgängig holt die Mail in den Posteingang zurück, die Meldung selbst lässt sich nicht zurückziehen." },
+  invite: { label: "Einladungen beantworten: Zusagen, Absagen, Vielleicht", warn: "Jede Antwort benachrichtigt den Organisator. Rückgängig kann diese Nachricht nicht zurückholen." },
+  "invite:remove": { label: "Abgesagte Einladungen aus dem Kalender entfernen", note: "Nie automatisch nach dem Absagen. Rückgängig stellt den Termin wieder her." },
+  unsubscribe: { label: "Mit einem Klick abmelden", warn: "Das ändert dein Abo beim Absender. Es lässt sich vielleicht nicht rückgängig machen." },
+};
+const SWEEP = { fam: "sweep:wochenbrief-7d", label: "Archivieren · Absender Wochenbrief Sicherheit · älter als 7 Tage", count: 18 };
+const MAILS = [
+  { id: "m1", from: "Wochenbrief Sicherheit", subj: "Wochenrückblick KW 46", gist: "Zwölf Meldungen der Woche.", kind: "news" },
+  { id: "m2", from: "Konto-Service", subj: "Ihr Postfach wird heute gesperrt", gist: "Link auf eine fremde Domain, Absender nicht in deinen Kontakten.", kind: "phish" },
+  { id: "m3", from: "Nico, Geschäftsleitung", subj: "Einladung: Drehbuch Krisenübung, Mo 11:00", gist: "Termin mit fünf Teilnehmenden.", kind: "invite" },
+];
+const SIMS = [
+  ["ok", "Normal"],
+  ["moved", "Mail inzwischen verschoben"],
+  ["missing", "Mail nicht mehr da"],
+  ["denied", "Konto verweigert"],
+  ["unclear", "Anbieter antwortet nicht"],
+];
+const M = { sim: "ok", grants: new Set(), ask: null, receipts: [], gone: new Set(), state: {}, sweep: false, toast: "", n: 0 };
+
+const famOf = (a) => ({ archive: "move", junk: "move", trash: "move", phish: "report:phishing", accept: "invite", decline: "invite", tentative: "invite", removeDeclined: "invite:remove", unsub: "unsubscribe", sweep: SWEEP.fam }[a]);
+const DONE = {
+  archive: "Archiviert", junk: "In Spam verschoben", trash: "In den Papierkorb gelegt", phish: "Als Phishing beim Anbieter gemeldet",
+  accept: "Zugesagt", decline: "Abgesagt", tentative: "Mit Vielleicht geantwortet", removeDeclined: "Abgesagte Einladung entfernt", unsub: "Abgemeldet",
+  sweep: `${SWEEP.count} Mails archiviert`,
+};
+const UNDOABLE = new Set(["archive", "junk", "trash", "phish", "removeDeclined", "sweep"]);
+const FOLDER = { archive: "Archiv", junk: "Spam", trash: "Papierkorb", phish: "Spam", sweep: "Archiv", removeDeclined: "gelöschte Termine" };
+
+function receipt(mail, a, status, extra) {
+  M.receipts.unshift({ id: "r" + ++M.n, mail: mail ? mail.id : null, title: `${DONE[a]}${mail ? `: «${mail.subj}»` : ""}`, a, status, ...extra });
+}
+/* One attempt, as the host would run it after authority is settled. The simulation decides the provider's answer. */
+function run(a, mail) {
+  if (M.sim === "denied") return receipt(mail, a, "denied", { text: `Das Konto ${CONN} ist für diese Aktion nicht freigegeben. Nichts wurde ausgeführt.` });
+  if (M.sim === "missing") return receipt(mail, a, "missing", { text: "Die Mail ist beim Anbieter nicht mehr da. Nichts wurde ausgeführt, und es gibt keinen neuen Versuch." });
+  if (M.sim === "unclear") return receipt(mail, a, "unclear", { text: "Der Anbieter hat nicht geantwortet. Vielleicht ist es passiert. Threva prüft das, bevor es mit dieser Mail etwas anderes tut." });
+  settle(mail, a);
+  receipt(mail, a, "done", { undo: UNDOABLE.has(a) });
+}
+function settle(mail, a) {
+  if (a === "sweep") { M.sweep = "done"; return; }
+  if (!mail) return;
+  if (a === "decline") { M.state[mail.id] = "declined"; return; }
+  if (a === "accept" || a === "tentative" || a === "unsub") { M.state[mail.id] = a; return; }
+  M.gone.add(mail.id);
+}
+function press(a, id) {
+  const mail = MAILS.find((m) => m.id === id) || null, fam = famOf(a);
+  if (!fam) {
+    if (a === "phishDraft") { receipt(mail, "phish", "draft", { title: `Meldung als Entwurf: «${mail.subj}»`, text: "Liegt in deinen Entwürfen mit der Mail im Anhang. Senden musst du selbst. Dafür braucht es keine Erlaubnis." }); M.state[mail.id] = "drafted"; }
+    return;
+  }
+  if (M.grants.has(fam)) return run(a, mail);
+  M.ask = { a, id, fam };
+}
+function answer(how) {
+  const q = M.ask; M.ask = null; if (!q || how === "cancel") { M.toast = "Abgebrochen. Nichts ist passiert."; return; }
+  if (how === "always") M.grants.add(q.fam);
+  run(q.a, MAILS.find((m) => m.id === q.id) || null);
+}
+function undo(rid) {
+  const r = M.receipts.find((x) => x.id === rid); if (!r || r.status !== "done" || r.undone) return;
+  if (M.sim === "moved") { r.conflict = `Die Mail liegt nicht mehr im ${FOLDER[r.a]}, sondern im Ordner «Projekte». Jemand hat sie seither verschoben. Threva überschreibt das nicht, nichts wurde zurückgeholt.`; return; }
+  if (M.sim === "missing") { r.conflict = "Die Mail ist beim Anbieter nicht mehr da. Nichts wurde zurückgeholt, und es gibt keinen neuen Versuch."; return; }
+  if (M.sim === "denied") { r.conflict = `Das Konto ${CONN} ist für diese Aktion nicht freigegeben. Nichts wurde zurückgeholt.`; return; }
+  r.undone = true;
+  if (r.a === "sweep") M.sweep = false;
+  else if (r.mail) { M.gone.delete(r.mail); if (r.a === "removeDeclined") M.state[r.mail] = "declined"; }
+  M.toast = r.a === "phish" ? "Die Mail ist zurück im Posteingang. Die Meldung beim Anbieter bleibt bestehen." : "Rückgängig. Die Mail ist zurück, wo sie war.";
+}
+function check(rid) {
+  const r = M.receipts.find((x) => x.id === rid); if (!r) return;
+  const mail = MAILS.find((m) => m.id === r.mail) || null;
+  settle(mail, r.a); r.status = "done"; r.undo = UNDOABLE.has(r.a); r.text = "Geprüft: Es ist passiert.";
+}
+
+const btn = (a, id, label, cls = "") => `<button class="btn ${cls}" data-m="${a}" data-id="${id || ""}">${label}</button>`;
+function askBox(fam) {
+  const f = FAM[fam] || { label: SWEEP.label, note: "Deine Ein-Klick-Erlaubnis für einzelne Mails gilt hier nicht. Diese Erlaubnis deckt nur genau diese Auswahl." };
+  return `<div class="ivy ask"><span class="from">Threva fragt, bevor etwas passiert · Konto ${CONN}</span>
+    <p><b>${esc(f.label)}</b></p>${f.warn ? `<p class="warnline">${esc(f.warn)}</p>` : ""}${f.note ? `<p class="faint">${esc(f.note)}</p>` : ""}
+    <div class="row">${btn("always", "", "Ja, ab jetzt mit einem Klick", "pri")}${btn("once", "", "Nur dieses Mal")}${btn("cancel", "", "Abbrechen", "quiet")}</div></div>`;
+}
+const here = (a, id) => M.ask && M.ask.id === (id || "") && famOf(M.ask.a) === famOf(a);
+function mailCard(m) {
+  if (M.gone.has(m.id)) return "";
+  const st = M.state[m.id];
+  let actions, pill = "";
+  if (m.kind === "news") {
+    actions = [btn("archive", m.id, "Archivieren", "pri"), btn("trash", m.id, "Löschen"), st === "unsub" ? "" : btn("unsub", m.id, "Abmelden")].join("");
+    if (st === "unsub") pill = `<span class="pill ok">abgemeldet</span>`;
+  } else if (m.kind === "phish") {
+    actions = [btn("phish", m.id, "Beim Anbieter melden", "pri"), st === "drafted" ? "" : btn("phishDraft", m.id, "Als Entwurf melden"), btn("junk", m.id, "Spam")].join("");
+    pill = `<span class="pill wait">verdächtig</span>`;
+  } else {
+    actions = st === "declined" ? btn("removeDeclined", m.id, "Abgesagte Einladung entfernen")
+      : st ? "" : [btn("accept", m.id, "Zusagen", "pri"), btn("tentative", m.id, "Vielleicht"), btn("decline", m.id, "Absagen")].join("");
+    if (st) pill = `<span class="pill calm">${{ accept: "zugesagt", tentative: "vielleicht", declined: "abgesagt" }[st]}</span>`;
+  }
+  const ask = M.ask && M.ask.id === m.id ? askBox(M.ask.fam) : "";
+  return `<div class="card"><span class="row" style="justify-content:space-between"><span class="eyebrow">Mail · ${esc(m.from)}</span>${pill}</span>
+    <span class="q">${esc(m.subj)}</span><span class="sub">${esc(m.gist)}</span>
+    <div class="row">${actions}</div>${ask}</div>`;
+}
+function sweepCard() {
+  if (M.sweep === "done") return "";
+  const sample = ["Wochenrückblick KW 45", "Wochenrückblick KW 44", "Sonderausgabe: Patchday", "Wochenrückblick KW 43"];
+  return `<div class="card"><span class="row" style="justify-content:space-between"><span class="eyebrow">Aufräumen · Vorschau</span><span class="pill think">${SWEEP.count} Mails</span></span>
+    <span class="q">Alle ${SWEEP.count} Mails von Wochenbrief Sicherheit archivieren, die älter als 7 Tage sind?</span>
+    <span class="sub">Auswahl: Absender Wochenbrief Sicherheit · älter als 7 Tage · nur Posteingang. Betroffen sind genau diese ${SWEEP.count} Mails, keine weiteren.</span>
+    <ul class="plain faint">${sample.map((s) => `<li>${esc(s)}</li>`).join("")}<li>… und ${SWEEP.count - sample.length} weitere</li></ul>
+    <div class="row">${btn("sweep", "", `${SWEEP.count} archivieren`, "pri")}</div>${M.ask && M.ask.a === "sweep" ? askBox(SWEEP.fam) : ""}</div>`;
+}
+const STATUS = { done: ["ok", "erledigt"], draft: ["calm", "Entwurf"], denied: ["wait", "verweigert"], missing: ["wait", "nicht gefunden"], unclear: ["wait", "unklar"] };
+function receiptsBox() {
+  if (!M.receipts.length) return `<p class="faint">Noch nichts. Jeder Versuch bekommt hier eine Quittung, auch ein misslungener.</p>`;
+  return M.receipts.map((r) => {
+    const [cls, word] = r.conflict ? ["wait", "Konflikt"] : r.undone ? ["calm", "rückgängig"] : STATUS[r.status];
+    const tail = r.conflict ? `<span class="faint">${esc(r.conflict)}</span>`
+      : r.undone ? (r.a === "phish" ? `<span class="faint">Die Mail ist zurück. Die Meldung beim Anbieter bleibt bestehen.</span>` : "")
+      : r.text ? `<span class="faint">${esc(r.text)}</span>` : (!r.undo && r.status === "done" ? `<span class="faint">${r.a === "unsub" ? "Kein Rückgängig: Das Abo beim Absender ist geändert." : "Kein Rückgängig: Der Organisator ist benachrichtigt."}</span>` : "");
+    const act = r.status === "unclear" ? btn("check", r.id, "Jetzt prüfen") : r.status === "done" && r.undo && !r.undone && !r.conflict ? btn("undo", r.id, "Rückgängig", "quiet") : "";
+    return `<div class="vrow"><span class="stack" style="gap:2px"><span>${esc(r.title)}</span>${tail}</span><span class="pill ${cls}">${word}</span><span>${act}</span></div>`;
+  }).join("");
+}
+function grantsBox() {
+  if (!M.grants.size) return `<p class="faint">Keine. Ohne Erlaubnis fragt Threva bei jedem Klick.</p>`;
+  return [...M.grants].map((g) => `<div class="vrow"><span>${esc((FAM[g] || { label: SWEEP.label }).label)}</span><span class="faint">Konto ${CONN}</span><span>${btn("revoke", g, "Entziehen", "quiet")}</span></div>`).join("");
+}
+function mailView() {
+  return `<div class="cols mailproto">
+    <div class="stack">${M.toast ? `<div class="toast">${esc(M.toast)}</div>` : ""}${MAILS.map(mailCard).join("")}${sweepCard()}</div>
+    <div class="stack"><span class="eyebrow">Quittungen</span>${receiptsBox()}<span class="eyebrow" style="margin-top:12px">Erlaubnisse mit einem Klick</span>${grantsBox()}</div></div>`;
+}
+function mailAct(a, id) {
+  M.toast = "";
+  if (a === "always" || a === "once" || a === "cancel") return answer(a);
+  if (a === "undo") return undo(id);
+  if (a === "check") return check(id);
+  if (a === "revoke") { M.grants.delete(id); M.toast = "Entzogen. Ab dem nächsten Klick fragt Threva wieder. Die Quittungen bleiben."; return; }
+  if (here(a, id)) { M.ask = null; return; }
+  press(a, id);
+}
+
+const view = document.getElementById("view"), sim = document.getElementById("ctl-sim");
+function render() {
+  view.innerHTML = mailView();
+  sim.innerHTML = SIMS.map(([k, l]) => '<button role="tab" data-s="' + k + '" aria-selected="' + (M.sim === k) + '">' + l + "</button>").join("");
+}
+view.addEventListener("click", (e) => { const b = e.target.closest("[data-m]"); if (!b) return; mailAct(b.dataset.m, b.dataset.id); render(); });
+sim.addEventListener("click", (e) => { const b = e.target.closest("[data-s]"); if (!b) return; M.sim = b.dataset.s; render(); });
+render();
+</script>
+</body>
+</html>
