@@ -412,9 +412,8 @@ export function startServer(
           doctorView,
           stepUpSecretPath,
           authorizer,
-          deskVigil(options),
           deskRuntime,
-          options,
+          { ...options, vigil: deskVigil(options) },
         );
       }
 
@@ -539,11 +538,10 @@ async function handleApi(
   doctorView: DoctorView | null = null,
   stepUpSecretPath: string = expandTilde(defaultStepUpSecretPath()),
   authorizer: Authorizer | null = null,
-  vigil?: VigilSubjectsOptions,
   desk?: DeskRuntime,
   views: MissionControlViews = {},
 ): Promise<Response> {
-  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces, flowSurfaces } = views;
+  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces, flowSurfaces, vigil } = views;
   const { pathname } = url;
   if (pathname === DESK_DRAFTS_PATH || pathname.startsWith(`${DESK_DRAFTS_PATH}/`)) return handleDeskDrafts(req, url, guard, views.drafts);
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });

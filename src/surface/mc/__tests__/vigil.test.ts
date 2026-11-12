@@ -1,3 +1,4 @@
+// glossary-ignore: node, run
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
@@ -5,8 +6,7 @@ import { handleListVigilSubjects, type VigilSubjectsResponse } from "../api/vigi
 import { writeVigilSubject, type VigilObservation } from "../../../vigil/db";
 import { DEFAULT_CADENCE_MS } from "../../../vigil/staleness";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
-
-const ENDED_AT = Date.parse("2026-10-12T10:00:05.000Z");
+import { ENDED_AT } from "../../../vigil/__tests__/fixtures";
 
 describe("handleListVigilSubjects", () => {
   let db: Database;
