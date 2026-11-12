@@ -28,6 +28,12 @@ function seed(ref = REF, target = db): void {
   ingestFromSourceStack(target, ledgerEnvelope({ outcome: "succeeded", result_ref: ref }), ENDED_AT);
 }
 
+function expectUnreadResult(): void {
+  expect(getAttentionItem(db, attentionId())?.status).toBe("open");
+  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
+  expect(publish).not.toHaveBeenCalled();
+}
+
 function openRef(ref = REF, init?: RequestInit): Promise<Response> {
   return fetch(`http://127.0.0.1:${ctx.port}/results/${encodeURIComponent(ref)}`, init);
 }
@@ -93,9 +99,7 @@ test.each([
   const response = await openRef(ref);
   expect(response.status).toBe(404);
   expect(await response.text()).toBe("Not Found");
-  expect(getAttentionItem(db, attentionId())?.status).toBe("open");
-  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
-  expect(publish).not.toHaveBeenCalled();
+  expectUnreadResult();
 });
 
 test("refuses encoded dot-dot and malformed encoding over HTTP", async () => {
@@ -243,9 +247,7 @@ test.each(["cross-site", "same-site", "unexpected", ""])("rejects fetch site %j 
     const response = await openRef(REF, { headers: { "Sec-Fetch-Site": site, "Sec-Fetch-Mode": mode } });
     expect(response.status).toBe(403);
     expect(await response.text()).not.toContain("Private");
-    expect(getAttentionItem(db, attentionId())?.status).toBe("open");
-    expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
-    expect(publish).not.toHaveBeenCalled();
+    expectUnreadResult();
   }
 });
 
@@ -260,11 +262,11 @@ test.each(["same-origin", "none"])("permits fetch site %s and resolves attention
 test("result pages return during stalled publication with a durable receipt and no duplicate publish", async () => {
   seed();
   writeFileSync(join(home, "outputs", "untracked.md"), "# Untracked result");
-  const started = Promise.withResolvers<void>();
-  const release = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
   publish.mockImplementationOnce(async (envelope, subject) => {
     published.push({ envelope, subject });
-    started.resolve();
+    started.resolve(undefined);
     await release.promise;
   });
   const requests = [openRef(REF, { signal: AbortSignal.timeout(3000) })];
@@ -280,7 +282,7 @@ test("result pages return during stalled publication with a durable receipt and 
     expect(db.query("SELECT published FROM vigil_attention_resolutions").all()).toEqual([{ published: 0 }]);
     expect(publish).toHaveBeenCalledTimes(1);
   } finally {
-    release.resolve();
+    release.resolve(undefined);
     await Promise.allSettled(requests);
     await flushVigilResolutions(db, { principal: "example", stack: "default", publish });
   }
