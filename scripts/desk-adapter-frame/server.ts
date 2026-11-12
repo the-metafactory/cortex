@@ -1,3 +1,4 @@
+import { buildFrameProbeAssets, forwardAssetRequest, startFrameProbeServer } from "../lib/frame-probe-shell";
 import { handleDeskDrafts } from "../../src/surface/mc/api/desk-drafts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -11,24 +12,9 @@ import type { MutationGuardContext } from "../../src/surface/mc/api/mutation-gua
 export async function serveFrameProbe(attack: FrameAttack, mode: "local" | "hosted", evil: string) {
   const rig = await openFrameRig({ audience: mode === "local" ? "local" : "cloud", script: hostileFrameScript(attack, evil), editor: attack.startsWith("editor-") });
   rig.assets.connections.set(ASSET_OWNER, [enabledConnection(), enabledConnection("connection-other")]);
-  const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "browser.tsx")], target: "browser", naming: "[name].[ext]" });
-  if (!bundle.success) { await rig.close(); throw new Error(bundle.logs.join("\n")); }
-  const javascript = bundle.outputs.find(item => item.path.endsWith(".js"));
-  const css = bundle.outputs.find(item => item.path.endsWith(".css"));
-  const shellSource = await Bun.file(join(import.meta.dir, "../../src/surface/mc/dashboard-v2/index.html")).text();
-  const shell = await new HTMLRewriter().on("link", { element(element) {
-    const href = element.getAttribute("href") ?? "";
-    if (href.startsWith("https://")) element.remove();
-  } }).transform(new Response(shellSource.replace('src="./main.tsx"', 'src="/probe.js"').replace("</head>", '<link rel="icon" href="data:,"><link rel="stylesheet" href="/probe.css"></head>'))).text();
+  const assets = await buildFrameProbeAssets(join(import.meta.dir, "browser.tsx")).catch(async error => { await rig.close(); throw error; });
   const cookie = `frame-session=${randomUUID()}`;
-  const requests: string[] = [];
-  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req, server) {
-    const url = new URL(req.url);
-    requests.push(`${req.method} ${url.pathname}`);
-    if (url.pathname === "/probe.js") return new Response(javascript, { headers: { "content-type": "text/javascript" } });
-    if (["/styles/tokens.css", "/styles/global.css", "/styles/constellation.css"].includes(url.pathname)) return new Response(Bun.file(join(import.meta.dir, "../../src/surface/mc/dashboard-v2", url.pathname.slice(1))), { headers: { "content-type": "text/css" } });
-    if (url.pathname === "/probe.css") return new Response(css ?? "", { headers: { "content-type": "text/css" } });
-    if (url.pathname === "/fixture.json") return Response.json({ mountId: rig.registered.mountId });
+  const { server, requests } = startFrameProbeServer(assets, rig.registered.mountId, (req, url, server) => {
     if (url.pathname.startsWith("/api/")) {
       if (mode === "hosted" && !req.headers.get("cookie")?.includes(cookie)) return new Response("Sign in", { status: 401 });
       const origin = req.headers.get("origin");
@@ -48,9 +34,9 @@ export async function serveFrameProbe(attack: FrameAttack, mode: "local" | "host
         });
       }
       if (url.pathname.endsWith("/redirect.html")) return Response.redirect(`${evil}/redirect`, 302);
-      return rig.assets[mode](url.pathname, { method: req.method, headers: req.headers.has("x-desk-ui-protocol") ? { "x-desk-ui-protocol": req.headers.get("x-desk-ui-protocol")! } : {} });
+      return forwardAssetRequest(req, url, rig.assets[mode]);
     }
-    return new Response(shell, { headers: { "content-type": "text/html", "content-security-policy": shellFrameCsp(url.origin), "set-cookie": `${cookie}; HttpOnly; SameSite=Lax; Path=/` } });
-  } });
+    return new Response(assets.shell, { headers: { "content-type": "text/html", "content-security-policy": shellFrameCsp(url.origin), "set-cookie": `${cookie}; HttpOnly; SameSite=Lax; Path=/` } });
+  });
   return { rig, server, requests, async close() { await server.stop(true); await rig.close(); } };
 }

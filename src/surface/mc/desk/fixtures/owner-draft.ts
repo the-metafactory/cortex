@@ -67,7 +67,7 @@ export interface OwnerDraftTarget<Editor extends DeskDraftEditor, Session extend
   readonly session: (base: OwnerDraftSession, destinations: ObjectReference[], read: OwnerDraftReadRig) => Session;
   createBinding(journal: OperationJournalStore): OwnerDraftBindingRig;
   createEditor(setup: OwnerDraftSetup<Session>): Editor;
-  serverOptions(setup: OwnerDraftSetup<Session>): Pick<StartServerOptions, "graphDrafts" | "balanceDrafts">;
+  serverOptions(setup: OwnerDraftSetup<Session>): Pick<StartServerOptions, "graphDrafts" | "balanceDrafts" | "flowDrafts">;
 }
 
 export interface OwnerDraftSpec<Editor extends DeskDraftEditor, Extra extends object, Session extends OwnerDraftSession> {

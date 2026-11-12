@@ -10,6 +10,8 @@ on:
       - "scripts/probe-desk-adapter-browser.ts"
       - "scripts/probe-desk-flow-cutover.ts"
       - "scripts/desk-flow-cutover/**"
+      - "scripts/probe-desk-flow-editor.ts"
+      - "scripts/desk-flow-editor/**"
       - "scripts/desk-make-editor/**"
       - "scripts/desk-adapter-frame/**"
       - ".github/workflows/desk-browser.yml"
@@ -22,6 +24,8 @@ on:
       - "scripts/probe-desk-adapter-browser.ts"
       - "scripts/probe-desk-flow-cutover.ts"
       - "scripts/desk-flow-cutover/**"
+      - "scripts/probe-desk-flow-editor.ts"
+      - "scripts/desk-flow-editor/**"
       - "scripts/desk-make-editor/**"
       - "scripts/desk-adapter-frame/**"
       - ".github/workflows/desk-browser.yml"
@@ -52,6 +56,7 @@ jobs:
           mkdir -p "$DESK_ADAPTER_BROWSER_SHOTS"
           bun scripts/probe-desk-adapter-browser.ts
           bun scripts/probe-desk-flow-cutover.ts
+          bun scripts/probe-desk-flow-editor.ts
 
       - name: Upload screenshots
         if: always()

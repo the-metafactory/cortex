@@ -1,10 +1,10 @@
-import { parse } from "yaml";
 import { z } from "zod";
 import type { FlowOptions } from "../../../common/types/config";
 import type { CreateRequest } from "../../types";
 import { studioRequestId } from "../../conversation-ids";
 import type { WriterRunner } from "../../../surface/mc/desk/create";
 import { withFlowFile } from "../../../surface/mc/desk/flow-file";
+import { definitionName } from "./definition";
 
 export const SAVE_TIMEOUT_MS = 25_000;
 export const SHOW_TIMEOUT_MS = 5_000;
@@ -15,17 +15,6 @@ const FlowRefusedResponseSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("conflict"), reason: z.string().min(1) }),
   z.object({ status: z.literal("invalid"), findings: z.array(z.object({ message: z.string().min(1) })).min(1) }),
 ]);
-
-function definitionName(definition: string): string | undefined {
-  try {
-    const document: unknown = parse(definition);
-    if (!document || typeof document !== "object" || Array.isArray(document)) return undefined;
-    const name: unknown = (document as Record<string, unknown>).name;
-    return typeof name === "string" ? name : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export function flowJson(stdout: string): unknown {
   try {

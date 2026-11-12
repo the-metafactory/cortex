@@ -5,7 +5,7 @@ import type { QueryPage } from "../../../conversations/domain-adapters/reads/que
 import { readPointer } from "../../../conversations/domain-adapters/reads/query-validation";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import type { HostQueryRunner } from "./query-run";
-import { destinationMatch, releasedObjects, type ReleasedObject } from "./work-released";
+import { activeRestriction, destinationMatch, releasedObjects, type ReleasedObject } from "./work-released";
 
 export const BALANCE_DESTINATIONS_CAPABILITY = "balance.destinations";
 const PROJECT_LABEL_SEPARATOR = " / ";
@@ -26,22 +26,12 @@ export interface BalanceDraftDestinations extends DraftDestinations {
   inArea(conversationId: string, area: ObjectReference, project: ObjectReference): Promise<boolean>;
 }
 
-type HostRecords = Awaited<ReturnType<AuthorityMediator["inspectHostRecords"]>>;
-
 const lower = (text: string): string => text.trim().toLocaleLowerCase();
 const labelOf = (object: ReleasedObject): string => typeof object.value.label === "string" ? object.value.label : "";
 const projectNames = (label: string): string[] => {
   const path = label.split(PROJECT_LABEL_SEPARATOR);
   return [path.slice(1).join(PROJECT_LABEL_SEPARATOR), path.at(-1) ?? ""].map(lower);
 };
-
-function activeRestriction(records: HostRecords, area: ObjectReference) {
-  const restrictions = Object.values(records.records).flatMap(history => {
-    const record = history.at(-1);
-    return record?.kind === "restriction" && record.value.status === "active" && canonicalWire(record.value.source) === canonicalWire(area) ? [record.value] : [];
-  });
-  return restrictions.length === 1 ? restrictions[0] : undefined;
-}
 
 async function releasedDestinations(options: BalanceDraftDestinationOptions, session: BalanceDraftReadSession): Promise<ReleasedObject[]> {
   const records = await options.authority.inspectHostRecords();
