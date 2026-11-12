@@ -3,6 +3,7 @@ import type { Json } from "../../../conversations/domain-adapters/operations/typ
 import type { DestinationMatch } from "../../../conversations/domain-adapters/drafting";
 import { canonicalWire } from "../../../conversations/domain-adapters/operations/validation";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
+import { isRecord } from "../../../conversations/tools/json";
 
 export interface ReleasedObject {
   readonly ref: ObjectReference;
@@ -11,28 +12,23 @@ export interface ReleasedObject {
   readonly evidence?: { readonly observedAt?: string };
 }
 
-export const objectReference = (value: unknown): ObjectReference | null => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const held = value as Record<string, unknown>;
-  return typeof held.adapterId === "string" && typeof held.connectionId === "string" && typeof held.objectType === "string" && typeof held.canonicalId === "string"
-    ? { adapterId: held.adapterId, connectionId: held.connectionId, objectType: held.objectType, canonicalId: held.canonicalId }
+export const objectReference = (value: unknown): ObjectReference | null =>
+  isRecord(value) && typeof value.adapterId === "string" && typeof value.connectionId === "string" && typeof value.objectType === "string" && typeof value.canonicalId === "string"
+    ? { adapterId: value.adapterId, connectionId: value.connectionId, objectType: value.objectType, canonicalId: value.canonicalId }
     : null;
-};
 
 export const releasedObjects = (released: Json): ReleasedObject[] => {
-  if (typeof released !== "object" || released === null || Array.isArray(released)) return [];
-  const held = (released as { objects?: unknown }).objects;
+  const held = isRecord(released) ? released.objects : undefined;
   if (!Array.isArray(held)) return [];
   const objects: ReleasedObject[] = [];
   for (const entry of held) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const raw = entry as Record<string, unknown>;
-    const ref = objectReference(raw.ref);
-    const destination = objectReference(raw.destination);
-    const value = raw.value;
-    if (!ref || !destination || typeof value !== "object" || value === null || Array.isArray(value)) continue;
-    const evidence = typeof raw.evidence === "object" && raw.evidence !== null && !Array.isArray(raw.evidence) ? raw.evidence as { observedAt?: string } : undefined;
-    objects.push({ ref, destination, value: value as Record<string, unknown>, ...(evidence ? { evidence } : {}) });
+    if (!isRecord(entry)) continue;
+    const ref = objectReference(entry.ref);
+    const destination = objectReference(entry.destination);
+    const value = entry.value;
+    if (!ref || !destination || !isRecord(value)) continue;
+    const evidence = isRecord(entry.evidence) ? entry.evidence as { observedAt?: string } : undefined;
+    objects.push({ ref, destination, value, ...(evidence ? { evidence } : {}) });
   }
   return objects;
 };

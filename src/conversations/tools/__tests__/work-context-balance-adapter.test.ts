@@ -23,6 +23,17 @@ async function call(rig: BalanceReadRig, policy: "local" | "cloud", name: "work_
   const text = await tool.run(input, { project: null, graph: null, projects: [], session: sessionOf(rig, policy, transport), signal: new AbortController().signal });
   return { text: typeof text === "string" ? text : text.text, remembered };
 }
+async function walkSearch(rig: BalanceReadRig, limit: number): Promise<string[]> {
+  const seen: string[] = [];
+  let continuation: { offset: number } | null = { offset: 0 };
+  while (continuation) {
+    const page = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit, offset: continuation.offset })).text);
+    expect(page.status).not.toBe("empty");
+    seen.push(...page.results.map((result: { id: string }) => result.id));
+    continuation = page.next;
+  }
+  return seen;
+}
 
 describe("the Balance work adapter behind work_search and work_read", () => {
   test("an enabled connection answers from the runner and records the same source obligations", async () => {
@@ -135,28 +146,14 @@ describe("the Balance work adapter behind work_search and work_read", () => {
   test("later pages reach the tasks of every configured area", async () => {
     const rig = await open();
     await rig.allowHome();
-    const seen: string[] = [];
-    let continuation: { offset: number } | null = { offset: 0 };
-    while (continuation) {
-      const page = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 2, offset: continuation.offset })).text);
-      expect(page.status).not.toBe("empty");
-      seen.push(...page.results.map((result: { id: string }) => result.id));
-      continuation = page.next;
-    }
-    expect([...seen].sort()).toEqual(["task-done", "task-garden", "task-glue", "task-wing"]);
+    expect([...(await walkSearch(rig, 2))].sort()).toEqual(["task-done", "task-garden", "task-glue", "task-wing"]);
   });
 
   test("a long area is walked across sub-pages without duplicates", async () => {
     const rig = await open();
     const bulk = Array.from({ length: 25 }, (_unused, index) => `task-bulk-${index + 1}`);
     for (const id of bulk) rig.addTask("area:area-example", leaf(id, `Bulk ${id}`));
-    const seen: string[] = [];
-    let continuation: { offset: number } | null = { offset: 0 };
-    while (continuation) {
-      const page = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 10, offset: continuation.offset })).text);
-      seen.push(...page.results.map((result: { id: string }) => result.id));
-      continuation = page.next;
-    }
+    const seen = await walkSearch(rig, 10);
     expect(seen.length).toBe(bulk.length + 3);
     expect(new Set(seen).size).toBe(bulk.length + 3);
     expect([...seen].sort()).toEqual(["task-done", "task-glue", "task-wing", ...bulk].sort());

@@ -1,5 +1,5 @@
 import { BALANCE_CONNECTION, type BalanceReadRig } from "./balance-read-fixtures";
-import { balanceWorkQuery, balanceWorkSchemaRef, type BalanceWorkArea } from "../../../../surface/mc/desk/balance-work-reader";
+import { balanceWorkQuery, type BalanceWorkArea } from "../../../../surface/mc/desk/balance-work-reader";
 import type { ToolSession } from "../../../tools/capabilities";
 import type { WorkReader } from "../../../tools/work-context";
 
@@ -24,7 +24,12 @@ export const queryFor = (rig: BalanceReadRig, policy: "local" | "cloud" = "cloud
   runner: rig.runner,
   context: rig.rig.context,
   sink: rig.rig.sink,
-  inputSchemaRef: balanceWorkSchemaRef({ taskQuery: rig.taskQueryBinding.inputSchemaRef, taskRead: rig.taskReadBinding.inputSchemaRef, projectQuery: rig.adapter.readBindings.find(binding => binding.capabilityId === "balance.project.query")!.inputSchemaRef, projectRead: rig.adapter.readBindings.find(binding => binding.capabilityId === "balance.project.read")!.inputSchemaRef }),
+  inputSchemaRef: {
+    "balance.task.query": rig.taskQueryBinding.inputSchemaRef,
+    "balance.task.read": rig.taskReadBinding.inputSchemaRef,
+    "balance.project.query": rig.adapter.readBindings.find(binding => binding.capabilityId === "balance.project.query")!.inputSchemaRef,
+    "balance.project.read": rig.adapter.readBindings.find(binding => binding.capabilityId === "balance.project.read")!.inputSchemaRef,
+  },
 });
 
 export const legacyTask: WorkReader = {
