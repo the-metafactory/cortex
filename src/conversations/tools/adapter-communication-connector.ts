@@ -31,7 +31,7 @@ export function adapterCommunicationConnector(options: AdapterCommunicationOptio
     summary: capability.label,
     effect: "read",
     input: z.custom<object>(value => typeof value === "object" && value !== null && options.registry.validateInput({ capabilityId: capability.capabilityId, inputSchemaRef: capability.inputSchemaRef, input: value }, null).ok),
-    inputJsonSchema: options.registry.draftingView(capability.capabilityId)?.root ?? {},
+    inputJsonSchema: options.registry.publishedInputSchema(capability.capabilityId) ?? {},
   });
   const connector: CommunicationConnector = {
     id: options.connectorId,

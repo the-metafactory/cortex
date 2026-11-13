@@ -122,6 +122,21 @@ export class DomainAdapterRegistry {
     return { adapterId: adapter.declaration.adapterId, kind: declaration.kind, inputSchemaRef: structuredClone(declaration.inputSchemaRef), outputSchemaRef: structuredClone(declaration.outputSchemaRef), errorSchemaRef: structuredClone(declaration.errorSchemaRef), root: structuredClone(root), relationships, field: pointer => { const found = adapter.bundle.field(declaration.inputSchemaRef, pointer); return found && structuredClone(found); } };
   }
 
+  publishedInputSchema(capabilityId: string): Record<string, unknown> | undefined {
+    const entry = this.capabilities.get(capabilityId);
+    const view = this.draftingView(capabilityId);
+    if (!entry || !view) return undefined;
+    const inputKey = schemaKey(entry.declaration.inputSchemaRef);
+    const embedded: Record<string, unknown> = {};
+    for (const schema of entry.adapter.declaration.schemas) {
+      if (schemaKey(schema) === inputKey || typeof schema.schema !== "object" || Array.isArray(schema.schema)) continue;
+      embedded[schemaKey(schema)] = { ...structuredClone(schema.schema), $id: schemaKey(schema) };
+    }
+    if (Object.keys(embedded).length === 0) return view.root;
+    const existing = typeof view.root.$defs === "object" && view.root.$defs !== null && !Array.isArray(view.root.$defs) ? view.root.$defs : {};
+    return { ...view.root, $defs: { ...existing, ...embedded } };
+  }
+
   discover(availability: Readonly<Record<string, Availability>> = {}): DeclaredCapability[] {
     return [...this.capabilities].map(([id, entry]) => this.describe(entry, availability[id] ?? Available));
   }

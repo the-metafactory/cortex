@@ -46,6 +46,17 @@ function rig(capabilities: Capability[] | null, options: { availability?: Record
 }
 
 describe("Mail capabilities discovered from the loaded adapter", () => {
+  test("advertises bundled schemas that the input schema references", () => {
+    const registry = new DomainAdapterRegistry();
+    const referencing = { type: "object", required: ["query"], properties: { query: { $ref: "urn:desk-schema:term:1.0.0" } }, additionalProperties: false };
+    const base = declaration([{ id: "search", kind: "query" }]);
+    const withRef = { ...base, schemas: [{ schemaId: "q-in", version: "1.0.0", schema: referencing }, { schemaId: "term", version: "1.0.0", schema: { type: "string", maxLength: 7 } }, base.schemas[1]!] };
+    expect(registry.register(withRef, { handlers: { "fakemail.search": () => { throw new Error("unused"); } }, observations: {} }).ok).toBe(true);
+    const published = registry.publishedInputSchema("fakemail.search") as Record<string, any>;
+    expect(published.$defs["urn:desk-schema:term:1.0.0"]).toMatchObject({ $id: "urn:desk-schema:term:1.0.0", type: "string", maxLength: 7 });
+    expect(published.properties.query.$ref).toBe("urn:desk-schema:term:1.0.0");
+  });
+
   test("lists exactly the capabilities the adapter declares", async () => {
     const r = rig([{ id: "search", kind: "query" }, { id: "list", kind: "query" }, { id: "move", kind: "action" }]);
     const json = await r.call("communication_discover", { family: "email" });
