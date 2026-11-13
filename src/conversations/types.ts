@@ -191,7 +191,7 @@ export type OwnerReadback = (operation: OperationRecord) => Promise<ReadbackResu
 export type OwnerReadbacks = Partial<Record<OwnerType, OwnerReadback>>;
 
 export interface Provenance { conversationId: string; proposalId: string; revision: number; operationId: string; entryId: string | null; link: string }
-export interface CreateRequest { operationId: string; type: OwnerType; fields: Record<string, string>; activation: "none"; provenance: Provenance; signal: AbortSignal }
+export interface CreateRequest { writerRevision?: string; operationId: string; type: OwnerType; fields: Record<string, string>; activation: "none"; provenance: Provenance; signal: AbortSignal }
 export type CreateResult =
   | { state: "created"; canonicalId: string; url?: string }
   | { state: "accepted"; receipt?: string }
@@ -200,7 +200,7 @@ export interface Suggestion { fields: Record<string, string>; reason: string }
 export interface SuggestContext { policy: Policy }
 export interface GrantBindingDestination { objectType: string; canonicalId: string }
 export interface GrantBinding { connectionId: string; destinations: GrantBindingDestination[] }
-export interface CreationCutover { connectionId: string }
+export interface CreationCutover { connectionId: string; reviewRevision?: string }
 export interface OwnerWriter {
   create: (request: CreateRequest) => Promise<CreateResult>;
   readback: OwnerReadback;

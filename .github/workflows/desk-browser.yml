@@ -8,6 +8,8 @@ on:
       - "src/surface/mc/desk/**"
       - "src/surface/mc/dashboard-v2/**"
       - "scripts/probe-desk-adapter-browser.ts"
+      - "scripts/probe-desk-balance-project-cutover.ts"
+      - "scripts/desk-balance-cutover/**"
       - "scripts/probe-desk-flow-cutover.ts"
       - "scripts/desk-flow-cutover/**"
       - "scripts/probe-desk-flow-editor.ts"
@@ -22,6 +24,8 @@ on:
       - "src/surface/mc/desk/**"
       - "src/surface/mc/dashboard-v2/**"
       - "scripts/probe-desk-adapter-browser.ts"
+      - "scripts/probe-desk-balance-project-cutover.ts"
+      - "scripts/desk-balance-cutover/**"
       - "scripts/probe-desk-flow-cutover.ts"
       - "scripts/desk-flow-cutover/**"
       - "scripts/probe-desk-flow-editor.ts"
@@ -55,6 +59,7 @@ jobs:
         run: |
           mkdir -p "$DESK_ADAPTER_BROWSER_SHOTS"
           bun scripts/probe-desk-adapter-browser.ts
+          bun scripts/probe-desk-balance-project-cutover.ts
           bun scripts/probe-desk-flow-cutover.ts
           bun scripts/probe-desk-flow-editor.ts
 

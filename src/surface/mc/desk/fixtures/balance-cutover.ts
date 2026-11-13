@@ -1,7 +1,8 @@
+import type { FenceGate } from "../../../../conversations/domain-adapters/operations/triggers";
 import type { Database } from "bun:sqlite";
 import type { OutlineNode } from "../../../../balance";
 import type { AuthorityCheck, HostContext } from "../../../../conversations/authority";
-import { BALANCE_TASK_CREATE_SUPPORT_ID, createBalanceTaskBinding, type BalanceTaskBinding } from "../../../../conversations/domain-adapters/balance/task-binding";
+import { BALANCE_TASK_CONTRACT, type BalanceTaskBinding, type BalanceTaskCreateInput, type BalanceTaskReview } from "../../../../conversations/domain-adapters/balance/task-binding";
 import { importLegacyOperation, previewLegacyOperation, readLegacyImportWatermark } from "../../../../conversations/domain-adapters/operations/legacy";
 import { legacyContext, legacyFixture } from "../../../../conversations/domain-adapters/operations/legacy-fixtures";
 import { AT } from "../../../../conversations/domain-adapters/operations/fixtures";
@@ -12,7 +13,11 @@ import type { WriterCutoverSteps, WriterPlan } from "../../../../conversations/d
 import type { WriterAuthority } from "../../../../conversations/domain-adapters/operations/writer-authority";
 import type { LegacyContext, LegacySource } from "../../../../conversations/domain-adapters/operations/legacy";
 import { BALANCE_TASK_CONNECTION, BALANCE_TASK_NOW, balanceTaskAuthority } from "../../../../conversations/domain-adapters/__tests__/fixtures/balance-task-fixtures";
-import { balanceTaskRoute, createBalanceTaskLifecycleWriter, type BalanceTaskCutover, type BalanceTaskCutoverActive } from "../balance-task-cutover";
+import { balanceCreateRoute, createBalanceLifecycleWriter } from "../balance-create-cutover";
+import { createBalanceBinding, type BalanceCreateContract } from "../../../../conversations/domain-adapters/balance/create-binding";
+import { BALANCE_PROJECT_CONTRACT } from "../../../../conversations/domain-adapters/balance/project-binding";
+import type { BalanceTaskCutover, BalanceTaskCutoverActive } from "../balance-task-cutover";
+import type { DeskItem } from "../types";
 import type { DeskOptions } from "../compose";
 import { loadBalanceState } from "../balance-store";
 
@@ -24,6 +29,8 @@ export interface BalanceCutoverFixtureOptions {
   desk: () => DeskOptions;
   journal: OperationJournalStore;
   writers: WriterAuthority;
+  fences?: FenceGate;
+  contract?: BalanceCreateContract<BalanceTaskCreateInput, BalanceTaskReview>;
   stack?: string;
   now?: () => number;
 }
@@ -35,11 +42,13 @@ export interface BalanceCutoverFixture {
 }
 
 export function balanceCutoverFixture(options: BalanceCutoverFixtureOptions): BalanceCutoverFixture {
+  const contract = options.contract ?? BALANCE_TASK_CONTRACT;
   const stack = options.stack ?? BALANCE_CUTOVER_STACK;
   const now = options.now ?? (() => BALANCE_TASK_NOW);
   let binding: BalanceTaskBinding | undefined;
   const bridge = new OperationBridge({
     journal: options.journal,
+    fences: options.fences,
     authority: {
       preflight: () => Promise.resolve({ kind: "allowed" as const }),
       async dispatch(_context, request) {
@@ -58,21 +67,23 @@ export function balanceCutoverFixture(options: BalanceCutoverFixtureOptions): Ba
     now: () => new Date(now()),
   });
   const cutover: BalanceTaskCutover = {
-    route: () => balanceTaskRoute(options.writers, stack),
-    writer: () => createBalanceTaskLifecycleWriter({
+    route: () => balanceCreateRoute(options.writers, stack, contract.owner),
+    writer: () => createBalanceLifecycleWriter({
       stack, db: options.db, desk: options.desk, areas: () => options.desk().areas, journal: options.journal, bridge, writers: options.writers,
-      supportDeclarationId: BALANCE_TASK_CREATE_SUPPORT_ID,
+      supportDeclarationId: contract.support(BALANCE_TASK_CONNECTION).declarationId,
       context: () => Promise.resolve({} as HostContext),
       approve: (_context, input): Promise<AuthorityCheck> => Promise.resolve({ kind: "allowed", authority: { ...balanceTaskAuthority, decisionRef: input.operationId } }),
       binding: (active: BalanceTaskCutoverActive) => {
-        binding = createBalanceTaskBinding({ stack, connectionId: active.connectionId, db: options.db, desk: options.desk, areas: () => options.desk().areas, journal: options.journal, now });
+        binding = createBalanceBinding({ stack, connectionId: active.connectionId, db: options.db, desk: options.desk, areas: () => options.desk().areas, journal: options.journal, now }, contract);
         return binding;
       },
       now,
-    }),
+    }, contract),
   };
   return { bridge, cutover, binding: () => binding };
 }
+
+export const balanceProjectCutoverFixture = (options: BalanceCutoverFixtureOptions): BalanceCutoverFixture => balanceCutoverFixture({ ...options, contract: BALANCE_PROJECT_CONTRACT });
 
 export interface InFlightLegacyCutover {
   readonly source: LegacySource;
@@ -81,14 +92,19 @@ export interface InFlightLegacyCutover {
   readonly steps: WriterCutoverSteps;
 }
 
-export function legacyInFlightCutover(journal: OperationJournalStore, options: { stack?: string } = {}): InFlightLegacyCutover {
+export function legacyInFlightCutover(journal: OperationJournalStore, options: { stack?: string; kind?: "task" | "project"; sources?: LegacySource[] } = {}): InFlightLegacyCutover {
   const source = legacyFixture("running");
   source.proposal.proposalId = "proposal-in-flight";
   source.record.proposalId = "proposal-in-flight";
   source.record.operationId = "conversation-example:proposal-in-flight:1";
-  const context = legacyContext(source);
-  const preview = previewLegacyOperation(source, context);
-  const plan: WriterPlan = { ...syntheticWriterPlan({ ...BALANCE_CUTOVER_BINDING, stack: options.stack ?? BALANCE_CUTOVER_STACK }), knownCalls: [source.record.operationId], sources: [{ operationId: source.record.operationId, sourceDigest: preview.sourceDigest }] };
+  const kind = options.kind ?? "task";
+  source.proposal.type = `balance-${kind}`;
+  source.record.owner = `balance-${kind}`;
+  const binding = { ...BALANCE_CUTOVER_BINDING, owner: `balance-${kind}`, capabilityId: `balance.${kind}.create` } as const;
+  const mapping = (item: LegacySource): LegacyContext => ({ ...legacyContext(item), owner: binding.owner, capabilityId: binding.capabilityId, ...(item.record.canonicalId ? { canonicalReference: { adapterId: "balance", connectionId: BALANCE_TASK_CONNECTION, objectType: kind, canonicalId: item.record.canonicalId } } : {}) });
+  const context = mapping(source);
+  const sources = [source, ...(options.sources ?? [])].map(item => ({ source: item, context: mapping(item) }));
+  const plan: WriterPlan = { ...syntheticWriterPlan({ ...binding, stack: options.stack ?? BALANCE_CUTOVER_STACK }), knownCalls: [source.record.operationId], sources: sources.map(item => ({ operationId: item.source.record.operationId, sourceDigest: previewLegacyOperation(item.source, item.context).sourceDigest })) };
   const steps: WriterCutoverSteps = {
     ...syntheticWriterSteps(),
     async drain() {
@@ -96,7 +112,7 @@ export function legacyInFlightCutover(journal: OperationJournalStore, options: {
       return { drained: [], uncertain: [source.record.operationId] };
     },
     async import() {
-      await importLegacyOperation(journal, source, context, AT);
+      for (const item of sources) await importLegacyOperation(journal, item.source, item.context, AT);
       return readLegacyImportWatermark(journal, plan.sources);
     },
     watermark: () => readLegacyImportWatermark(journal, plan.sources),
@@ -112,3 +128,5 @@ export function balanceTasks(db: Database, title: string): OutlineNode[] {
   visit(state.outline);
   return found;
 }
+
+export const BALANCE_CUTOVER_INBOX_ITEM: DeskItem = { key: "sensor:cutover-example", kind: "sensor", source: "synthetic", area: "area-example", urgency: "today", title: "Native Inbox beside the adapter card", why: "Disposable cutover probe", score: 1, actions: [], detail: { summary: "Synthetic item", history: [], refs: [], links: [] } };
