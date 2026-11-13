@@ -40,7 +40,7 @@ import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type Gat
 import {
   AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, TOOL_STARTED_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES, TRANSPORTS,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationResponse, type ConversationMeta, type CreateConversation,
-  type ExchangeLine, type InputRequest, type ModelChoices, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
+  type ExchangeLine, type InputRequest, type ModelChoices, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView, type CreationCutover,
 } from "./types";
 
 export const ENGINE = "pi-durable@1.4.0";
@@ -135,7 +135,7 @@ export interface HostOptions {
   alive?: (pid: number) => boolean;
   pid?: number;
 }
-export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; lifecycles?: Partial<Record<OwnerType, CreationLifecycle>>; withheld?: WithheldReasons; readers?: WorkReaders; queries?: (session: ToolSession) => WorkReaders | undefined; communications?: () => readonly CommunicationConnector[]; workers?: WorkerOwner }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; lifecycles?: Partial<Record<OwnerType, CreationLifecycle>>; withheld?: WithheldReasons; readers?: WorkReaders; queries?: (session: ToolSession) => WorkReaders | undefined; communications?: () => readonly CommunicationConnector[]; workers?: WorkerOwner; cutovers?: Partial<Record<OwnerType, () => Promise<CreationCutover | null>>> }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -430,9 +430,9 @@ export class ConversationHost {
     for (const owner of OWNER_TYPES) {
       const writer = this.sources.writers?.[owner];
       if (!writer) continue;
-      writers[owner] = { readback: writer.readback.bind(writer), ...(writer.suggest ? { suggest: writer.suggest.bind(writer) } : {}), create: async request => {
+      writers[owner] = { readback: writer.readback.bind(writer), ...(writer.suggest ? { suggest: writer.suggest.bind(writer) } : {}), ...(writer.grantBinding ? { grantBinding: writer.grantBinding.bind(writer) } : {}), ...(writer.lifecycleManaged ? { lifecycleManaged: true as const } : {}), create: async request => {
         const entered = await this.authorityPublication.run(async () => {
-          if (!await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, owner)) return { denied: true as const };
+          if (!writer.lifecycleManaged && !await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, owner)) return { denied: true as const };
           return { pending: writer.create(request) };
         });
         return "denied" in entered ? { state: "failed", error: "Legacy owner mutation is disabled by the durable writer fence. Resume the explicit verified cutover." } : entered.pending;
@@ -446,6 +446,11 @@ export class ConversationHost {
   async creationLifecycle(owner: OwnerType): Promise<CreationLifecycle | undefined> {
     const lifecycle = this.sources.lifecycles?.[owner];
     return lifecycle && await lifecycle.started() ? lifecycle : undefined;
+  }
+
+  async cutovers(): Promise<Partial<Record<OwnerType, CreationCutover>>> {
+    const found = await Promise.all(Object.entries(this.sources.cutovers ?? {}).map(async ([type, read]) => [type, await read()] as const));
+    return Object.fromEntries(found.filter((entry): entry is readonly [string, CreationCutover] => entry[1] !== null));
   }
 
   settled(): Promise<unknown> { return this.reconciling; }
@@ -1155,7 +1160,7 @@ export class ConversationHost {
   }
 
   async readback(operation: OperationRecord): Promise<ReadbackResult> {
-    if (!await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, operation.owner)) return null;
+    if (!this.sources.writers?.[operation.owner]?.lifecycleManaged && !await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, operation.owner)) return null;
     const readback = this.readbackFor(operation.owner);
     return readback ? readback(operation).catch(() => null) : null;
   }

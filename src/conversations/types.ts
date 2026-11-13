@@ -198,10 +198,15 @@ export type CreateResult =
   | { state: "failed"; error: string };
 export interface Suggestion { fields: Record<string, string>; reason: string }
 export interface SuggestContext { policy: Policy }
+export interface GrantBindingDestination { objectType: string; canonicalId: string }
+export interface GrantBinding { connectionId: string; destinations: GrantBindingDestination[] }
+export interface CreationCutover { connectionId: string }
 export interface OwnerWriter {
   create: (request: CreateRequest) => Promise<CreateResult>;
   readback: OwnerReadback;
   suggest?: (fields: Record<string, string>, context: SuggestContext) => Promise<Suggestion | null>;
+  grantBinding?: (fields: Record<string, string>) => Promise<GrantBinding | null>;
+  lifecycleManaged?: true;
 }
 export type OwnerWriters = Partial<Record<OwnerType, OwnerWriter>>;
 export type WithheldReasons = Partial<Record<OwnerType, string>>;

@@ -66,9 +66,15 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
   };
   const proposals = view?.proposals ?? [];
   const grants = view?.grants ?? [];
-  const active = grants.filter(g => !g.revokedAt && !g.renewalRequired);
-  const renewal = grants.filter(g => !g.revokedAt && g.renewalRequired);
-  const revoked = grants.filter(g => g.revokedAt).length;
+  const lapsed = (g: (typeof grants)[number]): boolean => !g.revokedAt && !g.supersededAt && (g.renewalRequired === true || g.renewal !== undefined);
+  const active = grants.filter(g => !g.revokedAt && !g.supersededAt && !lapsed(g));
+  const renewal = grants.filter(lapsed);
+  const history = grants.length - active.length;
+  const where = (g: (typeof grants)[number]): string => {
+    const scope = g.scope === "global" ? "all your conversations" : g.conversationId === id ? "this conversation" : "another conversation";
+    const bound = g.connectionId ? ` · ${g.connectionId}${g.destinations?.length ? ` ${g.destinations.map(d => d.canonicalId).join(", ")}` : ""}` : g.binding ? ` · ${g.binding.connectionId} · saving only` : "";
+    return `${scope}${bound}`;
+  };
   return <section className="dcv-create" aria-label="Create from this exchange">
     {proposals.map(p => <ProposalCard key={p.proposal.proposalId} id={id} view={p} types={creatable} busy={busy} archived={archived} act={act} />)}
     {!archived && <div className="dcv-acts" role="group" aria-label="Create from this exchange">
@@ -79,10 +85,10 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     <div className="dcv-grants" aria-label="Standing creation permissions">
       <h4>Standing creation permissions</h4>
       {active.length === 0 && <p className="dcv-quiet">None. Ivy asks before every creation.</p>}
-      {renewal.map(g => <p key={g.grantId} role="status">{active.some(current => current.type === g.type && current.binding) ? `Previous ${byType.get(g.type)?.label ?? g.type} permission lapsed at cutover. Its renewed save permission is listed below.` : `${byType.get(g.type)?.label ?? g.type} permission needs renewal. Approve the next save to this connection and choose whether to allow future saves.`}</p>)}
-      <ul>{active.map(g => <li key={g.grantId}><span>{byType.get(g.type)?.label ?? g.type} · {g.scope === "global" ? "all your conversations" : g.conversationId === id ? "this conversation" : "another conversation"}{g.binding ? ` · ${g.binding.connectionId} · saving only` : ""}</span>
+      {renewal.map(g => <p key={g.grantId} data-renewal="needed" role="status">{g.renewal ? <>{byType.get(g.type)?.label ?? g.type} · {where(g)} · needs renewal before the next creation. {g.renewal.reason}</> : active.some(current => current.type === g.type && current.binding) ? `Previous ${byType.get(g.type)?.label ?? g.type} permission lapsed at cutover. Its renewed save permission is listed below.` : `${byType.get(g.type)?.label ?? g.type} permission needs renewal. Approve the next save to this connection and choose whether to allow future saves.`}</p>)}
+      <ul>{active.map(g => <li key={g.grantId} data-renewal="none"><span>{byType.get(g.type)?.label ?? g.type} · {where(g)}</span>
         <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => void act(() => revoke(g.grantId), "The permission was not revoked. Try again.")}>Revoke</button></li>)}</ul>
-      <p className="dcv-quiet">Creation only: running a flow or enabling a routine always needs its own decision. Revoking stops future creation without asking; objects already created stay as they are{revoked > 0 ? ` (${revoked} revoked, kept in the history)` : ""}.</p>
+      <p className="dcv-quiet">Creation only: running a flow or enabling a routine always needs its own decision. Revoking stops future creation without asking; objects already created stay as they are{history > 0 ? ` (${history} revoked or renewed, kept in the history)` : ""}.</p>
     </div>
     {error && <p className="desk-unsent" role="alert">{error}</p>}
   </section>;
