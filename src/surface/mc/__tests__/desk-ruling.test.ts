@@ -3,7 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { handleDeskRuling } from "../api/desk-ruling";
 import { HandledLedger, type RangerRunResult } from "../desk/actions";
 import { composeDesk, type DeskOptions } from "../desk/compose";
-import { agentQuestion, explainRuling, githubRef, RULING_FALLBACK, RulingExplainLoop, RulingLedger, somaRepo } from "../desk/ruling";
+import { agentQuestion, explainRuling, githubRef, readNodeBody, RULING_FALLBACK, RulingExplainLoop, RulingLedger, somaRepo } from "../desk/ruling";
+import { fetchGitlabIssue, type GitLabFetchErrorKind } from "../adapters/gitlab/fetch";
+import { GLAB_STATUS_ARGV } from "../adapters/gitlab/hosts";
+import { CommandTimeout, runCommand, type CommandResult } from "../common/spawn";
+import { GITLAB_BLOCKED, GITLAB_BODY, GITLAB_EXPLAINED } from "./fixtures/gitlab-ruling";
 import type { RangerNeedsYou, RangerState } from "../desk/sources/ranger";
 import { McSchema } from "../../../common/types/config";
 import { initDatabase } from "../db/init";
@@ -39,6 +43,125 @@ function rangerState(): RangerState {
 }
 
 const fetchRanger = (state: RangerState) => async () => Response.json(state);
+
+describe("reading a ruling body from its forge", () => {
+  const result = (stdout: string, code = 0, stderr = ""): CommandResult => ({ stdout, code, stderr, signal: null });
+  const knownHost = (run: (argv: string[], timeoutMs: number) => Promise<CommandResult>) => async (argv: string[], timeoutMs: number) =>
+    argv[1] === "auth" ? result("", 1, "✓ Logged in to gitlab.example.org as example\n") : run(argv, timeoutMs);
+  const readGitlab = (run: (argv: string[], timeoutMs: number) => Promise<CommandResult>) =>
+    readNodeBody(GITLAB_BLOCKED.repo, GITLAB_BLOCKED.nodeId, { gitlab: (ref) => fetchGitlabIssue(ref, { run: knownHost(run) }) });
+
+  it("never sends an API request to a host absent from glab logins", async () => {
+    for (const status of [result(""), result("", 1, "HTTP 401: no token"), result("✓ Logged in to other.example.org as example"), result("not a status response")]) {
+      const calls: string[][] = [];
+      const body = await readNodeBody(GITLAB_BLOCKED.repo, GITLAB_BLOCKED.nodeId, {
+        gitlab: ref => fetchGitlabIssue(ref, { run: async argv => { calls.push(argv); return status; } }),
+      });
+      expect(body).toBeNull();
+      expect(calls).toEqual([GLAB_STATUS_ARGV]);
+      expect(await explainRuling(GITLAB_BLOCKED, body, async () => { throw new Error("must not explain unread body"); })).toEqual({ kind: "unexplained", line: RULING_FALLBACK });
+    }
+  });
+
+  it("classifies missing or timed-out host discovery without calling the API", async () => {
+    for (const [error, kind] of [[new Error("ENOENT: glab"), "spawn_failed"], [new CommandTimeout("timeout"), "timeout"]] as const) {
+      const calls: string[][] = [];
+      expect(await fetchGitlabIssue({ host: "gitlab.example.org", path: "group/app", number: 12 }, {
+        run: async argv => { calls.push(argv); throw error; },
+      })).toMatchObject({ kind });
+      expect(calls).toEqual([GLAB_STATUS_ARGV]);
+    }
+  });
+
+  it("only calls the issue API after discovering the named login", async () => {
+    const calls: string[][] = [];
+    expect(await fetchGitlabIssue({ host: "gitlab.example.org", path: "group/app", number: 12 }, {
+      run: async argv => {
+        calls.push(argv);
+        return argv[1] === "auth"
+          ? result("✓ Logged in to other.example.org as example", 1, "✓ Logged in to gitlab.example.org as example")
+          : result(JSON.stringify({ iid: 12, description: GITLAB_BODY }));
+      },
+    })).toEqual({ body: GITLAB_BODY });
+    expect(calls).toEqual([GLAB_STATUS_ARGV, ["glab", "api", "--hostname", "gitlab.example.org", "--method", "GET", "projects/group%2Fapp/issues/12"]]);
+  });
+
+  it("reads the validated GitLab project on the named host and explains its body", async () => {
+    const body = await readGitlab(async (argv, timeoutMs) => {
+      expect(argv).toEqual(["glab", "api", "--hostname", "gitlab.example.org", "--method", "GET", "projects/group%2Fsubgroup%2Fapp/issues/12"]);
+      expect(timeoutMs).toBe(30_000);
+      return result(JSON.stringify({ iid: 12, description: GITLAB_BODY }));
+    });
+    expect(body).toBe(GITLAB_BODY);
+    let request = "";
+    const explanation = await explainRuling(GITLAB_BLOCKED, body, async (prompt) => {
+      request = prompt;
+      return GITLAB_EXPLAINED;
+    });
+    expect(JSON.parse(request)).toMatchObject({ repo: GITLAB_BLOCKED.repo, node: "12", body: GITLAB_BODY.trim() });
+    expect(explanation).toEqual({ kind: "explained", explanation: GITLAB_EXPLAINED });
+  });
+
+  it("still reads bare GitHub repositories through the existing reader", async () => {
+    const calls: unknown[] = [];
+    const body = await readNodeBody("example/app", "12", { github: async (ref) => {
+      calls.push(ref);
+      return { type: "issue", state: "open", title: "Export", labels: [], body: "GitHub body", html_url: "https://github.com/example/app/issues/12" };
+    }, gitlab: async () => { throw new Error("GitLab must not read GitHub"); } });
+    expect(body).toBe("GitHub body");
+    expect(calls).toEqual([{ owner: "example", repo: "app", number: 12 }]);
+  });
+
+  it("reads nothing for malformed repositories and invalid GitLab node ids", async () => {
+    const calls: unknown[] = [];
+    const unreadable = async (ref: unknown) => { calls.push(ref); return { kind: "not_found" as const, message: "unreadable" }; };
+    for (const repo of ["--repo", "https://gitlab.example.org/group/app", "gitlab:--hostname/group/app", "gitlab:gitlab.example.org/group/../app", "gitlab:gitlab.example.org/group/app?x=1", "gitlab:gitlab.example.org/group/app;echo", "gitlab:gitlab.example.org/group//app", "gitlab:gitlab.example.org/app", " gitlab:gitlab.example.org/group/app", "other:gitlab.example.org/group/app"]) {
+      expect(await readNodeBody(repo, "12", { github: unreadable, gitlab: unreadable })).toBeNull();
+    }
+    for (const nodeId of ["0", "-1", "12;echo", "12/notes", "1.5", "01", "9007199254740993"]) {
+      expect(await readNodeBody(GITLAB_BLOCKED.repo, nodeId, { github: unreadable, gitlab: unreadable })).toBeNull();
+    }
+    expect(calls).toEqual([]);
+    expect(await fetchGitlabIssue({ host: "--hostname", path: "group/app", number: 12 }, { run: async () => { throw new Error("must not run"); } })).toMatchObject({ kind: "invalid_ref" });
+  });
+
+  const failures: { name: string; kind: GitLabFetchErrorKind; run: () => Promise<CommandResult> }[] = [
+    { name: "no token", kind: "unauthorized", run: async () => result("", 1, "glab auth login: no token") },
+    { name: "401", kind: "unauthorized", run: async () => result("", 1, "HTTP 401: Unauthorized") },
+    { name: "403", kind: "unauthorized", run: async () => result("", 1, "HTTP 403: Forbidden") },
+    { name: "404", kind: "not_found", run: async () => result("", 1, "HTTP 404: Not Found") },
+    { name: "rate limit", kind: "rate_limited", run: async () => result("", 1, "HTTP 429: rate limit") },
+    { name: "upstream", kind: "upstream", run: async () => result("", 1, "HTTP 500") },
+    { name: "missing glab", kind: "spawn_failed", run: async () => { throw new Error("ENOENT: glab"); } },
+    { name: "timeout", kind: "timeout", run: async () => { throw new CommandTimeout("timeout"); } },
+    ...["not JSON", "null", "[]", "{}", '{"iid":13,"description":"wrong issue"}', '{"iid":12,"description":42}'].map(stdout => ({ name: stdout, kind: "parse_error" as const, run: async () => result(stdout) })),
+  ];
+  for (const failure of failures) {
+    it(`falls back without asking the explainer after ${failure.name}`, async () => {
+      expect(await fetchGitlabIssue({ host: "gitlab.example.org", path: "group/app", number: 12 }, { run: knownHost(failure.run) })).toMatchObject({ kind: failure.kind });
+      const body = await readGitlab(failure.run);
+      expect(body).toBeNull();
+      let asked = false;
+      expect(await explainRuling(GITLAB_BLOCKED, body, async () => { asked = true; return GITLAB_EXPLAINED; })).toEqual({ kind: "unexplained", line: RULING_FALLBACK });
+      expect(asked).toBe(false);
+    });
+  }
+
+  it("uses the bounded runner to time out a stalled process", async () => {
+    expect(await fetchGitlabIssue({ host: "gitlab.example.org", path: "group/app", number: 12 }, {
+      timeoutMs: 20,
+      run: knownHost((_argv, timeoutMs) => runCommand([process.execPath, "-e", "setInterval(() => {}, 1000)"], timeoutMs, undefined, undefined, true)),
+    })).toMatchObject({ kind: "timeout" });
+  });
+
+  it("keeps a null or empty GitLab description on the fallback path", async () => {
+    for (const description of [null, ""]) {
+      const body = await readGitlab(async () => result(JSON.stringify({ iid: 12, description })));
+      expect(body).toBe(description);
+      expect(await explainRuling(GITLAB_BLOCKED, body, async () => GITLAB_EXPLAINED)).toEqual({ kind: "unexplained", line: RULING_FALLBACK });
+    }
+  });
+});
 
 function runner(result: RangerRunResult = { code: 0, stdout: "", stderr: "" }) {
   const calls: { argv: string[]; file: string | null }[] = [];

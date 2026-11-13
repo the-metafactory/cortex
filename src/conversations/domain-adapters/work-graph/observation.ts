@@ -1,6 +1,6 @@
 // glossary-ignore: node, owner
 import { canonicalGraphRef, qualifiedNodeId } from "../../../common/graph-ref";
-import { CommandTimeout, runCommand, type CommandResult } from "../../../surface/mc/desk/spawn";
+import { CommandTimeout, runCommand, type CommandResult } from "../../../surface/mc/common/spawn";
 import { authorityHash } from "../../authority-records";
 import { canonicalWire } from "../operations/validation";
 import type { Json } from "../operations/types";

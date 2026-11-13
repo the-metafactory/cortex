@@ -5,7 +5,7 @@ import { z } from "zod";
 import { composeFlow, proposeRoutineEdit, chatModelLLM, OpenAICompatibleChatModel, type CatalogEntry, type ComposeFlowOptions } from "pulse";
 import { modelJson } from "../src/surface/mc/desk/classify";
 import { NOT_LOCAL_CONTENT } from "../src/surface/mc/desk/source-boundary";
-import { runCommand } from "../src/surface/mc/desk/spawn";
+import { runCommand } from "../src/surface/mc/common/spawn";
 import { spawnWithStdin, type WriterRunner } from "../src/surface/mc/desk/create";
 import { RoutineDetailSchema, RoutineEditProposalSchema } from "../src/surface/mc/desk/routine-editor-contract";
 

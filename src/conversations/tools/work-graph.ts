@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { canonicalNodeId, formatGraphNodeRef, formatGraphRepoRef, graphReadScope, parseGraphNodeRef, permitsGraphRead, qualifiedNodeId, type GraphNodeRef, type GraphReadScope } from "../../common/graph-ref";
 import type { GraphMap, GraphSource } from "../../common/types/desk-conversations";
-import { CommandTimeout, runCommand, type CommandResult } from "../../surface/mc/desk/spawn";
+import { CommandTimeout, runCommand, type CommandResult } from "../../surface/mc/common/spawn";
 import { SourceId, type ToolContext, type ToolDefinition } from "./capabilities";
 import { isRecord, num, rec, str, strings } from "./json";
 

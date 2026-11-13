@@ -3,7 +3,7 @@ import { oneLine } from "./actions";
 import type { WriterRunner } from "./create";
 import type { ListedMail, MailActionsConfig, TrashLedger } from "./mail-actions";
 import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailFeatures, type MailLogAction, type MailLogWhere } from "./mail-log";
-import { CommandTimeout } from "./spawn";
+import { CommandTimeout } from "../common/spawn";
 import { DAY_MS } from "./time";
 import { addSender, isVip, listVips, normalizeVip } from "./vips";
 

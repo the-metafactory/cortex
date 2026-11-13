@@ -1,5 +1,5 @@
 import { canonicalGraphRef, canonicalNodeId, formatGraphNodeRef, isBareGraphNode, formatGraphRepoRef, parseGraphNodeRef, parseGraphRepoRef, qualifiedNodeId } from "../../../common/graph-ref";
-import { CommandTimeout, runCommand, type CommandResult } from "../../../surface/mc/desk/spawn";
+import { CommandTimeout, runCommand, type CommandResult } from "../../../surface/mc/common/spawn";
 import { isRecord, parseObjectReference, parseReadHandlerContext, readObservedAt, readPage, readSnapshotId, type Json, type QueryFetchRequest, type QueryPage, type QueryPageEntry, type ReadBinding } from "../reads/page-primitives";
 import { adapterErrorSchema, objectSchema, schemaRef } from "../schema-primitives";
 import { schemaKey } from "../schema-validation";

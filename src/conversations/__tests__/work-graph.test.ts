@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DeskConversationsSchema, type ToolsConfig } from "../../common/types/desk-conversations";
-import type { CommandResult } from "../../surface/mc/desk/spawn";
+import type { CommandResult } from "../../surface/mc/common/spawn";
 import type { ModelRoute, Policy } from "../types";
 import type { ToolSession } from "../tools/capabilities";
 import { createWorkGraphTools, type WorkGraphRunner } from "../tools/work-graph";

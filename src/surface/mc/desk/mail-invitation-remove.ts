@@ -2,7 +2,7 @@ import { oneLine } from "./actions";
 import type { WriterRunner } from "./create";
 import type { ListedMail } from "./mail-actions";
 import type { InvitationsConfig } from "./mail-invitation-schema";
-import { CommandTimeout } from "./spawn";
+import { CommandTimeout } from "../common/spawn";
 
 export interface DeclinedCopyRequest {
   action: "remove-declined";

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { runCommand } from "../src/surface/mc/desk/spawn";
+import { runCommand } from "../src/surface/mc/common/spawn";
 import type { BuildStatusSchema } from "../src/surface/mc/desk/routine-capability-contract";
 import { splitNodeRef } from "../src/surface/mc/desk/routine-node-command";
 

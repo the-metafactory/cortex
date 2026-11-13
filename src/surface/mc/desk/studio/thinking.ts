@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { z } from "zod";
 import type { RangerCli, RangerRunner } from "../actions";
-import { runCommand } from "../spawn";
+import { runCommand } from "../../common/spawn";
 import type { StudioAct } from "./acts";
 import type { StudioView } from "./view";
 

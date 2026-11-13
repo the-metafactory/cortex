@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { fetchIssueOrPr, isGitHubFetchError } from "../adapters/github/fetch";
+import { fetchGitlabIssue, gitlabIssueRef } from "../adapters/gitlab/fetch";
 import { modelJson, commandJson, isCommand, readApiKey, type CommandRunner, type KeyReader, type ModelConfig } from "./classify";
 import { NOT_LOCAL_CONTENT } from "./source-boundary";
-import { runModelCommand } from "./spawn";
+import { runModelCommand } from "../common/spawn";
 import { rangerItemKey, type RangerNeedsYou, type RangerState } from "./sources/ranger";
 import { retryable } from "./actions";
 import { DAY_MS } from "./time";
@@ -184,11 +185,15 @@ export function githubRef(repo: string, nodeId: string): { owner: string; repo: 
   return { owner, repo: name, number: Number(nodeId) };
 }
 
-/** The node body from its own repository, or null when GitHub cannot be read; never the soma home repository. */
-export async function readNodeBody(repo: string, nodeId: string): Promise<string | null> {
+export async function readNodeBody(repo: string, nodeId: string, readers: { github?: typeof fetchIssueOrPr; gitlab?: typeof fetchGitlabIssue } = {}): Promise<string | null> {
+  const gitlab = gitlabIssueRef(repo, nodeId);
+  if (gitlab) {
+    const result = await (readers.gitlab ?? fetchGitlabIssue)(gitlab);
+    return "kind" in result ? null : result.body;
+  }
   const ref = githubRef(repo, nodeId);
   if (!ref) return null;
-  const result = await fetchIssueOrPr(ref);
+  const result = await (readers.github ?? fetchIssueOrPr)(ref);
   return isGitHubFetchError(result) ? null : result.body;
 }
 
