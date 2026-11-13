@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { addSender, listSenders, normalizeVip, removeSender, type SenderList } from "../desk/vips";
+import { removeVipWithSwitch } from "../desk/interrupt-switches";
 
 const noStore = { headers: { "Cache-Control": "no-store" } };
 
@@ -20,7 +21,8 @@ export async function handleDeskSenders(req: Request, url: URL, db: Database, li
   if (req.method === "DELETE") {
     const address = normalizeVip(url.searchParams.get("address") ?? "");
     if (!address) return Response.json({ error: "address is required" }, { status: 400 });
-    if (!removeSender(db, list, address)) return Response.json({ error: NOT_LISTED[list] }, { status: 404 });
+    const removed = list === "vips" ? removeVipWithSwitch(db, address) : removeSender(db, list, address);
+    if (!removed) return Response.json({ error: NOT_LISTED[list] }, { status: 404 });
     return rows();
   }
   return new Response(null, { status: 405, headers: { Allow: "GET, POST, DELETE" } });

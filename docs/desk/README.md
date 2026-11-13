@@ -82,11 +82,11 @@ Every interruption has a reason, and each reason is a switch:
 | `mail.vip` | fresh mail from a VIP; one switch per VIP address or domain | on |
 | `mail.ranked` | any other fresh mail ranked for today | on |
 
-Mail is checked in the order of the table. The first reason that fires and is switched on is the item's reason, shown as `interrupt.reason` (`code`, plus `target` for a VIP and `eventKey` for a meeting). When every reason that fires is off, the item stays in the list without interrupting. `interruptions.mail: false` turns every mail reason off for the stack, whatever its switch says.
+Mail is checked in the order of the table. The first reason that fires and is switched on is the item's reason, shown as `interrupt.reason` (`code`, plus `target` for a VIP and `eventKey` for a meeting). When every reason that fires is off, the item stays in the list without interrupting. `interruptions.mail: false` turns every mail reason off for the stack, and `meetingMinutes: 0` turns `meeting.soon` off, whatever their switches say; such reasons read `available: false`.
 
 The switches are stored per stack. `GET /api/desk/interruptions` lists the reasons with `on`, `available`, `setBy` (`default`, `switch` or `feedback`) and `changedAt`; `GET /api/desk` carries the same list as `interruptions`. `POST /api/desk/interruptions` with `{ code, target?, on }` switches one reason; switching it back to its default removes the stored switch. Removing a VIP removes its switch.
 
-`POST /api/desk/interruptions/feedback` with `{ key, code, target?, important }` records the answer to "Was that important enough?" for an item, using the reason from its `interrupt.reason`. A no switches that reason off at once; a yes changes nothing. A second answer for the same item replaces the first, and the switch follows it unless you switched the reason by hand since. The item then carries `interrupt.feedback`, so another device does not ask again. Answers are kept for 30 days. Whether to ask is up to the UI.
+`POST /api/desk/interruptions/feedback` with `{ key, code, target?, important }` records the answer to "Was that important enough?" for an item, using the reason from its `interrupt.reason`. A no switches that reason off at once; a yes changes nothing. A second answer for the same item replaces the first, and the switch follows it unless you have switched the reason away from its default by hand since the earlier answer. The item then carries `interrupt.feedback`, so another device does not ask again. Answers are kept for 30 days. Whether to ask is up to the UI.
 
 An interrupting item can reach you three ways. Each one is configured under `mc.desk.interruptions`:
 

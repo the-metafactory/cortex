@@ -5,7 +5,8 @@ import { composeDesk, type DeskOptions } from "../desk/compose";
 import { interrupts, NO_SWITCHES, pushInterrupts, type DeskTransport, type InterruptContext } from "../desk/interrupt";
 import { readSwitches, setSwitch, switchKey } from "../desk/interrupt-switches";
 import { commandTransport } from "../desk/transports";
-import { addVip, removeVip } from "../desk/vips";
+import { addVip } from "../desk/vips";
+import { handleDeskVips } from "../api/desk-vips";
 import { SourceCache, type CommandRunner } from "../desk/sources/command";
 import type { DeskEvent, DeskItem } from "../desk/types";
 import { FakeTransport, MIN, NOW, RULES } from "./desk-interrupt-fixture";
@@ -91,8 +92,8 @@ describe("interruption switches on the Desk", () => {
     expect(before.view.items.find((i) => i.key === "mail:vip")?.interrupt?.reason).toEqual({ code: "mail.vip", target: "boss@example.com" });
     expect(before.view.interruptions.filter((r) => r.code === "mail.vip")).toEqual([{ code: "mail.vip", target: "boss@example.com", label: "Mail from Boss", on: true, available: true, setBy: "default" }]);
     db.query("DELETE FROM desk_deliveries").run();
-    setSwitch(db, RULES, "mail.vip", "boss@example.com", false, "switch", NOW);
-    setSwitch(db, RULES, "mail.ranked", "", false, "switch", NOW);
+    setSwitch(db, RULES, { code: "mail.vip", target: "boss@example.com", on: false, setBy: "switch" }, NOW);
+    setSwitch(db, RULES, { code: "mail.ranked", target: "", on: false, setBy: "switch" }, NOW);
     const transport = new FakeTransport();
     const after = await tick(transport);
     expect(after.view.items.find((i) => i.key === "mail:vip")?.interrupt).toBeUndefined();
@@ -100,11 +101,12 @@ describe("interruption switches on the Desk", () => {
     expect(transport.sent).toEqual([]);
   });
 
-  it("removes a VIP's switch when the VIP is removed", () => {
+  it("removes a VIP's switch when the VIP is removed", async () => {
     addVip(db, "boss@example.com", null, NOW);
-    setSwitch(db, RULES, "mail.vip", "boss@example.com", false, "switch", NOW);
+    setSwitch(db, RULES, { code: "mail.vip", target: "boss@example.com", on: false, setBy: "switch" }, NOW);
     expect(readSwitches(db).has(switchKey("mail.vip", "boss@example.com"))).toBe(true);
-    removeVip(db, "boss@example.com");
+    const url = new URL("http://127.0.0.1/api/desk/vips?address=boss@example.com");
+    expect((await handleDeskVips(new Request(url, { method: "DELETE" }), url, db)).status).toBe(200);
     expect(readSwitches(db).size).toBe(0);
   });
 

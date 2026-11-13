@@ -9,11 +9,10 @@ import { addVip } from "../desk/vips";
 import { SourceCache, type CommandRunner } from "../desk/sources/command";
 import type { InterruptReasonView } from "../desk/types";
 
-const NOW = Date.parse("2026-10-31T09:00:00.000Z");
-const MIN = 60_000;
+import { MIN, NOW, RULES as PUSH_RULES } from "./desk-interrupt-fixture";
 const DAY = 86_400_000;
 
-const RULES: InterruptRules = { transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true };
+const RULES: InterruptRules = { ...PUSH_RULES, transport: "none" };
 
 const options = (over: Partial<DeskOptions> = {}): DeskOptions => ({
   enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [],
@@ -78,6 +77,7 @@ describe("/api/desk/interruptions", () => {
       [post({ code: "mail.vip", target: "other@example.com", on: false }), runtime(), 404, "That address is not a VIP."],
       [post({ code: "mail.ranked", on: false }), runtime({ enabled: false }), 409, "The Desk is turned off on this stack."],
       [post({ code: "mail.ranked", on: false }), runtime({ interruptions: { ...RULES, mail: false } }), 409, "Mail interruptions are turned off for this stack (mc.desk.interruptions.mail)."],
+      [post({ code: "meeting.soon", on: true }), runtime({ interruptions: { ...RULES, meetingMinutes: 0 } }), 409, "Meeting interruptions are turned off for this stack (mc.desk.interruptions.meetingMinutes is 0)."],
     ];
     for (const [req, rt, status, error] of cases) {
       const res = await handleDeskInterruptions(req, db, rt, now);
@@ -148,5 +148,12 @@ describe("/api/desk/interruptions/feedback", () => {
     clock = NOW + 31 * DAY;
     await handleDeskInterruptionFeedback(feedback({ key: "mail:m2", code: "mail.ranked", important: true }), db, runtime(), now);
     expect(db.query<{ item_key: string }, []>("SELECT item_key FROM desk_interrupt_feedback").all().map((r) => r.item_key)).toEqual(["mail:m2"]);
+  });
+});
+
+describe("feedback on a reminder", () => {
+  it("names the reason instead of mail", async () => {
+    const res = await handleDeskInterruptionFeedback(feedback({ key: "reminder:1", code: "reminder.due", important: false }), db, runtime(), now);
+    expect(((await res.json()) as { message: string }).message).toBe("Noted. \"A reminder is due\" now waits in the list without interrupting you. You can switch it back on under Interruptions.");
   });
 });

@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { DAY_MS } from "./time";
 import { INTERRUPT_REASON_CODES, type InterruptFeedback, type InterruptReasonCode, type InterruptReasonView } from "./types";
 import type { InterruptRules } from "./interrupt";
-import type { DeskVip } from "./vips";
+import { removeSender, type DeskVip } from "./vips";
 
 export const INTERRUPT_SWITCHES_SQL = [
   `CREATE TABLE IF NOT EXISTS desk_interrupt_switches (
@@ -59,7 +59,10 @@ export function reasonDefault(rules: InterruptRules, code: InterruptReasonCode):
   return true;
 }
 
-export const reasonAvailable = (rules: InterruptRules, code: InterruptReasonCode): boolean => !isMailReason(code) || rules.mail;
+export function reasonAvailable(rules: InterruptRules, code: InterruptReasonCode): boolean {
+  if (code === "meeting.soon") return rules.meetingMinutes > 0;
+  return !isMailReason(code) || rules.mail;
+}
 
 export function reasonOn(rules: InterruptRules, switches: InterruptSwitches, code: InterruptReasonCode, target?: string): boolean {
   if (!reasonAvailable(rules, code)) return false;
@@ -95,7 +98,14 @@ export function listReasons(rules: InterruptRules, switches: InterruptSwitches, 
   return INTERRUPT_REASON_CODES.flatMap((code) => (code === PER_VIP ? vips.map((vip) => view(code, vip)) : [view(code)]));
 }
 
-export function setSwitch(db: Database, rules: InterruptRules, code: InterruptReasonCode, target: string, on: boolean, setBy: InterruptSwitch["setBy"], now: number): void {
+export interface SwitchChange {
+  code: InterruptReasonCode;
+  target: string;
+  on: boolean;
+  setBy: InterruptSwitch["setBy"];
+}
+
+export function setSwitch(db: Database, rules: InterruptRules, { code, target, on, setBy }: SwitchChange, now: number): void {
   if (setBy === "switch" && on === reasonDefault(rules, code)) {
     clearSwitch(db, code, target);
     return;
@@ -107,10 +117,6 @@ export function setSwitch(db: Database, rules: InterruptRules, code: InterruptRe
 
 export function clearSwitch(db: Database, code: InterruptReasonCode, target: string): void {
   db.query("DELETE FROM desk_interrupt_switches WHERE code = ? AND target = ?").run(code, target);
-}
-
-export function removeVipSwitch(db: Database, address: string): void {
-  clearSwitch(db, PER_VIP, address);
 }
 
 export interface FeedbackAnswer {
@@ -126,7 +132,7 @@ const pruneFeedback = (db: Database, now: number): void => {
 
 /**
  * Records the answer to "Was that important enough?". A "no" switches the reason off; a later answer for the
- * same item replaces the earlier one, and the switch follows it unless the person switched it by hand since.
+ * same item replaces the earlier one, and the switch follows it unless the person switched it away from its default by hand since.
  */
 export function recordFeedback(db: Database, rules: InterruptRules, answer: FeedbackAnswer, now: number): void {
   db.transaction(() => {
@@ -138,7 +144,7 @@ export function recordFeedback(db: Database, rules: InterruptRules, answer: Feed
     const current = readSwitches(db).get(switchKey(answer.code, answer.target));
     const switchedByHandSince = previous !== null && current?.setBy === "switch" && current.changedAt > previous.at;
     if (switchedByHandSince) return;
-    if (!answer.important) setSwitch(db, rules, answer.code, answer.target, false, "feedback", now);
+    if (!answer.important) setSwitch(db, rules, { code: answer.code, target: answer.target, on: false, setBy: "feedback" }, now);
     else if (previous?.important === 0 && current?.setBy === "feedback") clearSwitch(db, answer.code, answer.target);
   })();
 }
@@ -146,4 +152,11 @@ export function recordFeedback(db: Database, rules: InterruptRules, answer: Feed
 export function readFeedback(db: Database, now: number): Map<string, InterruptFeedback> {
   const rows = db.query<{ item_key: string; important: number }, [number]>("SELECT item_key, important FROM desk_interrupt_feedback WHERE at >= ?").all(now - FEEDBACK_KEEP_MS);
   return new Map(rows.map((r) => [r.item_key, r.important === 1 ? "yes" : "no"]));
+}
+
+/** Removes a VIP and the switch kept for their mail. */
+export function removeVipWithSwitch(db: Database, address: string): boolean {
+  const removed = removeSender(db, "vips", address);
+  if (removed) clearSwitch(db, PER_VIP, address);
+  return removed;
 }

@@ -1,5 +1,4 @@
 import type { Database } from "bun:sqlite";
-import { removeVipSwitch } from "./interrupt-switches";
 
 export interface DeskVip {
   address: string;
@@ -39,9 +38,7 @@ export function addSender(db: Database, list: SenderList, address: string, label
 }
 
 export function removeSender(db: Database, list: SenderList, address: string): boolean {
-  const removed = db.query(`DELETE FROM ${TABLE[list]} WHERE address = ?`).run(address).changes > 0;
-  if (removed && list === "vips") removeVipSwitch(db, address);
-  return removed;
+  return db.query(`DELETE FROM ${TABLE[list]} WHERE address = ?`).run(address).changes > 0;
 }
 
 export const listVips = (db: Database): DeskVip[] => listSenders(db, "vips");
