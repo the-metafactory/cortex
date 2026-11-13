@@ -25,6 +25,12 @@ export interface CommunicationOperation {
   summary: string;
   effect: "read";
   input: z.ZodType<object>;
+  inputJsonSchema?: object;
+}
+export interface UnavailableOperation {
+  id: string;
+  summary: string;
+  reason: string;
 }
 export interface CommunicationAction {
   id: string;
@@ -48,6 +54,7 @@ export interface CommunicationConnector {
   family: string;
   operations: readonly CommunicationOperation[];
   actions: readonly CommunicationAction[];
+  unavailable?: () => readonly UnavailableOperation[];
   scopes: () => readonly CommunicationScope[];
   status: (signal: AbortSignal) => Promise<ConnectorStatus>;
   authorize: (principal: string, scope: string) => Promise<boolean>;
@@ -88,7 +95,7 @@ const visibleScopes = (connector: CommunicationConnector, session: ToolSession):
 const reachable = (owner: CommunicationOwner, session: ToolSession): CommunicationConnector[] => owner.connectors().filter(connector => visibleScopes(connector, session).length > 0);
 
 export function communicationOperationsOf(connector: CommunicationConnector): object[] {
-  return connector.operations.map(operation => ({ id: operation.id, summary: operation.summary, effect: operation.effect, input: z.toJSONSchema(operation.input, { io: "input" }) }));
+  return connector.operations.map(operation => ({ id: operation.id, summary: operation.summary, effect: operation.effect, input: operation.inputJsonSchema ?? z.toJSONSchema(operation.input, { io: "input" }) }));
 }
 
 export function communicationTools(owner: CommunicationOwner): ToolDefinition[] {
@@ -109,6 +116,7 @@ export function communicationTools(owner: CommunicationOwner): ToolDefinition[] 
             connector: connector.id, service: connector.service, availability: status.state, reason: status.state === "available" ? null : redactToolText(status.reason),
             scopes: visibleScopes(connector, session).map(scope => ({ id: scope.id, label: scope.label, policy: scope.policy })),
             operations: status.state === "available" ? communicationOperationsOf(connector) : [],
+            unavailableOperations: (connector.unavailable?.() ?? []).map(item => ({ id: item.id, summary: item.summary, availability: "unavailable", reason: redactToolText(item.reason) })),
             actions: connector.actions.map(action => ({ id: action.id, summary: action.summary, ...(action.proposalType ? { proposalType: action.proposalType } : { unavailable: action.followUp ?? "No owner operation supports this action." }) })),
           };
         }));
