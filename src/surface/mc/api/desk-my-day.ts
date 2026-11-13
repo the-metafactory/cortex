@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { composeDesk, type DeskRuntime, type DeskVigilSource } from "../desk/compose";
+import { composeCurrentDay, type DeskRuntime, type DeskVigilSource } from "../desk/compose";
 import { changeMyDay } from "../desk/my-day";
 import { readObservedMyDay, withSyncedBalance } from "../desk/studio-my-day";
 import { MyDayRequestSchema } from "../desk/my-day-schema";
@@ -21,7 +21,7 @@ export async function handleDeskMyDay(req: Request, db: Database, runtime: DeskR
   if (!parsed.success) return Response.json({ error: "Provide a valid My day change, date and request id." }, { status: 400 });
   const input = parsed.data;
   const key = (input.command.op === "todo" || input.command.op === "source-plan") ? input.command.key : null;
-  const source = key ? (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now, ...(runtime.adapterDay ? { adapterDay: runtime.adapterDay } : {}) })).items.find(i => i.key === key) : undefined;
+  const source = key ? (await composeCurrentDay(db, runtime, desk, vigil, now)).items.find(i => i.key === key) : undefined;
   try {
     const changed = await withSyncedBalance(db, desk, now, studio => changeMyDay({ db, desk, now, ...input, studio, ...(source ? { source } : {}) }));
     const mail = key && source?.kind === "mail" ? findListedMail(runtime.sourceCache?.cached() ?? [], key) : null;

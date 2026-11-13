@@ -168,11 +168,29 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 
 Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText` and its effective `policy`.
 
+`GET /api/desk/studio/relations?thread=<slug>` returns one thread's **Relates to** groups, computed on request and never stored:
+
+```json
+{
+  "thread": "desk-open-source",
+  "generatedAt": 1763070000000,
+  "relations": { "threads": [], "goals": [], "events": [], "people": [], "decisions": [], "links": [] },
+  "proposed": [],
+  "context": "complete"
+}
+```
+
+- Each relation carries `kind`, `key`, `title`, `why` (an English sentence), `basis`, and where they apply `open` (the other thread's slug), `href` and `at`.
+- `basis` lists the rules behind the relation, so a client can word the reason in its own language. Each entry has a `rule`: `shared-source` (`source`, the shared material label), `goal-material` (`goalState` when the goal id resolves), `event-in-material` (`material`, the label that names the event), `event-in-question`, `person-material`, `same-area-word` (`area` id and `word`) or `kept` (`note`, the kept note's time). A related thread you also kept carries its derived rule and `kept`.
+- `proposed` holds the open `relation` notes, newest first; Keep and Dismiss go through `POST /api/desk/studio/act`.
+- `context` is `complete`, or `studio-only` when the Desk could not be composed; then `goals` come only from the material, `events` is empty, and the other groups are still served.
+- With the Studio off the route answers `{ "relations": null }`. A malformed slug answers 400, an unknown thread 404. Responses are `Cache-Control: no-store`.
+
 ## Thread page
 
 Opening a thread on the board zooms the card into its thread page; `?desk=studio&thread=<slug>` holds the open thread, so reload and the browser's back button work. With `prefers-reduced-motion`, the page opens and closes without animation. Keep, Dismiss, Close with an outcome, Park, Bring back, Think tonight and the response box write to the files (see Changes). Discuss stays disabled until live sessions with Ivy arrive.
 
-**Relates to** is derived on every render, never stored:
+**Relates to** is derived on every render, never stored. The page and `GET /api/desk/studio/relations` share one rule and one context builder (the Desk's goals and its today and coming events):
 
 - **Threads**: active or parked threads that share a material item (equal `href`, or equal labels after normalisation). A related thread opens in place.
 - **Goal it serves**: material items of kind `goal`. A label that starts with a goal id (`G5: one post a week`) takes its name and state from the Desk's goals.

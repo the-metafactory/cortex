@@ -3,9 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { buildBoard, clip, plainQuestion, type Board, type BoardCapture, type BoardCard, type BoardFree, type BoardLoose, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
 import { dayMonth, outcomeLabel, TYPE_LABEL } from "../../desk/studio/labels";
 import { buildThreadPage } from "../../desk/studio/page";
-import { NO_CONTEXT, type RelatesContext } from "../../desk/studio/relates";
+import { NO_CONTEXT, relatesContext, type RelatesContext, type RelatesDay } from "../../desk/studio/relates";
 import type { StudioView } from "../../desk/studio/view";
-import type { DeskView } from "../../desk/types";
 import { startOfDay } from "../../desk/time";
 import { useStudioActs, type StudioActs } from "../hooks/use-studio-act";
 import { OpenSheet, type OpenRequest } from "./desk-studio-acts";
@@ -53,8 +52,6 @@ export function DeskModeSwitch({ hasStudio, inStudio, inBalance = false, inCatch
   );
 }
 
-export type StudioDay = Pick<DeskView, "generatedAt" | "today" | "ahead" | "goals">;
-
 export function useFreshStudio(studio: StudioView): [StudioView, (view: StudioView) => void] {
   const [fresh, setFresh] = useState<{ base: StudioView; view: StudioView } | null>(null);
   const current = useRef(studio);
@@ -63,7 +60,7 @@ export function useFreshStudio(studio: StudioView): [StudioView, (view: StudioVi
   return [fresh?.base === studio ? fresh.view : studio, take];
 }
 
-export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDiscuss, onConversation }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay; onDiscuss?: StartDiscussion; onConversation?: (id: string) => void }) {
+export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDiscuss, onConversation }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: RelatesDay; onDiscuss?: StartDiscussion; onConversation?: (id: string) => void }) {
   const [studio, takeStudio] = useFreshStudio(polled);
   const acts = useStudioActs(takeStudio);
   const [sheet, setSheet] = useState<OpenRequest | null>(null);
@@ -73,7 +70,7 @@ export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDi
   const board = useMemo(() => buildBoard(studio, { now, startOfToday: startOfDay(now), lastLook }), [studio, now, lastLook]);
   const root = useRef<HTMLDivElement>(null);
   const zoom = useThreadZoom(thread, root);
-  const context = useMemo<RelatesContext>(() => (day ? { now: day.generatedAt, events: [...day.today, ...day.ahead], goals: day.goals } : { ...NO_CONTEXT, now }), [day, now]);
+  const context = useMemo<RelatesContext>(() => (day ? relatesContext(day) : { ...NO_CONTEXT, now }), [day, now]);
   const page = useMemo(() => (zoom.shown === null ? null : buildThreadPage(studio, zoom.shown, context)), [studio, zoom.shown, context]);
   const back = (): void => onOpenThread(null);
   return (

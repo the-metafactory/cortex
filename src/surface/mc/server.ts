@@ -123,6 +123,7 @@ import { wakeAssetResponse } from "./desk/wake-assets";
 import { handleDeskGoal } from "./api/desk-goal";
 import { handleDeskRuling } from "./api/desk-ruling";
 import { handleGetDeskStudio } from "./api/desk-studio";
+import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { handleConversations, importedSessions, type ConversationAccess } from "./api/conversations";
@@ -673,6 +674,11 @@ async function handleApi(
   if (pathname === "/api/desk/studio") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
     return handleGetDeskStudio(desk);
+  }
+
+  if (pathname === "/api/desk/studio/relations") {
+    if (req.method !== "GET") return methodNotAllowed(["GET"]);
+    return handleGetDeskStudioRelations(req, db, desk, vigil);
   }
 
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });

@@ -1,4 +1,4 @@
-import type { DeskEvent, DeskGoal } from "../types";
+import type { DeskEvent, DeskGoal, DeskView } from "../types";
 import { clip, normaliseLabel, sameSource } from "./board";
 import type { MaterialLink } from "./format";
 import { outcomeLabel, withHref } from "./labels";
@@ -21,11 +21,21 @@ const GOAL_STATE: Record<DeskGoal["state"], string> = {
 
 export type RelationKind = "thread" | "goal" | "event" | "person" | "decision" | "link";
 
+export type RelationBasis =
+  | { rule: "shared-source"; source: string }
+  | { rule: "goal-material"; goalState?: DeskGoal["state"] }
+  | { rule: "event-in-material"; material: string }
+  | { rule: "event-in-question" }
+  | { rule: "person-material" }
+  | { rule: "same-area-word"; area: string; word: string }
+  | { rule: "kept"; note: string };
+
 export interface Relation {
   kind: RelationKind;
   key: string;
   title: string;
   why: string;
+  basis: RelationBasis[];
   open?: string;
   href?: string;
   at?: number;
@@ -47,6 +57,10 @@ export interface RelatesContext {
 }
 
 export const NO_CONTEXT: RelatesContext = { now: 0, events: [], goals: [] };
+
+export type RelatesDay = Pick<DeskView, "generatedAt" | "today" | "ahead" | "goals">;
+
+export const relatesContext = (day: RelatesDay): RelatesContext => ({ now: day.generatedAt, events: [...day.today, ...day.ahead], goals: day.goals });
 
 export const relationCount = (r: Relations): number => r.threads.length + r.goals.length + r.events.length + r.people.length + r.decisions.length + r.links.length;
 
@@ -71,7 +85,7 @@ function threadRelations(thread: StudioThreadView, studio: StudioView): Relation
     .filter((o) => o.slug !== thread.slug)
     .flatMap((o) => {
       const hit = sharedLink(thread, o);
-      return hit ? [{ kind: "thread" as const, key: `thread:${o.slug}`, title: o.question, why: `Shares a source: ${hit.label}.`, open: o.slug }] : [];
+      return hit ? [{ kind: "thread" as const, key: `thread:${o.slug}`, title: o.question, why: `Shares a source: ${hit.label}.`, basis: [{ rule: "shared-source", source: hit.label }], open: o.slug }] : [];
     });
 }
 
@@ -84,7 +98,7 @@ function goalRelations(thread: StudioThreadView, goals: readonly DeskGoal[]): Re
       const goal = id ? byId.get(id) : undefined;
       const rest = m.label.replace(GOAL_ID, "").trim() || m.label;
       const why = goal ? `The goal this thread serves, ${GOAL_STATE[goal.state]}.` : "The goal this thread serves, named in its material.";
-      return { kind: "goal", key: `goal:${id ?? normaliseLabel(m.label)}`, title: goal ? goal.text : capitalise(rest), why, ...withHref(m.href) };
+      return { kind: "goal", key: `goal:${id ?? normaliseLabel(m.label)}`, title: goal ? goal.text : capitalise(rest), why, basis: [goal ? { rule: "goal-material", goalState: goal.state } : { rule: "goal-material" }], ...withHref(m.href) };
     });
   return uniqueBy(found, (r) => r.key);
 }
@@ -98,8 +112,10 @@ function eventRelations(thread: StudioThreadView, ctx: RelatesContext): Relation
       const title = normaliseLabel(e.title);
       if (title.length < MIN_EVENT_TITLE) return [];
       const named = labels.find((l) => containsWords(l.norm, title));
-      const why = named ? `Named in the material: ${clip(named.label, 60)}.` : containsWords(question, title) ? "Matches the thread's question." : null;
-      return why ? [{ kind: "event", key: `event:${e.key}`, title: e.title, why, at: e.at, ...withHref(e.url) }] : [];
+      const reason: Pick<Relation, "why" | "basis"> | null = named
+        ? { why: `Named in the material: ${clip(named.label, 60)}.`, basis: [{ rule: "event-in-material", material: named.label }] }
+        : containsWords(question, title) ? { why: "Matches the thread's question.", basis: [{ rule: "event-in-question" }] } : null;
+      return reason ? [{ kind: "event", key: `event:${e.key}`, title: e.title, ...reason, at: e.at, ...withHref(e.url) }] : [];
     })
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   return uniqueBy(found, (r) => r.key).slice(0, MAX_EVENTS);
@@ -108,7 +124,7 @@ function eventRelations(thread: StudioThreadView, ctx: RelatesContext): Relation
 function peopleRelations(thread: StudioThreadView): Relation[] {
   const found = thread.material
     .filter((m) => (PERSON_KINDS as readonly string[]).includes(m.kind.toLowerCase()))
-    .map((m): Relation => ({ kind: "person", key: `person:${normaliseLabel(m.label)}`, title: m.label, why: "Named in the thread's material.", ...withHref(m.href) }));
+    .map((m): Relation => ({ kind: "person", key: `person:${normaliseLabel(m.label)}`, title: m.label, why: "Named in the thread's material.", basis: [{ rule: "person-material" }], ...withHref(m.href) }));
   return uniqueBy(found, (r) => r.key);
 }
 
@@ -151,11 +167,12 @@ function decisionRelations(thread: StudioThreadView, studio: StudioView): Relati
       const hit = sharedLink(thread, c);
       const area = hit ? undefined : c.areas.find((a) => thread.areas.includes(a));
       const topic = area === undefined ? undefined : sharedTopic(thread, c, isRare);
-      if (!hit && topic === undefined) return [];
-      const via = hit ? `Shares a source: ${hit.label}.` : `Same area: ${areaLabel.get(area ?? "") ?? area}, and both mention “${topic}”.`;
+      const basis: Extract<RelationBasis, { rule: "shared-source" | "same-area-word" }> | null = hit ? { rule: "shared-source", source: hit.label } : area !== undefined && topic !== undefined ? { rule: "same-area-word", area, word: topic } : null;
+      if (!basis) return [];
+      const via = basis.rule === "shared-source" ? `Shares a source: ${basis.source}.` : `Same area: ${areaLabel.get(basis.area) ?? basis.area}, and both mention “${basis.word}”.`;
       const head = `${outcomeLabel(c)}${c.closed ? ` ${c.closed}` : ""}.`;
       const said = c.expect ? ` Expected: ${clip(c.expect, 80)}` : c.outcomeText ? ` ${clip(c.outcomeText, 80)}` : "";
-      return [{ kind: "decision", key: `decision:${c.slug}`, title: c.question, why: `${head}${said} ${via}`.replace(/\s+/g, " "), open: c.slug }];
+      return [{ kind: "decision", key: `decision:${c.slug}`, title: c.question, why: `${head}${said} ${via}`.replace(/\s+/g, " "), basis: [basis], open: c.slug }];
     });
 }
 
@@ -167,21 +184,25 @@ function keptRelations(thread: StudioThreadView, studio: StudioView): Relation[]
     const r = n.relates;
     if (n.kind !== "relation" || n.status !== "kept" || !r) return [];
     const why = n.text ? `${clip(n.text, 100)} ${KEPT_WHY}` : KEPT_WHY;
+    const basis: RelationBasis[] = [{ rule: "kept", note: n.at }];
     const kind = r.kind.toLowerCase();
     if (kind === "thread") {
       const slug = r.label.trim();
       const other = known.get(slug);
-      return [{ kind: "thread", key: `kept:${n.at}`, title: other?.question ?? slug, why, ...(other ? { open: slug } : {}) }];
+      return [{ kind: "thread", key: `kept:${n.at}`, title: other?.question ?? slug, why, basis, ...(other ? { open: slug } : {}) }];
     }
     const as: RelationKind = kind === "goal" ? "goal" : (PERSON_KINDS as readonly string[]).includes(kind) ? "person" : "link";
-    return [{ kind: as, key: `kept:${n.at}`, title: r.label, why, ...withHref(r.href) }];
+    return [{ kind: as, key: `kept:${n.at}`, title: r.label, why, basis, ...withHref(r.href) }];
   });
 }
 
 export function relatesTo(thread: StudioThreadView, studio: StudioView, ctx: RelatesContext = NO_CONTEXT): Relations {
   const kept = keptRelations(thread, studio);
   const keptThreads = kept.filter((k) => k.kind === "thread");
-  const derived = threadRelations(thread, studio).map((d) => (keptThreads.some((k) => k.open === d.open) ? { ...d, why: `${d.why} ${KEPT_WHY}` } : d));
+  const derived = threadRelations(thread, studio).map((d) => {
+    const keptAs = keptThreads.find((k) => k.open === d.open);
+    return keptAs ? { ...d, why: `${d.why} ${KEPT_WHY}`, basis: [...d.basis, ...keptAs.basis] } : d;
+  });
   return {
     threads: [...derived, ...keptThreads.filter((k) => k.open === undefined || !derived.some((d) => d.open === k.open))],
     goals: [...goalRelations(thread, ctx.goals), ...kept.filter((k) => k.kind === "goal")],
