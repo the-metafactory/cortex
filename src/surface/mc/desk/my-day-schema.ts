@@ -44,6 +44,7 @@ export const MyDayMetaSchema = z.object({
   sources: z.array(source).default([]),
   receipts: z.array(z.object({ id: id, payload: z.string(), undo: z.string().optional(), outlineId: id.optional(), location: z.string().optional(), notice: z.string().optional() })).default([]),
   undos: z.array(undo).default([]),
+  reopens: z.array(z.object({ receipt: id, taskId: id, date: z.iso.date(), used: z.boolean() })).default([]),
   dayUndos: z.array(z.object({ receipt: id, date: z.iso.date(), before: z.array(id), after: z.array(id), text: z.string(), used: z.boolean() })).default([]),
   manualToday: z.object({ date: z.iso.date(), ids: z.array(id) }).nullable().default(null),
   caps: z.object({ cap: z.number().int().min(1).max(7), topN: z.number().int().min(1).max(10) }).nullable().default(null),

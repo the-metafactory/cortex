@@ -9,6 +9,7 @@ export const CARD_KIND_LABELS: Record<DeskItemKind, string> = {
   escalation: "Escalations", mail: "Mail", reminder: "Reminders", meeting: "Meetings",
   "mail-rule": "Mail rules", dmarc: "Mail reports", "mail-waiting": "Waiting for replies",
   "mail-handoff": "Mail handed to Ivy",
+  "task-handoff": "Tasks handed to an agent",
 };
 export function readCatchupKind(value: string | null): CatchupKind {
   return DESK_ITEM_KINDS.find(kind => kind === value) ?? "all";

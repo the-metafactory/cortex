@@ -26,6 +26,7 @@ import { startFakeStreamingServer } from "../../providers/__tests__/fake-streami
 import { signEnvelope } from "@the-metafactory/myelin/identity";
 import { directTaskSubject, taskSubject } from "@the-metafactory/myelin/subjects";
 import { buildReflexDispatch } from "../../bus/reflex-activation-listener";
+import { deskTaskEnvelope } from "../../surface/mc/desk/task-handoff";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import { createSurfaceRouter, type SurfaceRouter } from "../../bus/surface-router";
@@ -4486,5 +4487,33 @@ test("Reflex prompt task reaches its scoped API receiver without a Claude sessio
   } finally {
     await listener.stop();
     await server.stop();
+  }
+});
+
+test.each([
+  [SUCCESS_RESULT, "dispatch.task.completed"],
+  [FAIL_RESULT, "dispatch.task.failed"],
+] as const)("a Desk task hand-off reaches its builtin receiver, which echoes the attempt id on its lifecycle (%#)", async (result, terminal) => {
+  const r = recordingRuntime();
+  const listener = createDispatchListener({
+    runtime: r.runtime,
+    source: SOURCE,
+    receivingAgentId: "cortex",
+    subjects: [directTaskSubject("metafactory", "did:mf:cortex", "fixture")],
+    ccSessionFactory: fakeFactory(result).factory,
+    policyEngine: engineGranting(["dispatch.cortex"]),
+  });
+  await listener.start();
+  try {
+    const attempt = "22222222-2222-4222-8222-222222222222";
+    const { envelope, subject } = deskTaskEnvelope({ principal: "metafactory", stack: "fixture" }, { id: "cortex", label: "Cortex", policy: "local" }, attempt, "Draft the engine notes.");
+    expect(subject).toBe("local.metafactory.fixture.tasks.@did-mf-cortex.desk-task");
+    r.trigger(envelope, subject);
+    await settle(() => r.published);
+    const lifecycle = r.published.filter((event) => event.type.startsWith("dispatch.task."));
+    expect(lifecycle.map((event) => event.type)).toEqual(["dispatch.task.started", terminal]);
+    for (const event of lifecycle) expect(event.correlation_id).toBe(attempt);
+  } finally {
+    await listener.stop();
   }
 });
