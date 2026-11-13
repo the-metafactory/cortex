@@ -7,6 +7,7 @@ import { operationUuid, studioRequestId } from "../../conversation-ids";
 import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { canonicalGraphRef } from "../work-graph/read";
 import { flowName } from "../flow/schema";
+import { BALANCE_CREATE_CONTRACTS } from "../balance/create-contracts";
 import { OperationJournalStore, StoredSchema, type StoredOperation } from "./journal";
 import { parseWire, type Json, type OperationJournal } from "./types";
 import { canonicalWire } from "./validation";
@@ -30,9 +31,7 @@ export interface LegacyContext {
 type LegacyBinding = Pick<LegacyContext, "owner" | "adapterId" | "connectionId" | "capabilityId">;
 const balanceObjectType = (binding: LegacyBinding | undefined): "task" | "project" | undefined => {
   if (binding?.adapterId !== "balance") return undefined;
-  if (binding.owner === "balance-task" && binding.capabilityId === "balance.task.create") return "task";
-  if (binding.owner === "balance-project" && binding.capabilityId === "balance.project.create") return "project";
-  return undefined;
+  return Object.values(BALANCE_CREATE_CONTRACTS).find(contract => contract.owner === binding.owner && contract.capabilityId === binding.capabilityId)?.kind;
 };
 const ContextSchema = z.object({ owner: OperationRecordSchema.shape.owner, adapterId: z.string().min(1), connectionId: z.string().min(1), capabilityId: z.string().min(1), fields: z.record(z.string(), z.string()), destinations: z.array(ObjectReferenceSchema), canonicalReference: ObjectReferenceSchema.optional() }).strict();
 const SourceSchema = z.object({ proposal: ProposalSchema, record: OperationRecordSchema, ownerReceipts: z.json(), createResult: z.discriminatedUnion("state", [z.object({ state: z.literal("created"), canonicalId: z.string(), url: z.string().optional() }).strict(), z.object({ state: z.literal("accepted"), receipt: z.string().optional() }).strict(), z.object({ state: z.literal("failed"), error: z.string() }).strict()]).optional(), readback: z.union([z.object({ found: z.literal(true), canonicalId: z.string(), url: z.string().optional() }).strict(), z.object({ found: z.literal(false) }).strict(), z.null()]).optional() }).strict();

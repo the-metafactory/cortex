@@ -6,6 +6,7 @@ import { legacyContext, legacyFixture } from "../../../../conversations/domain-a
 import { syntheticWriterPlan, syntheticWriterSteps } from "../../../../conversations/domain-adapters/operations/writer-fixtures";
 import { WriterAuthority, writerLease, type WriterCutoverSteps, type WriterPlan } from "../../../../conversations/domain-adapters/operations/writer-authority";
 import { AT } from "../../../../conversations/domain-adapters/operations/fixtures";
+import { BALANCE_CREATE_CONTRACTS } from "../../../../conversations/domain-adapters/balance/create-contracts";
 import { balanceCreateRoute, balanceCreateRouteOf, routedBalanceCreateWriter as routedBalanceTaskWriter, type BalanceCreateCutover as BalanceTaskCutover, type BalanceCreateCutoverActive as BalanceTaskCutoverActive } from "../balance-create-cutover";
 import type { CreateRequest, OwnerWriter } from "../../../../conversations/types";
 
@@ -39,11 +40,12 @@ function failing(stage: "stop" | "enable"): WriterCutoverSteps {
 }
 
 describe.each(["task", "project"] as const)("Balance %s cutover route", kind => {
-  const owner = `balance-${kind}` as const;
+  const contract = BALANCE_CREATE_CONTRACTS[kind];
+  const owner = contract.owner;
   const BINDING = { stack: "test", owner, adapterId: "balance", connectionId: "connection-cutover", capabilityId: `balance.${kind}.create` };
   const request = (operationId: string) => createRequest(operationId, kind);
-  const balanceTaskRoute = (writers: import("../balance-create-cutover").BalanceCreateWriterAuthority, stack: string) => balanceCreateRoute(writers, stack, owner);
-  const balanceTaskRouteOf = (state: Parameters<typeof balanceCreateRouteOf>[0], stack: string) => balanceCreateRouteOf(state, stack, owner);
+  const balanceTaskRoute = (writers: import("../balance-create-cutover").BalanceCreateWriterAuthority, stack: string) => balanceCreateRoute(writers, stack, contract);
+  const balanceTaskRouteOf = (state: Parameters<typeof balanceCreateRouteOf>[0], stack: string) => balanceCreateRouteOf(state, stack, contract);
   test("without a writer record creation stays on the legacy writer and a cutover record with mutation disabled never falls back to it", async () => {
     const { host, writers, plan } = await authority("begun", kind);
     expect(await balanceTaskRoute(writers, "test")).toEqual({ kind: "legacy" });
@@ -134,7 +136,7 @@ describe.each(["task", "project"] as const)("Balance %s cutover route", kind => 
     const started = await writers.begin({ ...plan, binding: { ...plan.binding, capabilityId: "balance.unknown" } }, 0);
     await writers.resume(started.bindingKey, syntheticWriterSteps());
     expect((await balanceTaskRoute(writers, "test")).kind).toBe("disabled");
-    expect((await balanceCreateRoute(writers, "test", kind === "task" ? "balance-project" : "balance-task")).kind).toBe("legacy");
+    expect((await balanceCreateRoute(writers, "test", BALANCE_CREATE_CONTRACTS[kind === "task" ? "project" : "task"])).kind).toBe("legacy");
   });
 
 });

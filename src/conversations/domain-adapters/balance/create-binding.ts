@@ -16,12 +16,12 @@ import type { ApprovedSnapshot, Authority, DispatchRequest, Json, OperationLooku
 import { createOutcome, ownerResultKit, requestParts, resultsOf, type CreateOutcome, type OwnerResultParts } from "../operations/owner-results";
 
 export const BALANCE_CREATE_DEDUP_RETENTION_MS = 86_400_000;
-export function balanceCreateSupport(kind: "task" | "project", connectionId: string, declarationId: string): OwnerSupport {
-  return { lifecycleVersion: "1.0.0", adapterId: BALANCE_ADAPTER_ID, connectionId, capabilityId: `balance.${kind}.create`, declarationId, dedup: { kind: "guaranteed", scope: "connection-capability", retentionMs: BALANCE_CREATE_DEDUP_RETENTION_MS, bindsSnapshot: true, concurrent: true }, operationLookup: "historical", conditionalUpdate: "none", cancellation: "none" };
+export function balanceCreateSupport(capabilityId: string, connectionId: string, declarationId: string): OwnerSupport {
+  return { lifecycleVersion: "1.0.0", adapterId: BALANCE_ADAPTER_ID, connectionId, capabilityId, declarationId, dedup: { kind: "guaranteed", scope: "connection-capability", retentionMs: BALANCE_CREATE_DEDUP_RETENTION_MS, bindsSnapshot: true, concurrent: true }, operationLookup: "historical", conditionalUpdate: "none", cancellation: "none" };
 }
 
 export type BalanceCreateFields = Record<string, string>;
-export interface BalanceCreateInput { area: ObjectReference; project?: ObjectReference; title: string; note?: string }
+export interface BalanceCreateInput { area: ObjectReference; title: string; note?: string }
 export type BalanceCreateReview<I> = { kind: "resolved"; input: I; requiresFreshApproval: boolean; fields: BalanceCreateFields } | { kind: "refused"; reason: string; fields: BalanceCreateFields } | { kind: "choice"; reason: string; fields: BalanceCreateFields };
 export interface BalanceCreateContract<I extends BalanceCreateInput, R extends BalanceCreateReview<I>> {
   kind: "task" | "project";
@@ -30,6 +30,7 @@ export interface BalanceCreateContract<I extends BalanceCreateInput, R extends B
   declaration(): AdapterDeclaration;
   support(connectionId: string, declarationId?: string): OwnerSupport;
   parse(raw: unknown, connectionId: string): I;
+  destinations(input: I): ObjectReference[];
   legacyFields(input: I): BalanceCreateFields;
   review: (fields: BalanceCreateFields, state: AppState, areas: readonly DestinationArea[], connectionId: string) => R;
   refusedReview(reason: string, fields: BalanceCreateFields): R;

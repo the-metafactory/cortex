@@ -59,7 +59,7 @@ async function openRigFor(kind: "task" | "project") {
     return writers.resume(begun.bindingKey, steps);
   };
   const start = async (title: string) => talk(await opened.start(title));
-  return { fixture, kind, owner, inFlight: () => legacyInFlightCutover(journal, { kind }), db, desk, host: opened.host, journal, writers, tasks, receipts, runCutover, start, ...(await start("Cutover conversation")) };
+  return { fixture, kind, owner, contract, inFlight: () => legacyInFlightCutover(journal, { kind }), db, desk, host: opened.host, journal, writers, tasks, receipts, runCutover, start, ...(await start("Cutover conversation")) };
 }
 
 describe.each(["task", "project"] as const)("Balance %s creation after its own cutover", kind => {
@@ -221,7 +221,7 @@ describe.each(["task", "project"] as const)("Balance %s creation after its own c
 
     const retired = await rig.writers.begin({ ...inFlight.plan, cutoverId: "read-only-downgrade" }, active.revision);
     expect(retired.phase).toBe("disabled");
-    expect((await balanceCreateRoute(rig.writers, "test", rig.owner)).kind).toBe("disabled");
+    expect((await balanceCreateRoute(rig.writers, "test", rig.contract)).kind).toBe("disabled");
     const afterDowngrade = rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "After the downgrade" }))));
     expect(afterDowngrade.feedback).toBe("failed");
     expect(afterDowngrade.operation?.history.at(-1)?.detail).toContain("cutover has not completed");

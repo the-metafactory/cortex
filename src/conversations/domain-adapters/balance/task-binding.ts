@@ -67,7 +67,7 @@ export function balanceTaskCreateDeclaration(): AdapterDeclaration {
 export const balanceTaskCreateBindings = balanceCreateBindings;
 
 export function balanceTaskCreateSupport(connectionId: string, declarationId = BALANCE_TASK_CREATE_SUPPORT_ID): OwnerSupport {
-  return balanceCreateSupport("task", connectionId, declarationId);
+  return balanceCreateSupport(CAPABILITY_ID, connectionId, declarationId);
 }
 
 export const BalanceTaskCreateInputSchema = z.object({
@@ -141,6 +141,8 @@ export interface BalanceTaskSnapshotOptions {
   policy?: "local" | "cloud";
 }
 
+const taskDestinations = (input: BalanceTaskCreateInput): ObjectReference[] => [input.area, ...(input.project ? [input.project] : [])];
+
 export function balanceTaskApprovedSnapshot(options: BalanceTaskSnapshotOptions): ApprovedSnapshot {
   const input = parseBalanceTaskInput(options.input, options.connectionId);
   return buildApprovedSnapshot({
@@ -152,7 +154,7 @@ export function balanceTaskApprovedSnapshot(options: BalanceTaskSnapshotOptions)
     outputSchemaRef: OUTPUT_SCHEMA_REF,
     errorSchemaRef: ERROR_SCHEMA_REF,
     input,
-    destinations: [input.area, ...(input.project ? [input.project] : [])],
+    destinations: taskDestinations(input),
     policy: options.policy ?? "local",
   });
 }
@@ -161,6 +163,7 @@ export const BALANCE_TASK_CONTRACT = {
   kind: "task", owner: "balance-task", capabilityId: CAPABILITY_ID,
   declaration: balanceTaskCreateDeclaration, support: balanceTaskCreateSupport,
   parse: parseBalanceTaskInput, legacyFields: balanceTaskLegacyFields,
+  destinations: taskDestinations,
   review: reviewBalanceTask, refusedReview, snapshot: balanceTaskApprovedSnapshot,
 } satisfies BalanceCreateContract<BalanceTaskCreateInput, BalanceTaskReview>;
 export const createBalanceTaskBinding = (options: BalanceCreateBindingOptions): BalanceCreateBinding => createBalanceBinding(options, BALANCE_TASK_CONTRACT);

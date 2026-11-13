@@ -153,10 +153,19 @@ export async function runBalanceCutoverProbe(kind: "task" | "project"): Promise<
       const after = (await call("GET", `/api/conversations/${conversationId}/proposals`)).body as unknown as { proposals: ProposalView[] };
       const confirmed = after.proposals.find(item => item.proposal.proposalId === draftCard.proposal.proposalId);
       assert.equal(confirmed?.feedback, "created");
+      const confirmedNative = after.proposals.find(item => item.proposal.proposalId === native.proposal.proposalId);
+      assert.equal(confirmedNative?.feedback, "created");
+      assert.ok(loadMeta(db).inbox.some(item => item.id === confirmedNative?.operation?.canonicalId && item.title === BALANCE_CUTOVER_INBOX_ITEM.title), "the Inbox task does not match the approved native card");
+      for (const view of [confirmed, confirmedNative]) {
+        const operation = view?.operation;
+        assert.ok(operation?.canonicalId, "the approved card has no canonical object identity");
+        const receipt = loadMeta(db).receipts.find(item => item.id === operationUuid(operation.operationId));
+        assert.ok(receipt, "the approved card has no Balance transaction receipt");
+        assert.equal(receipt.outlineId, operation.canonicalId, "the Balance transaction receipt belongs to a different object");
+      }
       const grants = ((await call("GET", `/api/conversations/${conversationId}/proposals`)).body as unknown as { grants: Grant[] }).grants;
       assert.ok(grants.some(grant => grant.grantId !== unbound.grantId && grant.renewalRequired === false && grant.connectionId === active.plan.binding.connectionId && grant.destinations?.some(destination => destination.objectType === "area" && destination.canonicalId === AREA)), "the renewed grant is not bound to the project connection and area");
       assert.equal(confirmed?.operation?.canonicalId, created.id);
-      assert.ok(loadMeta(db).receipts.some(receipt => receipt.outlineId === created.id), "the cut-over task has no receipt");
       assert.ok(findNode(loadBalanceState(db)!.outline, `area:${AREA}`)?.children.some(child => child.id === created.id), "the task is not under the approved area");
       const repeated = await confirm(confirmed!.proposal.proposalId, confirmed!.proposal.revision, confirmed!.digest);
       assert.equal(repeated.body.proposal?.operation?.canonicalId, created.id);
@@ -164,7 +173,7 @@ export async function runBalanceCutoverProbe(kind: "task" | "project"): Promise<
       assert.ok(tasks(db, UNSAVED)[0]);
       assert.equal((await propose("Under the renewed bound grant")).proposal?.feedback, "created", "renewed permission did not authorize the next creation in its bound area");
       assert.equal(tasks(db, "Under the renewed bound grant").length, 1);
-      console.log(`readback: the approved card's id, the Balance ${kind} and its receipt agree, and the pre-cutover object is unchanged`);
+      console.log(`readback: both approved cards match their Balance objects and transaction receipts, including the ${kind}, and the pre-cutover object is unchanged`);
       console.log(JSON.stringify({ binding: contract.capabilityId, cutover: active.epoch, connection: active.plan.binding.connectionId, created: created.id, grants: grants.length, temporaryStore: true }));
     } finally {
       await browser.close();

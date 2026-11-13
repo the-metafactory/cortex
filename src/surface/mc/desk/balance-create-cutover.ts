@@ -27,16 +27,18 @@ export interface BalanceCreateCutover {
   writer(route: BalanceCreateCutoverActive): OwnerWriter;
 }
 
+type BalanceCreateIdentity = Pick<BalanceCreateContract<BalanceCreateInput, BalanceCreateReview<BalanceCreateInput>>, "owner" | "capabilityId">;
+
 const failed = (reason: string): CreateResult => ({ state: "failed", error: `${reason} Nothing was created.` });
 const cutover = (record: WriterRecord): BalanceCreateCutoverActive => ({ kind: "active", binding: record.plan.binding, lease: writerLease(record), connectionId: record.plan.binding.connectionId, cutoverRef: `${record.bindingKey}:${record.epoch}` });
 
-export function balanceCreateRouteOf(state: Pick<WriterState, "records"> & Partial<Pick<WriterState, "ownerFences">>, stack: string, owner: "balance-task" | "balance-project"): BalanceCreateRoute {
-  const heads = Object.values(state.records).flatMap(history => history.at(-1) ?? []).filter(record => record.plan.binding.stack === stack && record.plan.binding.owner === owner);
-  if (heads.length === 0) return state.ownerFences?.includes(canonicalWire([stack, owner])) ? { kind: "disabled", reason: "The Balance legacy owner is fenced and its cutover record is missing." } : { kind: "legacy" };
+export function balanceCreateRouteOf(state: Pick<WriterState, "records"> & Partial<Pick<WriterState, "ownerFences">>, stack: string, contract: BalanceCreateIdentity): BalanceCreateRoute {
+  const heads = Object.values(state.records).flatMap(history => history.at(-1) ?? []).filter(record => record.plan.binding.stack === stack && record.plan.binding.owner === contract.owner);
+  if (heads.length === 0) return state.ownerFences?.includes(canonicalWire([stack, contract.owner])) ? { kind: "disabled", reason: "The Balance legacy owner is fenced and its cutover record is missing." } : { kind: "legacy" };
   if (heads.length > 1) return { kind: "disabled", reason: "More than one Balance creation binding claims this stack, so creation cannot pick one." };
   const [record] = heads;
   if (!record) return { kind: "legacy" };
-  if (record.plan.binding.adapterId !== "balance" || record.plan.binding.capabilityId !== `balance.${owner === "balance-task" ? "task" : "project"}.create`) return { kind: "disabled", reason: "The Balance cutover has an unknown capability mapping." };
+  if (record.plan.binding.adapterId !== "balance" || record.plan.binding.capabilityId !== contract.capabilityId) return { kind: "disabled", reason: "The Balance cutover has an unknown capability mapping." };
   if (record.phase !== "active") {
     const failure = record.failures.at(-1);
     return { kind: "disabled", reason: failure ? `The Balance creation cutover stopped at ${failure.stage}: ${failure.message}` : `The Balance creation cutover has not completed; it waits at ${record.stage}.` };
@@ -46,9 +48,9 @@ export function balanceCreateRouteOf(state: Pick<WriterState, "records"> & Parti
 
 export interface BalanceCreateWriterAuthority { inspect(): Promise<Pick<WriterState, "records"> & Partial<Pick<WriterState, "ownerFences">>> }
 
-export async function balanceCreateRoute(writers: BalanceCreateWriterAuthority, stack: string, owner: "balance-task" | "balance-project"): Promise<BalanceCreateRoute> {
+export async function balanceCreateRoute(writers: BalanceCreateWriterAuthority, stack: string, contract: BalanceCreateIdentity): Promise<BalanceCreateRoute> {
   try {
-    return balanceCreateRouteOf(await writers.inspect(), stack, owner);
+    return balanceCreateRouteOf(await writers.inspect(), stack, contract);
   } catch {
     return { kind: "disabled", reason: "The Balance creation cutover state could not be read." };
   }
@@ -106,7 +108,7 @@ export function createBalanceLifecycleWriter<I extends BalanceCreateInput, R ext
   };
   return {
     async create(request) {
-      const route = await balanceCreateRoute(options.writers, options.stack, contract.owner);
+      const route = await balanceCreateRoute(options.writers, options.stack, contract);
       if (route.kind !== "active") return failed(route.kind === "legacy" ? "The Balance creation binding is not cut over." : route.reason);
       if (request.writerRevision !== route.cutoverRef) return failed("The Balance writer changed since review. Review the proposal again after the verified cutover.");
       const context = await options.context(request, route);
@@ -128,16 +130,16 @@ export function createBalanceLifecycleWriter<I extends BalanceCreateInput, R ext
       return (await facade.create(request, approval.authority, lifecycle)).result;
     },
     async readback(operation) {
-      const route = await balanceCreateRoute(options.writers, options.stack, contract.owner);
+      const route = await balanceCreateRoute(options.writers, options.stack, contract);
       if (route.kind !== "active") return null;
       return build(route).binding.readback(operation);
     },
     async grantBinding(fields) {
-      const route = await balanceCreateRoute(options.writers, options.stack, contract.owner);
+      const route = await balanceCreateRoute(options.writers, options.stack, contract);
       if (route.kind !== "active") return null;
       const review = build(route).facade.review(fields);
       if (review.kind !== "resolved") return null;
-      const refs = [review.input.area, ...(review.input.project ? [review.input.project] : [])];
+      const refs = contract.destinations(review.input);
       return { connectionId: route.connectionId, destinations: refs.map(ref => ({ objectType: ref.objectType, canonicalId: ref.canonicalId })) };
     },
   };

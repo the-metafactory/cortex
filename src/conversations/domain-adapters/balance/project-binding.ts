@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AdapterDeclaration } from "../types";
+import type { AdapterDeclaration, ObjectReference } from "../types";
 import { ObjectReferenceSchema } from "../types";
 import { adapterErrorSchema } from "../schema-primitives";
 import { buildApprovedSnapshot } from "../operations/owner-results";
@@ -40,7 +40,7 @@ export function balanceProjectCreateDeclaration(): AdapterDeclaration {
 }
 export const balanceProjectCreateBindings = balanceCreateBindings;
 export function balanceProjectCreateSupport(connectionId: string, declarationId = BALANCE_PROJECT_CREATE_SUPPORT_ID): OwnerSupport {
-  return balanceCreateSupport("project", connectionId, declarationId);
+  return balanceCreateSupport(CAPABILITY_ID, connectionId, declarationId);
 }
 export const BalanceProjectCreateInputSchema = z.object({ area: ObjectReferenceSchema, title: z.string().min(1).max(300), note: z.string().max(10_000).optional() }).strict();
 export type BalanceProjectCreateInput = z.infer<typeof BalanceProjectCreateInputSchema>;
@@ -51,10 +51,13 @@ export function parseBalanceProjectInput(raw: unknown, connectionId: string): Ba
   if (input.area.adapterId !== BALANCE_ADAPTER_ID || input.area.connectionId !== connectionId || input.area.objectType !== "area") throw new Error("balance.invalid_input");
   return input;
 }
+const projectDestinations = (input: BalanceProjectCreateInput): ObjectReference[] => [input.area];
+
 export const BALANCE_PROJECT_CONTRACT: BalanceCreateContract<BalanceProjectCreateInput, BalanceProjectReview> = {
   kind: "project", owner: "balance-project", capabilityId: CAPABILITY_ID,
   declaration: balanceProjectCreateDeclaration, support: balanceProjectCreateSupport,
   parse: parseBalanceProjectInput,
+  destinations: projectDestinations,
   legacyFields: input => ({ area: input.area.canonicalId, title: input.title, ...(input.note ? { note: input.note } : {}) }),
   refusedReview,
   review(fields, _state, areas, connectionId) {
@@ -66,7 +69,7 @@ export const BALANCE_PROJECT_CONTRACT: BalanceCreateContract<BalanceProjectCreat
   },
   snapshot(options) {
     const input = parseBalanceProjectInput(options.input, options.connectionId);
-    return buildApprovedSnapshot({ provenance: options.provenance, adapterId: BALANCE_ADAPTER_ID, connectionId: options.connectionId, capabilityId: CAPABILITY_ID, inputSchemaRef: INPUT, outputSchemaRef: OUTPUT, errorSchemaRef: ERROR, input, destinations: [input.area], policy: options.policy ?? "local" });
+    return buildApprovedSnapshot({ provenance: options.provenance, adapterId: BALANCE_ADAPTER_ID, connectionId: options.connectionId, capabilityId: CAPABILITY_ID, inputSchemaRef: INPUT, outputSchemaRef: OUTPUT, errorSchemaRef: ERROR, input, destinations: projectDestinations(input), policy: options.policy ?? "local" });
   },
 };
 export const balanceProjectApprovedSnapshot = BALANCE_PROJECT_CONTRACT.snapshot;

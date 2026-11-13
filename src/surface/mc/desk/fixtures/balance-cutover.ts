@@ -15,7 +15,7 @@ import type { LegacyContext, LegacySource } from "../../../../conversations/doma
 import { BALANCE_TASK_CONNECTION, BALANCE_TASK_NOW, balanceTaskAuthority } from "../../../../conversations/domain-adapters/__tests__/fixtures/balance-task-fixtures";
 import { balanceCreateRoute, createBalanceLifecycleWriter } from "../balance-create-cutover";
 import { createBalanceBinding, type BalanceCreateContract } from "../../../../conversations/domain-adapters/balance/create-binding";
-import { BALANCE_PROJECT_CONTRACT } from "../../../../conversations/domain-adapters/balance/project-binding";
+import { BALANCE_CREATE_CONTRACTS } from "../../../../conversations/domain-adapters/balance/create-contracts";
 import type { BalanceTaskCutover, BalanceTaskCutoverActive } from "../balance-task-cutover";
 import type { DeskItem } from "../types";
 import type { DeskOptions } from "../compose";
@@ -67,7 +67,7 @@ export function balanceCutoverFixture(options: BalanceCutoverFixtureOptions): Ba
     now: () => new Date(now()),
   });
   const cutover: BalanceTaskCutover = {
-    route: () => balanceCreateRoute(options.writers, stack, contract.owner),
+    route: () => balanceCreateRoute(options.writers, stack, contract),
     writer: () => createBalanceLifecycleWriter({
       stack, db: options.db, desk: options.desk, areas: () => options.desk().areas, journal: options.journal, bridge, writers: options.writers,
       supportDeclarationId: contract.support(BALANCE_TASK_CONNECTION).declarationId,
@@ -83,8 +83,6 @@ export function balanceCutoverFixture(options: BalanceCutoverFixtureOptions): Ba
   return { bridge, cutover, binding: () => binding };
 }
 
-export const balanceProjectCutoverFixture = (options: BalanceCutoverFixtureOptions): BalanceCutoverFixture => balanceCutoverFixture({ ...options, contract: BALANCE_PROJECT_CONTRACT });
-
 export interface InFlightLegacyCutover {
   readonly source: LegacySource;
   readonly context: LegacyContext;
@@ -93,14 +91,13 @@ export interface InFlightLegacyCutover {
 }
 
 export function legacyInFlightCutover(journal: OperationJournalStore, options: { stack?: string; kind?: "task" | "project"; sources?: LegacySource[] } = {}): InFlightLegacyCutover {
-  const source = legacyFixture("running");
+  const kind = options.kind ?? "task";
+  const contract = BALANCE_CREATE_CONTRACTS[kind];
+  const source = legacyFixture("running", kind);
   source.proposal.proposalId = "proposal-in-flight";
   source.record.proposalId = "proposal-in-flight";
   source.record.operationId = "conversation-example:proposal-in-flight:1";
-  const kind = options.kind ?? "task";
-  source.proposal.type = `balance-${kind}`;
-  source.record.owner = `balance-${kind}`;
-  const binding = { ...BALANCE_CUTOVER_BINDING, owner: `balance-${kind}`, capabilityId: `balance.${kind}.create` } as const;
+  const binding = { ...BALANCE_CUTOVER_BINDING, owner: contract.owner, capabilityId: contract.capabilityId } as const;
   const mapping = (item: LegacySource): LegacyContext => ({ ...legacyContext(item), owner: binding.owner, capabilityId: binding.capabilityId, ...(item.record.canonicalId ? { canonicalReference: { adapterId: "balance", connectionId: BALANCE_TASK_CONNECTION, objectType: kind, canonicalId: item.record.canonicalId } } : {}) });
   const context = mapping(source);
   const sources = [source, ...(options.sources ?? [])].map(item => ({ source: item, context: mapping(item) }));
