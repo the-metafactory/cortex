@@ -60,3 +60,34 @@ describe("Desk calendar occurrences", () => {
     expect((await shown([event({ id: "work-id" })], [event({ id: "personal-id", calendarId: "other" })])).today).toEqual(["cal:work:work-id", "cal:personal:personal-id"]);
   });
 });
+
+describe("Desk meetings across the day boundary", () => {
+  const LATE = new Date("2026-11-02T23:50:00").getTime();
+  const minute = (n: number): string => new Date(LATE + n * 60000).toISOString();
+  const meeting = (over: Record<string, unknown>) => ({ id: "budget-call", title: "Budget call", start: minute(5), end: minute(40), calendar: "Work", calendarId: "cal", ...over });
+  let db: Database;
+  beforeEach(() => { db = initDatabase(":memory:"); });
+  afterEach(() => { db.close(); });
+
+  const compose = (events: unknown[]) => composeDesk(db, options, undefined, { now: LATE, sourceCache: new SourceCache(async ([id]) => JSON.stringify({ capabilities: ["calendar"], events: id === "work" ? events : [] })) });
+  const meetingKeys = async (events: unknown[]) => (await compose(events)).items.filter(item => item.kind === "meeting").map(item => item.key);
+
+  it("keeps one meeting item for an event that spans into the coming days", async () => {
+    const desk = await compose([meeting({})]);
+    expect(desk.today.map(entry => entry.key)).toEqual(["cal:work:budget-call"]);
+    expect(desk.ahead.map(entry => entry.key)).toEqual(["cal:work:budget-call"]);
+    expect(desk.items.filter(item => item.kind === "meeting").map(item => item.key)).toEqual([`meeting:cal:work:budget-call@${Date.parse(minute(5))}`]);
+  });
+
+  it("keeps an item for each of two distinct meetings in the window", async () => {
+    expect(await meetingKeys([meeting({ id: "budget-call" }), meeting({ id: "handover", title: "Handover", start: minute(6), end: minute(41) })])).toEqual([
+      `meeting:cal:work:budget-call@${Date.parse(minute(5))}`,
+      `meeting:cal:work:handover@${Date.parse(minute(6))}`,
+    ]);
+  });
+
+  it("composes no item key twice", async () => {
+    const keys = (await compose([meeting({}), meeting({ id: "handover", title: "Handover", start: minute(6), end: minute(41) })])).items.map(item => item.key);
+    expect(keys).toEqual([...new Set(keys)]);
+  });
+});
