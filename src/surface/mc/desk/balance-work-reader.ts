@@ -35,16 +35,8 @@ export interface BalanceWorkRunner {
   readonly runner: Pick<QueryRunner, "create" | "run">;
   readonly context: HostContext;
   readonly sink: ReleaseSink;
-  readonly inputSchemaRef: (capabilityId: string) => SchemaRef;
+  readonly inputSchemaRef: Record<BalanceCapability, SchemaRef>;
 }
-export interface BalanceWorkSchemaRefs {
-  readonly taskQuery: SchemaRef;
-  readonly taskRead: SchemaRef;
-  readonly projectQuery: SchemaRef;
-  readonly projectRead: SchemaRef;
-}
-export const balanceWorkSchemaRef = (refs: BalanceWorkSchemaRefs): ((capabilityId: string) => SchemaRef) => capabilityId =>
-  capabilityId === "balance.task.query" ? refs.taskQuery : capabilityId === "balance.task.read" ? refs.taskRead : capabilityId === "balance.project.query" ? refs.projectQuery : refs.projectRead;
 
 type ObjectMapper = (query: BalanceWorkQuery, object: ReleasedObject, at: number) => WorkObject;
 interface KindFacts {
@@ -132,7 +124,7 @@ export function balanceWorkQuery(config: BalanceWorkRunner): BalanceWorkQuery {
       adapterId: "balance",
       connectionId: config.connectionId,
       capabilityId: request.capabilityId,
-      inputSchemaRef: config.inputSchemaRef(request.capabilityId),
+      inputSchemaRef: config.inputSchemaRef[request.capabilityId],
       destinations: [...request.destinations],
       input: request.input,
     }),

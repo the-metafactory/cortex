@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { AppState, DestinationArea } from "../../../balance";
-import { areaProjects, balanceDestinations, isBalanceProjectId, resolveBalanceProject, type BalanceDestination } from "../../../surface/mc/desk/balance-destinations";
+import { areaProjects, balanceDestinations, balanceProjectsByTitle, isBalanceProjectId, resolveBalanceProject, type BalanceDestination } from "../../../surface/mc/desk/balance-destinations";
 import { STALE_OUTLINE } from "../../../surface/mc/desk/balance-outline";
 import { balanceWriter } from "../../../surface/mc/desk/balance-conversation-writer";
 import type { DeskOptions } from "../../../surface/mc/desk/compose";
@@ -151,7 +151,7 @@ export function reviewBalanceTask(fields: BalanceTaskFields, state: AppState, ar
   const chosen = resolveBalanceProject(open, project);
   if (chosen) return resolved({ area: areaRef, project: reference(connectionId, "project", chosen.id), ...extra, title }, chosen.id !== project);
   if (isBalanceProjectId(project)) return refusedReview(`That project is not open in ${area.label}.`, fields);
-  const titled = open.filter(item => item.title.trim().toLocaleLowerCase() === project.toLocaleLowerCase());
+  const titled = balanceProjectsByTitle(open, project);
   if (titled.length > 1) return { kind: "choice", field: "project", options: titled, reason: `More than one open project in ${area.label} is named ${project}. Choose one.`, fields: { ...fields } };
   return refusedReview(`That project is not open in ${area.label}.`, fields);
 }

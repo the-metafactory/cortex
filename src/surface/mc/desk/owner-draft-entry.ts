@@ -1,6 +1,6 @@
 import type { AuthorityMediator, WriterLease } from "../../../conversations/authority";
 import type { ConversationHost } from "../../../conversations/host";
-import { draftOperationId, DraftingBindings, type DraftingBindingDocument, type DraftDestinations, type DraftServiceDeps, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
+import { draftOperationId, DraftingBindings, type DraftingBindingDocument, type DraftDestinations, type DraftServiceDeps, type DraftView, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
 import type { OperationBridge } from "../../../conversations/domain-adapters/operations/dispatch";
 import type { StoredOperation } from "../../../conversations/domain-adapters/operations/journal";
 import { receiptStatus } from "../../../conversations/domain-adapters/operations/reconciliation";
@@ -40,8 +40,6 @@ export interface OwnerDraft<Input, Destinations extends DraftDestinations = Draf
   readonly binding: DraftingBindingDocument;
   readonly resolveWith: string;
   readonly unavailable: string;
-  readonly savesLocally?: boolean;
-  readonly conversationSourcesOnly?: boolean;
   parse(raw: unknown, connectionId: string): Input;
   references(input: Input): readonly ObjectReference[];
   inconsistency?(input: Input, conversationId: string, destinations: Destinations): Promise<string | null>;
@@ -60,17 +58,18 @@ export function ownerDraftEditor<Session extends OwnerDraftSession, Input, Desti
     const definitivelyRefused = (status.state === "failed" || status.state === "refused") && status.effects.length === 0 && !status.investigation;
     return !definitivelyRefused;
   };
+  const storedOperation = (draft: DraftView["draft"]) => host.lifecycleJournal(deps.registry).read(draftOperationId(draft));
   const editor = deskDraftEditor(host, { ...deps, bindings, destinations }, {
     audience: options.audience,
     targets: () => [{ connectionId: options.connectionId, capabilityId: owner.capabilityId, label: owner.label }],
     hasOperation: async view => {
-      const stored = await host.lifecycleJournal(deps.registry).read(draftOperationId(view.draft));
+      const stored = await storedOperation(view.draft);
       return stored !== null && holdsDraft(stored);
     },
     receipt: async view => {
       const draft = view.draft;
       const operationId = draftOperationId(draft);
-      const stored = await host.lifecycleJournal(deps.registry).read(operationId);
+      const stored = await storedOperation(draft);
       if (!stored || !holdsDraft(stored)) return null;
       const session = await options.session(draft.conversationId);
       if (!session || view.withheld.length) return { kind: "withheld" };
@@ -90,12 +89,12 @@ export function ownerDraftEditor<Session extends OwnerDraftSession, Input, Desti
       };
       if (!await unchanged()) return blocked("The draft changed; review it again.");
       const view = await editor.service.read(handoff.draftId, request.audience);
-      if (!view || view.withheld.length || handoff.policy === "local" && !owner.savesLocally) return blocked(`${owner.label} creation needs a cloud-permitted draft and sources.`);
+      if (!view || view.withheld.length || handoff.policy === "local") return blocked(`${owner.label} creation needs a cloud-permitted draft and sources.`);
       const draft = view.draft;
       const session = await options.session(draft.conversationId);
       if (session?.principal !== request.principal) return blocked("The current principal session is unavailable.");
       const sources = await options.sourceRestrictions(handoff);
-      if (sources === null || handoff.sources.length > 0 && sources.length === 0 && !owner.conversationSourcesOnly) return blocked("Source authority is unavailable; review the draft again.");
+      if (sources === null || handoff.sources.length > 0 && sources.length === 0) return blocked("Source authority is unavailable; review the draft again.");
       const input = owner.parse(handoff.input, options.connectionId);
       const batch = destinations.batch();
       const resolved = await Promise.all(owner.references(input).map(async ref => {

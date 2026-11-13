@@ -10,7 +10,11 @@ export interface VigilResultRow extends VigilRefRow {
 
 export function ingestResult(db: Database, payload: ExecutionRunFinishedPayload, opts: VigilIngestOpts): void {
   if (payload.outcome !== "succeeded" || !payload.result_ref) return;
-  const ref = payload.result_ref;
+  linkResultSubjects(db, payload, payload.result_ref);
+  ingestRefAttention(db, "result", payload.result_ref, payload, opts);
+}
+
+export function linkResultSubjects(db: Database, payload: ExecutionRunFinishedPayload, ref: string): void {
   const endedAt = Date.parse(payload.ended_at);
   const subjects = db.query<{ subject_key: string }, [string]>(
     "SELECT subject_key FROM vigil_subjects WHERE last_run_id = ?",
@@ -23,7 +27,14 @@ export function ingestResult(db: Database, payload: ExecutionRunFinishedPayload,
         (excluded.last_ended_at = last_ended_at AND excluded.last_run_id > last_run_id)`)
       .run(key, ref, payload.run_id, endedAt);
   }
-  ingestRefAttention(db, "result", ref, payload, opts);
+}
+
+export function getResult(db: Database, ref: string): VigilResultRow | null {
+  return db.query<VigilResultRow, [string]>("SELECT * FROM vigil_results WHERE result_ref = ?").get(ref);
+}
+
+export function getResultByAttentionId(db: Database, attentionId: string): VigilResultRow | null {
+  return db.query<VigilResultRow, [string]>("SELECT * FROM vigil_results WHERE attention_id = ?").get(attentionId);
 }
 
 export function expireResults(db: Database, now: number): void {

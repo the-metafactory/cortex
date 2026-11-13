@@ -1,8 +1,13 @@
 import { expect, test } from "bun:test";
 import { serveFrameProbe } from "../desk-adapter-frame/server";
 import { FRAME_ATTACKS } from "../../src/surface/mc/desk/__tests__/fixtures/adapter-frame-ui";
-import { DESK_ADAPTER_FRAMES_PATH, FrameOpenReplySchema, shellFrameCsp } from "../../src/surface/mc/desk/adapter-frame-contract";
+import { DESK_ADAPTER_ASSETS_PREFIX, DESK_ADAPTER_FRAMES_PATH, FrameOpenReplySchema, shellFrameCsp } from "../../src/surface/mc/desk/adapter-frame-contract";
 import { identityOf, newInstance } from "../../src/surface/mc/desk/adapter-frame-protocol";
+
+test("static shell frame policy uses the contract asset prefix", async () => {
+  const shell = await Bun.file(new URL("../../src/surface/mc/dashboard-v2/index.html", import.meta.url)).text();
+  expect(shell).toContain(`adapterFramePolicy.content = 'frame-src ' + location.origin + '${DESK_ADAPTER_ASSETS_PREFIX}';`);
+});
 
 test("actual shell fixture and verified hostile assets build and serve on authenticated routes", async () => {
   for (const mode of ["local", "hosted"] as const) {

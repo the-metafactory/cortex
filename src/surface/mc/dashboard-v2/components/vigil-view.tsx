@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import type { VigilSubjectView } from "../../api/vigil";
 import "./vigil-view.css";
 
@@ -25,14 +26,14 @@ export function VigilView({ subjects, loaded, enabled = true, error }: VigilView
       ) : !enabled ? (
         <p className="dim">Vigil is not enabled on this stack.</p>
       ) : subjects.length === 0 ? (
-        <p className="dim">No subjects watched yet.</p>
+        <p className="dim">No Vigil subjects watched yet.</p>
       ) : (
         <div className="vigil-table-scroll">
           <table>
             <caption className="dim">Vigil subjects</caption>
             <thead>
               <tr>
-                <th scope="col">Subject</th>
+                <th scope="col">Vigil subject</th>
                 <th scope="col">Kind</th>
                 <th scope="col">Vocabulary</th>
                 <th scope="col">Reference</th>

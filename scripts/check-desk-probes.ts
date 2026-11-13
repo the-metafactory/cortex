@@ -145,6 +145,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-flow-binding.ts",
   "probe-desk-flow-read.ts",
   "probe-desk-flow-work-tools.ts",
+  "probe-desk-gitlab-ruling.ts",
   "probe-desk-graph-create.ts",
   "probe-desk-graph-node-binding.ts",
   "probe-desk-graph-observation.ts",

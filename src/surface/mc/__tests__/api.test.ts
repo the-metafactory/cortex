@@ -1,3 +1,4 @@
+// glossary-ignore: run, server
 import {
   describe,
   it,

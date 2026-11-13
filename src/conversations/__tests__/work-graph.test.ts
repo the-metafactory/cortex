@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DeskConversationsSchema, type ToolsConfig } from "../../common/types/desk-conversations";
-import type { CommandResult } from "../../surface/mc/desk/spawn";
+import type { CommandResult } from "../../surface/mc/common/spawn";
 import type { ModelRoute, Policy } from "../types";
 import type { ToolSession } from "../tools/capabilities";
 import { createWorkGraphTools, type WorkGraphRunner } from "../tools/work-graph";
@@ -162,14 +162,36 @@ describe("work graph reads through the conversation boundary", () => {
     expect(r.argvs[0]).not.toContain("--write");
   });
 
+  test("the frontier bounds nodes outside the write scope and counts omissions", async () => {
+    const response = ok({
+      repo: DESK, frontier: [],
+      notWritable: Array.from({ length: 203 }, (_, i) => nodeState({ ref: { id: String(i + 1) } })),
+    });
+    const frontier = createWorkGraphTools({ run: () => Promise.resolve(response) }).find(tool => tool.name === "work_graph_frontier")!;
+    const output = JSON.parse(await frontier.run(frontier.input.parse({ graph: "maps", map: "desk" }), {
+      graph: graphConfig().graphs![0]!, project: null, projects: [],
+      session: { principal: "p", conversationId: "c", transport: "web", route: "cloud", policy: "cloud", scope: ["maps"] },
+      signal: new AbortController().signal,
+    }) as string) as Record<string, unknown>;
+    const notWritable = output.notWritable as { items: { ref: string }[]; omitted: number };
+    expect(notWritable.omitted).toBe(3);
+    expect(notWritable.items).toHaveLength(200);
+    expect(notWritable.items[0]?.ref).toBe(`${DESK}#1`);
+    expect(notWritable.items[199]?.ref).toBe(`${DESK}#200`);
+  });
+
   test("audit finding lists qualify both id objects and bare ids", async () => {
     const r = rig({
-      audit: ok({ repo: DESK, root: "1", nodes: 4, closedWithoutReceipt: [{ id: "42" }, "43", { ref: "example/other#44" }], openWithoutCheckpoint: [], openWithFullSuiteProbe: [], openWithBareBunTestProbe: [], openClaimed: ["45"], buildBriefNotReady: [] }),
+      audit: ok({ repo: DESK, root: "1", nodes: 4, closedWithoutReceipt: [{ id: "42" }, "43", { ref: "example/other#44" }], openWithoutCheckpoint: ["46"], openWithFullSuiteProbe: ["47"], openWithBareBunTestProbe: ["48"], openClaimed: ["45", { id: "49", assignees: ["ivy-agent"] }], buildBriefNotReady: [{ id: "50", missing: ["## Deliverable"] }] }),
     });
     const output = toolBody((await r.call("work_graph_audit", { graph: "maps", map: "desk" })).text);
-    expect(output.findings).toMatchObject({
+    expect(output.findings).toEqual({
       closedWithoutReceipt: { items: [`${DESK}#42`, `${DESK}#43`, "github:github.com/example/other#44"], omitted: 0 },
-      openClaimed: { items: [{ ref: `${DESK}#45`, assignees: [] }], omitted: 0 },
+      openWithoutCheckpoint: { items: [`${DESK}#46`], omitted: 0 },
+      openWithFullSuiteProbe: { items: [`${DESK}#47`], omitted: 0 },
+      openWithBareBunTestProbe: { items: [`${DESK}#48`], omitted: 0 },
+      openClaimed: { items: [{ ref: `${DESK}#45`, assignees: [] }, { ref: `${DESK}#49`, assignees: ["ivy-agent"] }], omitted: 0 },
+      buildBriefNotReady: { items: [{ ref: `${DESK}#50`, missing: ["## Deliverable"] }], omitted: 0 },
     });
   });
 

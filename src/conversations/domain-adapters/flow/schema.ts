@@ -5,6 +5,7 @@ import type { AdapterDeclaration, SchemaRef } from "../types";
 import type { ReadBinding } from "../reads/types";
 
 export const FLOW_ADAPTER_ID = "flow";
+export const FLOW_QUERY_MAX = 20;
 export const flowSchemaRef = (schemaId: string): SchemaRef => ({ schemaId, version: "1.0.0" });
 const object = (properties: Record<string, Json>, required = Object.keys(properties)): Record<string, Json> => ({ $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: false, properties, required });
 const string = { type: "string" };
@@ -14,7 +15,7 @@ export const flowSavedRecord = z.object({ name: flowName, source: z.literal("sav
 export const flowReferenceSchema = (objectType: "stack" | "saved"): Record<string, Json> => object({ adapterId: { const: FLOW_ADAPTER_ID, type: "string" }, connectionId: { type: "string", minLength: 1 }, objectType: { type: "string", const: objectType }, canonicalId: { type: "string", minLength: 1 } });
 const saved = JSON.parse(JSON.stringify(z.toJSONSchema(flowSavedRecord.extend({ package: z.null().optional(), yaml: z.string().optional() }).strict()))) as Record<string, Json>;
 const output = object({ items: { type: "array", items: { $ref: schemaKey(flowSchemaRef("flow.saved")) } } });
-const queryInput = object({ stack: flowReferenceSchema("stack"), limit: { type: "integer", minimum: 1, maximum: 20 } }, ["stack"]);
+const queryInput = object({ stack: flowReferenceSchema("stack"), limit: { type: "integer", minimum: 1, maximum: FLOW_QUERY_MAX } }, ["stack"]);
 const readInput = object({ ref: flowReferenceSchema("saved") });
 const error = object({ code: string, message: string });
 const capabilityIds = ["flow.saved.query", "flow.saved.read"] as const;
@@ -41,5 +42,5 @@ export function flowReadDeclaration(): AdapterDeclaration {
 export const flowReadBindings: readonly ReadBinding[] = capabilityIds.map(capabilityId => ({
   version: "1.0.0", adapterId: FLOW_ADAPTER_ID, capabilityId, mode: "query", objectType: "saved", destinationType: "stack",
   inputSchemaRef: flowSchemaRef(`${capabilityId}.input`), outputSchemaRef: flowSchemaRef("flow.saved.output"), display: { title: "/name" },
-  query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: capabilityId === "flow.saved.read" ? 1 : 20 } },
+  query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: capabilityId === "flow.saved.read" ? 1 : FLOW_QUERY_MAX } },
 }));

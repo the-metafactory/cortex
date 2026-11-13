@@ -10,7 +10,7 @@ import { handleDeskAsk } from "../../src/surface/mc/api/desk-ask";
 import { handleDeskRoutineEditor } from "../../src/surface/mc/api/desk-routine-editor";
 import { HandledLedger } from "../../src/surface/mc/desk/actions";
 import type { DeskRuntime } from "../../src/surface/mc/desk/compose";
-import { runCommand } from "../../src/surface/mc/desk/spawn";
+import { runCommand } from "../../src/surface/mc/common/spawn";
 
 let root: string;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "desk-catalog-")); });

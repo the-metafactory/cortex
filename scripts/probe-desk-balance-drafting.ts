@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { BALANCE_DRAFT_DISCUSSION, DRAFT_GLIDER_PROJECT, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig } from "../src/surface/mc/desk/fixtures/balance-draft";
+import { BALANCE_DRAFT_DISCUSSION, DRAFT_GLIDER_PROJECT, DRAFT_LAB_AREA, addLaterOutcome, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig } from "../src/surface/mc/desk/fixtures/balance-draft";
 import { withDraftBrowserProbe } from "./desk-make-editor/server";
 import { denyRelease, openMakeEditor, reopenOutdatedDraft, restartAndRemake, revisionSteps } from "./desk-make-editor/steps";
 import type { DraftEditorView } from "../src/surface/mc/desk/draft-editor-contract";
@@ -39,9 +39,7 @@ await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   await title.fill("Audit the wing cut");
   await steps.press("Save title");
   await steps.press("Clear note");
-  rig.state.head = "2";
-  rig.state.items.push({ id: "outcome-example", kind: "outcome", revision: "2", digest: "outcome-2", restriction: "cloud", text: "Add a fitting check after cutting.", at: "2026-11-09T12:00:00.000Z" });
-  rig.state.output = balanceDiscussionOutput(true);
+  addLaterOutcome(rig);
   await reopenOutdatedDraft(page);
   await steps.press("Refresh draft");
   assert.equal(await title.inputValue(), "Audit the wing cut");

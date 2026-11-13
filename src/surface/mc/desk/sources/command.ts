@@ -1,6 +1,6 @@
 import { HOST_NAME_RE } from "../../../../common/host-name";
 import { z } from "zod";
-import { runCommand } from "../spawn";
+import { runCommand } from "../../common/spawn";
 import { CalendarCoverageSchema, EventAvailabilitySchema, SourceCapabilitiesSchema, type CalendarCoverage, type SourceCapabilities } from "../calendar-contract";
 
 /**

@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { WriterRunner } from "./create";
-import { CommandTimeout } from "./spawn";
+import { CommandTimeout } from "../common/spawn";
 import { oneLine } from "./actions";
 
 export interface TaskCloser {

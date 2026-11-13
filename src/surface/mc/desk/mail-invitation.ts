@@ -8,7 +8,7 @@ import { logMailDecision, mailFeatures } from "./mail-log";
 import { refuse } from "./mail-move";
 import { removeDeclined } from "./mail-invitation-remove";
 import type { Commitment } from "./mail-yes-filter";
-import { CommandTimeout } from "./spawn";
+import { CommandTimeout } from "../common/spawn";
 import type { MailInvitation, SourceReading } from "./sources/command";
 import { clock, DAY_MS, startOfDay } from "./time";
 import { DEFAULT_SLOTS, type InvitationSlotsConfig, type InvitationsConfig, type InviteReply, type InviteStatus } from "./mail-invitation-schema";

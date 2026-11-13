@@ -4,7 +4,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { answering, openHost, scratchHosts } from "../../__tests__/fixtures/scratch";
 import { toolBody } from "../../__tests__/fixtures/tool-body";
-import { FLOW_NAME, flowYaml, openFlowReadRig, type FlowReadRig } from "../../domain-adapters/__tests__/fixtures/flow-read-fixtures";
+import { ARC_FLOW_NAME, FLOW_NAME, flowYaml, openFlowReadRig, type FlowReadRig } from "../../domain-adapters/__tests__/fixtures/flow-read-fixtures";
 import { assertCloudFlowWorkToolsDenied, assertLocalFlowWorkTools, assertPolicyRaceWithheld, callFlowWorkTool, flowReadersFor } from "../../domain-adapters/__tests__/fixtures/flow-work-tools-fixtures";
 
 const opened: FlowReadRig[] = [];
@@ -89,21 +89,22 @@ describe("saved Flows behind work_search and work_read", () => {
     expect(rig.rig.calls.read).toBe(2);
   });
 
-  test("authorized reads report missing and deleted saved Flows as gone", async () => {
+  test("authorized reads report a never-saved, arc or deleted saved Flow as not found without claiming removal", async () => {
     const rig = await open();
-    const assertGone = async () => {
-      const result = await callFlowWorkTool(rig, "work_read", { kind: "flow", id: FLOW_NAME });
-      expect(result.json.status).toBe("gone");
-      expect(result.json.message).toBe("The source was removed.");
+    const assertNotFound = async (id: string) => {
+      const result = await callFlowWorkTool(rig, "work_read", { kind: "flow", id });
+      expect(result.json.status).toBe("not-found");
+      expect(result.json.message).toBe("The owning system reports no object with that id. This is not a confirmed removal.");
       expect(result.json).not.toHaveProperty("object");
       expect(result.remembered).toEqual([]);
     };
-    await assertGone();
+    await assertNotFound(FLOW_NAME);
+    await assertNotFound(ARC_FLOW_NAME);
     await rig.save();
     expect((await callFlowWorkTool(rig, "work_read", { kind: "flow", id: FLOW_NAME })).json.status).toBe("ok");
     const shown = await rig.pulse(["show", FLOW_NAME]);
     await rig.pulse(["delete", FLOW_NAME, "--expected-sha256", String(shown.sha256)]);
-    await assertGone();
+    await assertNotFound(FLOW_NAME);
   });
 
   test("the conversation host persists Flow source obligations and rechecks their current policy", async () => {

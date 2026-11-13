@@ -6,6 +6,8 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { ParserRoutingSchema } from "../src/surface/mc/desk/parser-routing";
 
+const TOOLS_DISABLED_FLAGS = ["--no-tools", "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-session"];
+
 const { values } = parseArgs({ options: { adapter: { type: "string" }, ranger: { type: "string" } } });
 assert(values.adapter && values.ranger, "Pass --adapter and --ranger source checkout directories");
 const adapter = resolve(values.adapter), ranger = resolve(values.ranger);
@@ -35,7 +37,7 @@ try {
   const provider = executable("provider", `
 import { appendFileSync } from "node:fs";
 const argv = process.argv.slice(2);
-if (argv.includes("--help")) { console.log("--no-tools --no-extensions --no-mcp --no-skills --no-prompt-templates --no-context-files --no-session --print --mode --system-prompt --provider --model --thinking"); process.exit(0); }
+if (argv.includes("--help")) { console.log(${JSON.stringify(TOOLS_DISABLED_FLAGS.join(" "))} + " --print --mode --system-prompt --provider --model --thinking"); process.exit(0); }
 const input = await new Response(Bun.stdin.stream()).text();
 appendFileSync(${JSON.stringify(log)}, JSON.stringify({ argv, input }) + "\\n");
 const quota = process.env.PROBE_QUOTA === "true" && argv.includes("openai-codex");
@@ -54,10 +56,10 @@ try { journal.upsertSubstrateReading({ substrate: "codex", readAt: new Date().to
 `);
   const cases = [];
   for (const scenario of [
-    { name: "Codex eligible", capped: false, quota: false, permitted: ["codex", "pi"], provider: "codex", attempts: ["codex"] },
-    { name: "Codex exhausted to Pi", capped: true, quota: false, permitted: ["codex", "pi"], provider: "pi", attempts: ["pi"] },
-    { name: "Codex quota failure to Pi", capped: false, quota: true, permitted: ["codex", "pi"], provider: "pi", attempts: ["codex", "pi"] },
-    { name: "no permitted alternative", capped: true, quota: false, permitted: ["codex"], provider: null, attempts: [] },
+    { name: "Codex eligible", capped: false, quota: false, permitted: ["codex", "pi"], provider: "codex", attempts: ["codex"], candidates: [{ substrate: "claude", reason: "not-configured" }, { substrate: "codex", reason: "eligible" }, { substrate: "pi", reason: "eligible" }] },
+    { name: "Codex exhausted to Pi", capped: true, quota: false, permitted: ["codex", "pi"], provider: "pi", attempts: ["pi"], candidates: [{ substrate: "claude", reason: "not-configured" }, { substrate: "codex", reason: "capped" }, { substrate: "pi", reason: "eligible" }] },
+    { name: "Codex quota failure to Pi", capped: false, quota: true, permitted: ["codex", "pi"], provider: "pi", attempts: ["codex", "pi"], candidates: [{ substrate: "claude", reason: "not-configured" }, { substrate: "codex", reason: "already-attempted" }, { substrate: "pi", reason: "eligible" }] },
+    { name: "no permitted alternative", capped: true, quota: false, permitted: ["codex"], provider: null, attempts: [], candidates: [{ substrate: "claude", reason: "not-configured" }, { substrate: "codex", reason: "capped" }, { substrate: "pi", reason: "not-permitted" }] },
   ]) {
     await run([process.execPath, seed, String(scenario.capped)]);
     writeFileSync(log, "");
@@ -66,11 +68,11 @@ try { journal.upsertSubstrateReading({ substrate: "codex", readAt: new Date().to
     assert.equal(parsed.routing.kind, scenario.provider ? "selected" : "unavailable");
     if (parsed.routing.kind === "selected") assert.equal(parsed.routing.provider, scenario.provider);
     assert.deepEqual(parsed.routing.attempted, scenario.attempts);
-    assert.deepEqual(parsed.routing.candidates.find(c => c.substrate === "claude"), { substrate: "claude", reason: "not-configured" });
+    assert.deepEqual(parsed.routing.candidates, scenario.candidates);
     const calls = (await Bun.file(log).text()).trim().split("\n").filter(Boolean).map(line => z.object({ argv: z.array(z.string()), input: z.string() }).parse(JSON.parse(line)));
     assert.deepEqual(calls.map(call => call.argv[call.argv.indexOf("--provider") + 1]), scenario.attempts.map(provider => provider === "codex" ? "openai-codex" : "local-test"));
     assert.deepEqual(parsed.routing.fallbackReasons, scenario.quota ? [{ provider: "codex", reason: "quota-exhausted" }] : []);
-    for (const call of calls) for (const flag of ["--no-tools", "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-session"]) assert(call.argv.includes(flag));
+    for (const call of calls) for (const flag of TOOLS_DISABLED_FLAGS) assert(call.argv.includes(flag));
     assert(new Set(calls.map(call => call.input)).size <= 1);
     cases.push({ name: scenario.name, permitted: scenario.permitted, output });
   }

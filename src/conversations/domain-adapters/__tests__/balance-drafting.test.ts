@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { DRAFT_GLIDER_PROJECT, DRAFT_HOME_GLIDER_PROJECT, DRAFT_HOME_AREA, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig, withField, withoutFields } from "../../../surface/mc/desk/fixtures/balance-draft";
+import { DRAFT_GLIDER_PROJECT, DRAFT_HOME_GLIDER_PROJECT, DRAFT_HOME_AREA, DRAFT_LAB_AREA, addLaterOutcome, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig, withField, withoutFields } from "../../../surface/mc/desk/fixtures/balance-draft";
 import { DraftingBindings } from "../drafting";
 import { balanceTaskDraftingBinding } from "../drafting/balance";
 import { balanceDraftDestinations } from "../../../surface/mc/desk/balance-draft-destinations";
@@ -119,9 +119,7 @@ test("an edited title and a deliberately cleared note survive explicit refresh a
   const draftId = current.view.draft.draftId;
   current = await editDraft(rig, current, "/title", { kind: "set", value: "Audit the wing cut" });
   current = await editDraft(rig, current, "/note", { kind: "omit" });
-  rig.state.head = "2";
-  rig.state.items.push({ id: "outcome-example", revision: "2", digest: "outcome-2", kind: "outcome", restriction: "cloud", text: "Add a fitting check after cutting.", at: "2026-11-09T12:00:00.000Z" });
-  rig.state.output = balanceDiscussionOutput(true);
+  addLaterOutcome(rig);
   const outdated = await rig.editor.service.read(draftId);
   expect(outdated?.outdated).toContain("conversation-changed");
   expect(outdated?.draft.fields["/title"]?.value).toBe("Audit the wing cut");
@@ -136,10 +134,10 @@ test("an edited title and a deliberately cleared note survive explicit refresh a
 test("an untouched note refreshes with later turns while a stale model result cannot overwrite a later edit", async () => {
   const rig = await open();
   const made = await makeDraft(rig);
-  rig.state.head = "2";
-  rig.state.output = balanceDiscussionOutput(true);
+  addLaterOutcome(rig);
   const updated = await refreshDraft(rig, made);
   expect(updated.view.draft.fields["/note"]?.value).toContain("fitting check");
+  expect(updated.view.draft.fields["/note"]?.citations).toEqual(rig.state.items.map(item => item.id));
   await expectStaleRefreshKeepsTitle(rig, updated);
   expect(rig.ownerCalls).toEqual([]);
 });

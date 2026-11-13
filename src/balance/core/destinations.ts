@@ -13,10 +13,18 @@ export interface BalanceDestination {
     project: boolean;
 }
 
+export function isBalanceTask(node: OutlineNode): boolean {
+    return node.children.length === 0 && node.effort !== undefined;
+}
+
+export function areaRoot(outline: OutlineNode, areaId: string): OutlineNode | undefined {
+    return outline.children.find(node => node.id === `area:${areaId}`);
+}
+
 export function balanceDestinations(outline: OutlineNode, areas: readonly DestinationArea[], includeTasks = false): BalanceDestination[] {
     const result: BalanceDestination[] = [];
     const visit = (node: OutlineNode, area: string, path: string[], root = false): void => {
-        const task = node.children.length === 0 && node.effort !== undefined;
+        const task = isBalanceTask(node);
         if (node.id.startsWith("studio-response:") || node.done && (node.children.length > 0 || task))
             return;
         const next = [...path, node.title];
@@ -26,7 +34,7 @@ export function balanceDestinations(outline: OutlineNode, areas: readonly Destin
             visit(child, area, next);
     };
     for (const area of areas) {
-        const root = outline.children.find(node => node.id === `area:${area.id}`);
+        const root = areaRoot(outline, area.id);
         if (root)
             visit({ ...root, title: area.label }, area.id, [], true);
     }

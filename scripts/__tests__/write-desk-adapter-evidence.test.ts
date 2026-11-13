@@ -67,9 +67,8 @@ describe("writeDeskAdapterEvidence", () => {
 
 describe("committed evidence directory", () => {
   test("every committed file is a summary that validates and is named for its binding and cutover", () => {
-    for (const evidence of readEvidenceDirectory(EVIDENCE_DIR)) {
-      expect(evidenceFileName(readDeskAdapterEvidence(join(EVIDENCE_DIR, evidenceFileName(evidence))))).toBe(evidenceFileName(evidence));
-    }
+    const committed = readdirSync(EVIDENCE_DIR).filter(name => name.endsWith(".json")).sort();
+    expect(readEvidenceDirectory(EVIDENCE_DIR).map(evidenceFileName)).toEqual(committed);
   });
 
   test("the directory check rejects a summary that fails validation", () => {
@@ -96,6 +95,14 @@ describe("committed evidence directory", () => {
     writeDeskAdapterEvidence(dir, exampleEvidence());
     writeFileSync(join(dir, "README.md"), "# readme\n");
     expect(readEvidenceDirectory(dir)).toEqual([exampleEvidence()]);
+  });
+
+  test("the committed-file comparison keeps the JSON extension on a valid summary", () => {
+    const dir = tempDir();
+    writeDeskAdapterEvidence(dir, exampleEvidence());
+    writeFileSync(join(dir, "README.md"), "# readme\n");
+    const committed = readdirSync(dir).filter(name => name.endsWith(".json")).sort();
+    expect(readEvidenceDirectory(dir).map(evidenceFileName)).toEqual(committed);
   });
 });
 

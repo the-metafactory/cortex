@@ -4,7 +4,7 @@ import { findNode } from "../src/balance";
 import { saveBalanceState, loadBalanceState } from "../src/surface/mc/desk/balance-store";
 import { loadMeta } from "../src/surface/mc/desk/balance-sync";
 import { changeMyDay, readMyDay, type MyDayView } from "../src/surface/mc/desk/my-day";
-import { readStudioMyDay, syncStudioBalance } from "../src/surface/mc/desk/studio-my-day";
+import { syncStudioBalance, withStudioProjection } from "../src/surface/mc/desk/studio-my-day";
 
 const stack = await balanceSyncFixture();
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: stack.readRoute });
@@ -19,7 +19,7 @@ try {
     const before = stack.bytes();
     for (let count = 0; count < 3; count++) {
       readMyDay(stack.db, stack.runtime.options, SYNC_NOW);
-      await readStudioMyDay(stack.db, stack.runtime.options, SYNC_NOW);
+      await withStudioProjection(stack.runtime.options, source => readMyDay(stack.db, stack.runtime.options, SYNC_NOW, source));
       assert.equal(stack.bytes(), before, "A My Day read changed saved store bytes");
     }
   }

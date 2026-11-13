@@ -4,9 +4,9 @@ import { operationUuid } from "../../conversation-ids";
 import { STALE_OUTLINE } from "../../../surface/mc/desk/balance-outline";
 import type { OperationRecord } from "../../types";
 import { objectRef } from "../fixtures";
-import { balanceTaskApprovedSnapshot, balanceTaskCreateOutcome, balanceTaskLegacyResult, reviewBalanceTask, type BalanceTaskBinding, type BalanceTaskCreateInput } from "../balance/task-binding";
+import { balanceTaskCreateOutcome, balanceTaskLegacyResult, reviewBalanceTask, type BalanceTaskBinding } from "../balance/task-binding";
 import type { OwnerResult } from "../operations/types";
-import { BALANCE_TASK_CONNECTION, BALANCE_TASK_NOW, CONVERSATION, balanceTaskAuthority, createTaskRequest, operationId, openBalanceTaskRig, taskFields, type BalanceTaskRig } from "./fixtures/balance-task-fixtures";
+import { BALANCE_TASK_CONNECTION, BALANCE_TASK_NOW, CONVERSATION, approveBalanceTask, balanceTaskAuthority, createTaskRequest, operationId, openBalanceTaskRig, taskFields, type BalanceTaskRig } from "./fixtures/balance-task-fixtures";
 
 const rigs: BalanceTaskRig[] = [];
 async function open(): Promise<BalanceTaskRig> {
@@ -18,13 +18,6 @@ afterEach(async () => { for (const rig of rigs.splice(0)) await rig.close(); });
 
 const area = objectRef("balance", "area", "area-example");
 const project = (id: string) => objectRef("balance", "project", id);
-const provenance = (operationIdValue: string) => ({ conversationId: CONVERSATION, proposalId: operationIdValue.split(":")[1] ?? "proposal-example", revision: 1, entryId: null, link: `?desk=conversation&conversation=${CONVERSATION}` });
-
-async function approve(rig: BalanceTaskRig, operationIdValue: string, input: BalanceTaskCreateInput): Promise<void> {
-  const snapshot = balanceTaskApprovedSnapshot({ connectionId: BALANCE_TASK_CONNECTION, provenance: provenance(operationIdValue), input });
-  await rig.journal.approve({ operationId: operationIdValue, idempotencyKey: operationIdValue, ownerRequestId: operationUuid(operationIdValue), snapshot, authority: balanceTaskAuthority, at: new Date(BALANCE_TASK_NOW).toISOString() });
-}
-
 async function dispatchRequest(rig: BalanceTaskRig, operationIdValue: string): Promise<Parameters<BalanceTaskBinding["dispatch"]>[0]> {
   const stored = await rig.journal.read(operationIdValue);
   if (!stored || "kind" in stored.journal.snapshot) throw new Error("Expected an approved snapshot.");
@@ -90,7 +83,7 @@ describe("the inactive Balance task execution binding", () => {
   test("an owner-level redispatch of one request id creates one task and one receipt", async () => {
     const rig = await open();
     const op = operationId("owner-dedup");
-    await approve(rig, op, { area, title: "One effect only" });
+    await approveBalanceTask(rig, op, { area, title: "One effect only" });
     expect(await rig.lifecycle().activate()).toBe(true);
     expect((await rig.lifecycle().dispatch(op)).kind).toBe("settled");
     const request = await dispatchRequest(rig, op);
@@ -119,7 +112,7 @@ describe("the inactive Balance task execution binding", () => {
   test("a misrouted or unparsable snapshot is refused before the owner is called", async () => {
     const rig = await open();
     const op = operationId("misrouted");
-    await approve(rig, op, { area, title: "Misrouted" });
+    await approveBalanceTask(rig, op, { area, title: "Misrouted" });
     const request = await dispatchRequest(rig, op);
     const otherConnection = { ...request.snapshot, connectionId: "connection-other" };
     const otherCapability = { ...request.snapshot, capabilityId: "balance.task.query" };
@@ -136,7 +129,7 @@ describe("the inactive Balance task execution binding", () => {
   test("a refusal inside the owner path is a final no-effect result and keeps the draft", async () => {
     const rig = await open();
     const op = operationId("refusal");
-    await approve(rig, op, { area, project: project("studio-thread:missing"), title: "Refused task" });
+    await approveBalanceTask(rig, op, { area, project: project("studio-thread:missing"), title: "Refused task" });
     expect(await rig.lifecycle().activate()).toBe(true);
     expect((await rig.lifecycle().dispatch(op)).kind).toBe("settled");
     const stored = await rig.journal.read(op);

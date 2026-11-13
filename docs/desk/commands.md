@@ -207,7 +207,9 @@ bun scripts/probe-desk-parser-contract.ts \
 	--ranger /path/to/ranger > /tmp/desk-parser-contract.json
 ```
 
-The probe requires unchanged tracked source files. It uses temporary configuration, a temporary Ranger journal with controlled usage readings, and fake provider commands. It checks candidate evidence, tools-disabled flags, attempt order, and unchanged prompts across fallback. It removes its temporary state when finished. Compare the output with the fixtures before replacing them. This checks the installed command contract without contacting a model or changing live configuration.
+The probe requires unchanged tracked source files. It uses temporary configuration, a temporary Ranger journal with controlled usage readings, and fake provider commands. It checks the candidate evidence of all three providers in every scenario, tools-disabled flags, attempt order, and unchanged prompts across fallback. It removes its temporary state when finished. Compare the output with the fixtures before replacing them.
+
+The probe runs `bin/desk-parse.ts` and `src/cli.ts` from the checkouts you pass, never the commands installed on this machine, and it contacts no model and changes no live configuration. A passing run is evidence about those two revisions, not about installed versions of either command.
 
 A writer runs only after confirmation. Its stdin contains `kind`, `fields`, and `requestId`:
 
