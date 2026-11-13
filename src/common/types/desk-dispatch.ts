@@ -8,7 +8,7 @@ const DispatchAgentSchema = z.strictObject({
   policy: z.enum(DISPATCH_POLICIES),
 });
 
-/** `mc.desk.dispatch`: the agents a Desk user can hand a Balance task to over the local bus, and how long the Desk waits. */
+/** `mc.desk.dispatch`: the agents the principal can hand a Balance task to over the local bus, and how long the Desk waits. */
 export const DeskDispatchSchema = z.strictObject({
   agents: z.array(DispatchAgentSchema).min(1).max(10).refine((agents) => new Set(agents.map((a) => a.id)).size === agents.length, "mc.desk.dispatch.agents names an agent twice"),
   startTimeoutSeconds: z.number().int().min(10).max(600).default(120),

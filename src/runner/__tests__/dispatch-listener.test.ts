@@ -4491,9 +4491,10 @@ test("Reflex prompt task reaches its scoped API receiver without a Claude sessio
 });
 
 test.each([
-  [SUCCESS_RESULT, "dispatch.task.completed"],
-  [FAIL_RESULT, "dispatch.task.failed"],
-] as const)("a Desk task hand-off reaches its builtin receiver, which echoes the attempt id on its lifecycle (%#)", async (result, terminal) => {
+  [SUCCESS_RESULT, "dispatch.task.completed", "local"],
+  [SUCCESS_RESULT, "dispatch.task.completed", "cloud"],
+  [FAIL_RESULT, "dispatch.task.failed", "local"],
+] as const)("a Desk task hand-off reaches its builtin receiver, which echoes the attempt id on its lifecycle (%#)", async (result, terminal, policy) => {
   const r = recordingRuntime();
   const listener = createDispatchListener({
     runtime: r.runtime,
@@ -4506,7 +4507,7 @@ test.each([
   await listener.start();
   try {
     const attempt = "22222222-2222-4222-8222-222222222222";
-    const { envelope, subject } = deskTaskEnvelope({ principal: "metafactory", stack: "fixture" }, { id: "cortex", label: "Cortex", policy: "local" }, attempt, "Draft the engine notes.");
+    const { envelope, subject } = deskTaskEnvelope({ principal: "metafactory", stack: "fixture" }, { id: "cortex", label: "Cortex", policy }, attempt, "Draft the engine notes.");
     expect(subject).toBe("local.metafactory.fixture.tasks.@did-mf-cortex.desk-task");
     r.trigger(envelope, subject);
     await settle(() => r.published);

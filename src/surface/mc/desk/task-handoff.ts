@@ -108,14 +108,29 @@ export interface TaskPreview {
   leaves: string;
 }
 
-/** The exact brief a hand-off would send, its hash and what leaves the Desk. Writes nothing. */
-export function previewHandoff(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): { ok: true; preview: TaskPreview } | { ok: false; status: number; error: string } {
+type Refusal = { ok: false; status: number; error: string };
+interface ResolvedBrief {
+  task: OpenTask;
+  chosen: { agent: DispatchAgent; allowed: DispatchAgent[] };
+  instruction: string | null;
+  brief: string;
+}
+
+/** The one path from a task id, an agent and an instruction to the brief; preview and hand both use it, so their hashes agree. */
+function resolveBrief(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): ResolvedBrief | Refusal {
   const task = openTask(db, desk, input.taskId);
   if (!task) return { ok: false, status: 409, error: TASK_GONE };
   const chosen = chooseAgent(desk.dispatch, task, input.agent);
   if ("refused" in chosen) return { ok: false, status: 409, error: chosen.refused };
   const instruction = cleanInstruction(input.instruction);
-  const brief = taskBrief(task, instruction);
+  return { task, chosen, instruction, brief: taskBrief(task, instruction) };
+}
+
+/** The exact brief a hand-off would send, its hash and what leaves the Desk. Writes nothing. */
+export function previewHandoff(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): { ok: true; preview: TaskPreview } | Refusal {
+  const resolved = resolveBrief(db, desk, input);
+  if ("ok" in resolved) return resolved;
+  const { task, chosen, instruction, brief } = resolved;
   return {
     ok: true,
     preview: {
@@ -132,11 +147,12 @@ export function previewHandoff(db: Database, desk: DeskOptions & { dispatch: Dis
 /** The signed direct task for one attempt: `tasks.@{agent}.desk-task`, with the attempt id as `task_id` and `correlation_id`. */
 export function deskTaskEnvelope(bus: Pick<TaskDispatchBus, "principal" | "stack" | "dataResidency">, agent: DispatchAgent, attempt: string, brief: string): { envelope: Envelope; subject: string } {
   const did = `did:mf:${agent.id}`;
+  const cloud = agent.policy === "cloud";
   const base = buildBaseEnvelope({
     type: `tasks.${DESK_TASK_CAPABILITY}`,
-    source: `${bus.principal}.cortex.desk`,
+    source: `${bus.principal}.${bus.stack}.desk`,
     correlationId: attempt,
-    sovereignty: { classification: "local", data_residency: bus.dataResidency ?? "NZ", max_hop: 0, frontier_ok: false, model_class: "local-only" },
+    sovereignty: { classification: "local", data_residency: bus.dataResidency ?? "NZ", max_hop: 0, frontier_ok: cloud, model_class: cloud ? "any" : "local-only" },
     payload: { task_id: attempt, agent_id: agent.id, agent_name: agent.label, prompt: brief },
   });
   return { envelope: { ...base, distribution_mode: "direct", target_assistant: did }, subject: buildDirectTaskPublishSubject(bus.principal, did, bus.stack, DESK_TASK_CAPABILITY) };
@@ -150,13 +166,18 @@ async function send(deps: HandoffDeps, row: { id: string; attempt: string; brief
     await deps.bus.publish(envelope, subject);
     return null;
   } catch (err) {
-    const reason = reasonOf(err);
-    deps.db.query("UPDATE desk_task_handoffs SET state = 'failed', error = ?, finished_at = ? WHERE id = ? AND attempt = ?").run(`The task did not reach the bus: ${reason}`, deps.now, row.id, row.attempt);
-    return refuse(502, `The task did not reach the bus: ${reason}. Nothing started; try again.`);
+    const error = `${BUS_REFUSED} ${reasonOf(err)}`;
+    deps.db.query("UPDATE desk_task_handoffs SET state = 'failed', error = ?, finished_at = ? WHERE id = ? AND attempt = ?").run(error, deps.now, row.id, row.attempt);
+    return busRefusal(error);
   }
 }
 
+const BUS_REFUSED = "The task did not reach the bus:";
+const busRefusal = (error: string): TaskHandoffResult => refuse(502, `${error}. Nothing started; try again.`);
+const refusedByBus = (row: TaskHandoffRow, requestId: string): boolean => row.state === "failed" && row.attemptRequest === requestId && (row.error?.startsWith(BUS_REFUSED) ?? false);
+
 const handedMessage = (label: string): string => `Handed to ${label}. The result comes back here as a card.`;
+const retriedMessage = (label: string): string => `${label} tries again. The result comes back here as a card.`;
 
 export interface HandInput {
   requestId: string;
@@ -170,18 +191,18 @@ export interface HandInput {
 export async function handTask(input: HandInput, deps: HandoffDeps): Promise<TaskHandoffResult> {
   const { db, desk, now } = deps;
   const replay = readTaskHandoff(db, input.requestId);
-  if (replay) return replay.taskId === input.taskId ? { ok: true, id: replay.id, message: handedMessage(agentLabel(desk.dispatch, replay.agent)) } : refuse(409, "That request id belongs to another hand-off.");
-  const task = openTask(db, desk, input.taskId);
-  if (!task) return refuse(409, TASK_GONE);
-  const chosen = chooseAgent(desk.dispatch, task, input.agent);
-  if ("refused" in chosen) return refuse(409, chosen.refused);
+  if (replay) {
+    if (replay.taskId !== input.taskId) return refuse(409, "That request id belongs to another hand-off.");
+    return refusedByBus(replay, input.requestId) ? busRefusal(replay.error ?? BUS_REFUSED) : { ok: true, id: replay.id, message: handedMessage(agentLabel(desk.dispatch, replay.agent)) };
+  }
+  const resolved = resolveBrief(db, desk, input);
+  if ("ok" in resolved) return resolved;
+  const { task, chosen, instruction, brief } = resolved;
   const busy = openTaskHandoffs(db).find((r) => r.taskId === input.taskId && r.state !== "failed");
   if (busy) {
     const label = agentLabel(desk.dispatch, busy.agent);
     return refuse(409, busy.state === "working" ? `${label} is already working on this task.` : `${label}'s answer for this task is waiting for you in Catch-up.`);
   }
-  const instruction = cleanInstruction(input.instruction);
-  const brief = taskBrief(task, instruction);
   if (briefHash(brief) !== input.briefHash) return refuse(409, STALE_PREVIEW);
   const attempt = deps.newId();
   db.transaction(() => {
@@ -201,15 +222,18 @@ export async function retryTask(input: { requestId: string; id: string }, deps: 
   const row = readTaskHandoff(db, input.id);
   if (!row) return refuse(409, "The Desk no longer knows this hand-off.");
   const label = agentLabel(desk.dispatch, row.agent);
-  if (row.attemptRequest === input.requestId) return { ok: true, id: row.id, message: `${label} tries again. The result comes back here as a card.` };
+  if (row.attemptRequest === input.requestId) return refusedByBus(row, input.requestId) ? busRefusal(row.error ?? BUS_REFUSED) : { ok: true, id: row.id, message: retriedMessage(label) };
   if (row.state !== "failed") return refuse(409, "Only a failed hand-off can be tried again.");
-  const agent = desk.dispatch.agents.find((a) => a.id === row.agent);
-  if (!agent) return refuse(409, `${label} does not take Desk tasks on this stack.`);
+  const task = openTask(db, desk, row.taskId);
+  if (!task) return refuse(409, TASK_GONE);
+  const chosen = chooseAgent(desk.dispatch, task, row.agent);
+  if ("refused" in chosen) return refuse(409, chosen.refused);
+  const agent = chosen.agent;
   const attempt = deps.newId();
   db.query("UPDATE desk_task_handoffs SET state = 'working', attempt = ?, attempt_request = ?, sent_at = ?, started_at = NULL, result = NULL, error = NULL, finished_at = NULL WHERE id = ? AND state = 'failed'")
     .run(attempt, input.requestId, now, row.id);
   const failed = await send(deps, { id: row.id, attempt, brief: row.brief }, agent);
-  return failed ?? { ok: true, id: row.id, message: `${label} tries again. The result comes back here as a card.` };
+  return failed ?? { ok: true, id: row.id, message: retriedMessage(label) };
 }
 
 export function discardTask(db: Database, dispatch: DispatchOptions, id: string, now: number): TaskHandoffResult {

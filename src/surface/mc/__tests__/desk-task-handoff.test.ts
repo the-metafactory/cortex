@@ -116,7 +116,8 @@ describe("Hand a task to an agent", () => {
     expect(sent?.subject).toBe("local.ada.home.tasks.@did-mf-luna.desk-task");
     expect(sent?.envelope.type).toBe("tasks.desk-task");
     expect(sent?.envelope.target_assistant).toBe("did:mf:luna");
-    expect(sent?.envelope.sovereignty.classification).toBe("local");
+    expect(sent?.envelope.source).toBe("ada.home.desk");
+    expect(sent?.envelope.sovereignty).toMatchObject({ classification: "local", frontier_ok: true, model_class: "any" });
     const attempt = attemptOf();
     expect(sent?.envelope.payload.task_id).toBe(attempt);
     expect(Object.keys(sent?.envelope.payload ?? {}).sort()).toEqual(["agent_id", "agent_name", "prompt", "task_id"]);
@@ -135,6 +136,18 @@ describe("Hand a task to an agent", () => {
     saveBalanceState(db, state);
     expect(await act({ action: "hand", requestId: uuid(1), taskId: "t1", agent: "luna", briefHash: seen.briefHash })).toEqual({ status: 409, json: { ok: false, error: STALE_PREVIEW } });
     expect(published).toEqual([]);
+  });
+
+  it("labels a local agent's task local-only, and Retry re-checks the area policy before sending again", async () => {
+    await hand("p1");
+    expect(published[0]?.envelope.sovereignty).toMatchObject({ frontier_ok: false, model_class: "local-only" });
+    busDown = "no responders";
+    await hand("t1", uuid(2));
+    busDown = null;
+    options.areas = options.areas.map((area) => ({ ...area, policy: "local" as const }));
+    expect((await act({ action: "retry", requestId: uuid(3), id: uuid(2) })).json.error).toBe("This task's area allows only a local model, and Luna runs on a cloud model.");
+    expect(published).toHaveLength(1);
+    expect(readTaskHandoff(db, uuid(2))?.state).toBe("failed");
   });
 
   it("answers each refusal with its sentence", async () => {
@@ -157,6 +170,8 @@ describe("Hand a task to an agent", () => {
     expect(failed?.actions.map((a) => a.id)).toEqual(["task.retry", "task.discard"]);
     const old = readTaskHandoff(db, uuid(1))?.attempt ?? "";
     busDown = null;
+    expect((await act({ action: "hand", requestId: uuid(1), taskId: "t1", agent: "luna", briefHash: "0".repeat(64) })).status).toBe(502);
+    expect(published).toEqual([]);
     expect((await act({ action: "retry", requestId: uuid(2), id: uuid(1) })).json.message).toBe("Luna tries again. The result comes back here as a card.");
     expect(published).toHaveLength(1);
     const fresh = attemptOf();

@@ -23,4 +23,5 @@ export const TASK_HANDOFF_SQL = [
   )`,
   "CREATE INDEX IF NOT EXISTS desk_task_handoffs_attempt ON desk_task_handoffs (attempt)",
   "CREATE INDEX IF NOT EXISTS desk_task_handoffs_task ON desk_task_handoffs (task_id, state, created_at)",
+  "CREATE INDEX IF NOT EXISTS desk_task_handoffs_state ON desk_task_handoffs (state, created_at)",
 ];
