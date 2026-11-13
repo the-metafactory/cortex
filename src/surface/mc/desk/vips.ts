@@ -47,11 +47,16 @@ export function addVip(db: Database, address: string, label: string | null, now:
 }
 export const removeVip = (db: Database, address: string): boolean => removeSender(db, "vips", address);
 
-/** True when the sender's address or its domain is on the list. */
-export function isVip(vips: ReadonlySet<string>, address: string): boolean {
+/** The list entry the sender matches: the exact address first, then its domain; null when neither is listed. */
+export function listedEntry(vips: ReadonlySet<string>, address: string): string | null {
   const a = address.toLowerCase();
-  return vips.has(a) || vips.has(a.slice(a.indexOf("@")));
+  if (vips.has(a)) return a;
+  const domain = a.slice(a.indexOf("@"));
+  return vips.has(domain) ? domain : null;
 }
+
+/** True when the sender's address or its domain is on the list. */
+export const isVip = (vips: ReadonlySet<string>, address: string): boolean => listedEntry(vips, address) !== null;
 
 /** Mail from an unimportant sender counts as bulk, unless the sender is a VIP: VIP wins. */
 export const isUnimportant = (unimportant: ReadonlySet<string>, vips: ReadonlySet<string>, address: string): boolean =>

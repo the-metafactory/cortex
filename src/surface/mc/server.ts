@@ -116,6 +116,7 @@ import { taskCloser } from "./desk/mail-handoff-close";
 import { piTurns } from "../../conversations/pi";
 import { DEFAULT_MAIL_RULES, MailRuleLoop } from "./desk/mail-rules";
 import { handleDeskCorrections } from "./api/desk-corrections";
+import { handleDeskInterruptionFeedback, handleDeskInterruptions, INTERRUPTION_FEEDBACK_PATH, INTERRUPTIONS_PATH } from "./api/desk-interruptions";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskCaptureUndo, handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
 import { handleDeskSpeak, handleDeskTranscribe } from "./api/desk-voice";
@@ -643,6 +644,10 @@ async function handleApi(
   if (pathname === "/api/desk/mail/dmarc") return handleDeskDmarc(req, db, desk);
 
   if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
+
+  if (pathname === INTERRUPTIONS_PATH) return handleDeskInterruptions(req, db, desk);
+
+  if (pathname === INTERRUPTION_FEEDBACK_PATH) return handleDeskInterruptionFeedback(req, db, desk);
 
   if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence), conversations: () => conversations?.()?.state === "ready" }, db);
 

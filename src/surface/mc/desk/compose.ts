@@ -48,6 +48,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
+import { listReasons, readFeedback, readSwitches } from "./interrupt-switches";
 import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
 import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
@@ -312,6 +313,7 @@ export async function composeDesk(
   const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS);
   const deskCalendar = calendarEvents(calendar, sod, sod + TIMELINE_DAYS * DAY_MS);
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
+  const interruptSwitches = readSwitches(db);
 
   const rangerActions = rangerActionsReady(desk);
   const rulingActions = rangerActions && Boolean(desk.somaBin);
@@ -348,7 +350,7 @@ export async function composeDesk(
     ...dmarcCards,
     ...waitingCards,
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
-  ], rules, readDeliveries(db), now), ...adapterRows], activeCorrections);
+  ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) }), ...adapterRows], activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
@@ -397,6 +399,7 @@ export async function composeDesk(
     ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
     ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
+    interruptions: listReasons(rules, interruptSwitches, vips, desk.enabled),
     mailClassifier,
   };
 }

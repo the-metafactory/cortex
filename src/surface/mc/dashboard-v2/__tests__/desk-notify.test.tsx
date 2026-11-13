@@ -38,6 +38,7 @@ const view = (items: DeskItem[], notifications = true): DeskView => ({
   notifications,
   autonomy: { types: [], done: [] },
   corrections: [],
+  interruptions: [],
 });
 
 interface Shown {

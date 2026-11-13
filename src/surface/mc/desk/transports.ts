@@ -40,7 +40,7 @@ export function commandTransport(argv: string[], timeoutMs: number, run: WriterR
     id: "command",
     send: async (push): Promise<PushResult> => {
       const url = push.action ? safeUrl(push.action.url) : null;
-      const stdin = JSON.stringify({ key: push.key, title: push.title, why: push.why, ...(push.action && url ? { action: { label: push.action.label, url } } : {}) });
+      const stdin = JSON.stringify({ key: push.key, title: push.title, why: push.why, ...(push.action && url ? { action: { label: push.action.label, url } } : {}), ...(push.reason ? { reason: push.reason } : {}) });
       try {
         const result = await run(argv, stdin, timeoutMs);
         if (result.code === 0) return { status: "sent" };
