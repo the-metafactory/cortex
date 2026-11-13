@@ -62,9 +62,11 @@ function outcomeOf(t: StudioThreadView): PageOutcome {
 
 const allThreads = (studio: StudioView): StudioThreadView[] => [...studio.active, ...studio.parked, ...studio.closed];
 
-function findThread(studio: StudioView, slug: string): StudioThreadView | undefined {
+export function findThread(studio: StudioView, slug: string): StudioThreadView | undefined {
   return allThreads(studio).find((t) => t.slug === slug);
 }
+
+export const proposedRelations = (thread: StudioThreadView): IvyNote[] => [...thread.notes].sort(newestFirst).filter((n) => n.kind === "relation" && n.status === "open");
 
 export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesContext = NO_CONTEXT): ThreadPage | null {
   const thread = findThread(studio, slug);
@@ -93,7 +95,7 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
     standProposal: stands[0] ?? null,
     ideas: notes.filter((n) => isGhost(n) && n.kind === "idea"),
     notes: notes.filter((n) => !isGhost(n) && n.kind !== "relation"),
-    proposedRelations: notes.filter((n) => n.kind === "relation" && n.status === "open"),
+    proposedRelations: proposedRelations(thread),
     latest: latestNote(thread.notes),
     waitsOnYou: waitsOnYou(thread),
     needsResponse: needsResponse(thread),

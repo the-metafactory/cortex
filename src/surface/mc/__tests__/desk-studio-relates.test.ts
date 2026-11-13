@@ -151,6 +151,23 @@ describe("relates-to derivation", () => {
     ]);
   });
 
+  it("names the rule behind each relation so a client can word it", () => {
+    expect(relatesTo(POST, STUDIO, CTX).goals.map((g) => g.basis)).toEqual([[{ rule: "goal-material", goalState: "off-track" }], [{ rule: "goal-material" }]]);
+    expect(relatesTo(thread("q", { question: "What should the Proposal review: NetOps AI decide?" }), STUDIO, CTX).events.map((e) => e.basis)).toEqual([[{ rule: "event-in-question" }]]);
+    expect(relatesTo(NETOPS, STUDIO, CTX).events.map((e) => e.basis)).toEqual([[{ rule: "event-in-material", material: "Cover email, sent 14 Oct" }], [{ rule: "event-in-material", material: "NetOps sync, Mon 3 Nov 10:00" }]]);
+    expect(relatesTo(NETOPS, STUDIO, CTX).decisions.map((d) => d.basis)).toEqual([[{ rule: "shared-source", source: "Cover email, sent 14 Oct" }]]);
+    expect(relatesTo(DESK, STUDIO, CTX).decisions.map((d) => d.basis)).toEqual([[{ rule: "same-area-word", area: "lab", word: "desk" }]]);
+  });
+
+  it("adds the kept note beside the derived rule when a related thread was also kept", () => {
+    const kept = note("2026-10-31T05:00:00+01:00", { kind: "relation", status: "kept", relates: { kind: "thread", label: "post" }, text: "Same session." });
+    const r = relatesTo({ ...DESK, notes: [kept] }, STUDIO, CTX);
+    expect(r.threads.find((t) => t.open === "post")?.basis).toEqual([
+      { rule: "shared-source", source: "today’s grilling-session on the Desk  studio!" },
+      { rule: "kept", note: "2026-10-31T05:00:00+01:00" },
+    ]);
+  });
+
   it("drops links whose scheme is not http, https or mailto", () => {
     const risky = thread("risky", { material: [mat("person", "Mallory", "javascript:alert(1)"), mat("goal", "G5: one post a week", "data:text/html,x")] });
     const ctx: RelatesContext = { ...CTX, events: [event("bad", "Mallory sync", NOW + HOUR, { url: "javascript:alert(1)" })] };

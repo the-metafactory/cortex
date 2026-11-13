@@ -184,6 +184,10 @@ export async function currentDayItems(db: Database, runtime: DeskRuntime, vigil:
   return (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items;
 }
 
+export function composeCurrentDay(db: Database, runtime: DeskRuntime, desk: DeskOptions, vigil: DeskVigilSource | undefined, now = Date.now()): Promise<DeskView> {
+  return composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now, ...(runtime.adapterDay ? { adapterDay: runtime.adapterDay } : {}) });
+}
+
 export async function composeDesk(
   db: Database,
   desk: DeskOptions,
