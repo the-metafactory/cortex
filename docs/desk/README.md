@@ -46,6 +46,7 @@ The Desk prepares, and you confirm. Every write goes through Mission Control's r
 - **Rulings**: a blocked agent asks a question. You answer it on the Desk. The Desk records your ruling in the work-graph node with Soma and resumes the agent through Ranger.
 - **Goals**: **Run the check now** runs the goal's configured check. **Pause this goal** pauses a Soma goal.
 - **Mail**: **Delete**, **Unimportant** and **Draft a reply** run the commands in `mc.desk.mail.actions`. A draft is saved in your Drafts folder and never sent.
+- **Attach to a task**: `POST /api/desk/mail {action: "attach", key, requestId, to: {kind: "task", id}}` attaches a mail to a task in your outline or Balance inbox as material. The card leaves the Desk, the mailbox is not touched, and the task is not edited: My day lists the link with the task, with the mail's subject, sender, received time and a link to open it in Mail. A mail has one attachment at a time, and **Add to thread** counts as one. `{action: "attach.undo", link}` brings the card back (for a thread, it also removes the capture). If the task is removed later, the mail comes back with the reason.
 - **The command bar** (⌘K, or the microphone) turns what you say into a card: a reminder, a note, an agent task, a goal draft or a calendar entry. You confirm the card, and Cortex runs the writer for that kind. An open question or a request to think something over becomes a proposal to start a conversation with Ivy instead.
 
 ## Conversation draft setup limit

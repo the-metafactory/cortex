@@ -255,6 +255,8 @@ export function historySentence(e: MailLogEntry, now: number): string {
       return `You declined its invitation on the Desk (${when}).`;
     case "not-phishing":
       return `You said it is not phishing on the Desk (${when}).`;
+    case "attach":
+      return `You attached it to “${e.folder ?? "a task"}” (${when}).`;
     default:
       return `The Desk recorded “${e.action}” for it (${when}).`;
   }
