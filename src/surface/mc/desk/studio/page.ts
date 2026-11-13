@@ -4,7 +4,7 @@ import type { AreaPolicy } from "../types";
 import { areaLookup, latestNote, sameSource, waitsOnYou, type BoardArea } from "./board";
 import type { IvyNote, LogEntry, MaterialLink } from "./format";
 import { dayMonth, outcomeLabel, TYPE_LABEL, withHref } from "./labels";
-import { NO_CONTEXT, relatesTo, type RelatesContext, type Relations } from "./relates";
+import { NO_CONTEXT, relatesTo, type RelatesContext, type Relations, type SparPersona } from "./relates";
 import type { StudioThreadView, StudioView } from "./view";
 
 export interface PageMaterial extends MaterialLink {
@@ -17,7 +17,7 @@ export type PageOutcome =
 
 export interface ThreadPage {
   thread: StudioThreadView;
-  personas: string[];
+  personas: SparPersona[];
   thinking: ThreadThinking;
   typeLabel: string;
   where: string;
@@ -77,7 +77,7 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
   const stands = notes.filter((n) => isGhost(n) && n.kind === "stand");
   return {
     thread,
-    personas: studio.personas ?? [],
+    personas: thread.personas,
     thinking: threadThinking(studio, thread),
     typeLabel: TYPE_LABEL[thread.type],
     where: whereLine(thread, studio.maxActive),

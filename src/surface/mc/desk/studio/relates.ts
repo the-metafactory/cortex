@@ -1,6 +1,6 @@
 import type { DeskEvent, DeskGoal, DeskView } from "../types";
 import { clip, normaliseLabel, sameSource } from "./board";
-import type { MaterialLink } from "./format";
+import type { MaterialLink, StudioThread } from "./format";
 import { outcomeLabel, withHref } from "./labels";
 import { withoutMailFrame } from "./mail-header";
 import type { StudioThreadView, StudioView } from "./view";
@@ -121,7 +121,7 @@ function eventRelations(thread: StudioThreadView, ctx: RelatesContext): Relation
   return uniqueBy(found, (r) => r.key).slice(0, MAX_EVENTS);
 }
 
-function peopleRelations(thread: StudioThreadView): Relation[] {
+function peopleRelations(thread: Pick<StudioThread, "material">): Relation[] {
   const found = thread.material
     .filter((m) => (PERSON_KINDS as readonly string[]).includes(m.kind.toLowerCase()))
     .map((m): Relation => ({ kind: "person", key: `person:${normaliseLabel(m.label)}`, title: m.label, why: "Named in the thread's material.", basis: [{ rule: "person-material" }], ...withHref(m.href) }));
@@ -178,8 +178,7 @@ function decisionRelations(thread: StudioThreadView, studio: StudioView): Relati
 
 export const KEPT_WHY = "Ivy proposed it and you kept it.";
 
-function keptRelations(thread: StudioThreadView, studio: StudioView): Relation[] {
-  const known = new Map([...studio.active, ...studio.parked, ...studio.closed].map((t) => [t.slug, t]));
+function keptRelations(thread: Pick<StudioThread, "notes">, known: ReadonlyMap<string, StudioThreadView>): Relation[] {
   return thread.notes.flatMap((n): Relation[] => {
     const r = n.relates;
     if (n.kind !== "relation" || n.status !== "kept" || !r) return [];
@@ -197,7 +196,7 @@ function keptRelations(thread: StudioThreadView, studio: StudioView): Relation[]
 }
 
 export function relatesTo(thread: StudioThreadView, studio: StudioView, ctx: RelatesContext = NO_CONTEXT): Relations {
-  const kept = keptRelations(thread, studio);
+  const kept = keptRelations(thread, new Map([...studio.active, ...studio.parked, ...studio.closed].map((t) => [t.slug, t])));
   const keptThreads = kept.filter((k) => k.kind === "thread");
   const derived = threadRelations(thread, studio).map((d) => {
     const keptAs = keptThreads.find((k) => k.open === d.open);
@@ -207,8 +206,27 @@ export function relatesTo(thread: StudioThreadView, studio: StudioView, ctx: Rel
     threads: [...derived, ...keptThreads.filter((k) => k.open === undefined || !derived.some((d) => d.open === k.open))],
     goals: [...goalRelations(thread, ctx.goals), ...kept.filter((k) => k.kind === "goal")],
     events: eventRelations(thread, ctx),
-    people: [...peopleRelations(thread), ...kept.filter((k) => k.kind === "person")],
+    people: threadPeople(thread),
     decisions: decisionRelations(thread, studio),
     links: kept.filter((k) => k.kind === "link"),
   };
+}
+
+const NO_THREADS: ReadonlyMap<string, StudioThreadView> = new Map();
+const MAX_THREAD_PERSONAS = 10;
+const MAX_PERSONA_NAME = 100;
+
+export const threadPeople = (thread: Pick<StudioThread, "material" | "notes">): Relation[] => [...peopleRelations(thread), ...keptRelations(thread, NO_THREADS).filter((k) => k.kind === "person")];
+
+export interface SparPersona {
+  name: string;
+  from: "config" | "thread";
+}
+
+const offerable = (name: string): boolean => name.length >= 1 && name.length <= MAX_PERSONA_NAME && !/[\r\n]/.test(name);
+
+export function sparPersonas(studio: Pick<StudioView, "personas">, thread: Pick<StudioThread, "material" | "notes">): SparPersona[] {
+  const configured = studio.personas ?? [];
+  const people = uniqueBy(threadPeople(thread).map((p) => p.title).filter((name) => offerable(name) && !configured.includes(name)), (name) => name);
+  return [...configured.map((name): SparPersona => ({ name, from: "config" })), ...people.slice(0, MAX_THREAD_PERSONAS).map((name): SparPersona => ({ name, from: "thread" }))];
 }

@@ -4,6 +4,7 @@ import type { RangerCli, RangerRunner } from "../actions";
 import { runCommand } from "../../common/spawn";
 import type { StudioAct } from "./acts";
 import type { StudioView } from "./view";
+import { sparPersonas } from "./relates";
 
 const RunSchema = z.object({
   runUuid: z.uuid(),
@@ -46,7 +47,7 @@ export async function enqueueSparring(input: { studio: StudioView; dir: string; 
   const thread = [...studio.active, ...studio.parked, ...studio.closed].find(t => t.slug === act.thread);
   if (!thread) return { ok: false, status: 404, error: "This thread is not in the Studio." };
   if (thread.state === "closed") return { ok: false, status: 409, error: "This thread is closed." };
-  if (act.mode.startsWith("persona:") && !studio.personas?.includes(act.mode.slice(8))) return { ok: false, status: 400, error: "Choose a perspective from the configured personas." };
+  if (act.mode.startsWith("persona:") && !sparPersonas(studio, thread).some(p => p.name === act.mode.slice(8))) return { ok: false, status: 400, error: "Choose a perspective from the configured personas or the thread's people." };
   const thinking = await readThinking(input.dir, cli, input.run);
   if (thinking.kind === "unavailable" || !cli) return { ok: false, status: 503, error: thinking.kind === "unavailable" ? thinking.reason : "Ranger is unavailable." };
   const receipt = thinking.runs.find(run => run.params.requestId === input.requestId);

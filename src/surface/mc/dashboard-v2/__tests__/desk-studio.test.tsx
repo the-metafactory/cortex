@@ -9,6 +9,7 @@ import { OpenSheet } from "../components/desk-studio-acts";
 import { deskSearch, readDeskLocation } from "../hooks/use-desk-studio";
 import { requestIdFor } from "../hooks/use-studio-act";
 import type { StudioThreadView, StudioView } from "../../desk/studio/view";
+import { sparPersonas } from "../../desk/studio/relates";
 
 const AT = Date.parse("2026-10-31T09:00:00+01:00");
 
@@ -29,6 +30,7 @@ const thread = (slug: string, place: number, over: Partial<StudioThreadView> = {
   outcomeText: "",
   policy: "cloud",
   overCap: false,
+  personas: [{ name: "A skeptic", from: "config" }],
   place,
   ...over,
 });
@@ -111,6 +113,14 @@ describe("the Studio board", () => {
     expect(html).toContain("Pending: red team");
     expect(html).toContain("Deferred until tomorrow");
     expect(html).toContain("What would A skeptic say?");
+  });
+
+  it("offers a person from the thread's material as a sparring perspective", () => {
+    const material = [{ kind: "person", label: "Nico" }];
+    const nico = thread("one", 1, { material, personas: sparPersonas(STUDIO, { material, notes: [] }) });
+    const html = renderToStaticMarkup(<DeskStudio studio={{ ...STUDIO, active: [nico] }} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain("What would A skeptic say?");
+    expect(html).toContain("What would Nico say?");
   });
 
   it("opens a thread's Mail material in Mail, not in a new tab", () => {
