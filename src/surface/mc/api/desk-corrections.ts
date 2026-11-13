@@ -1,8 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { correctionLabel, isCorrectionMode, isItemKind, isSource, listCorrections, removeCorrection, setCorrection } from "../desk/corrections";
-
-const noStore = { "Cache-Control": "no-store" };
-const reply = (body: object, status = 200): Response => Response.json(body, { status, headers: noStore });
+import { reply } from "./desk-reply";
 
 export const MAIL_IS_PER_MAIL = "Mail is corrected one mail at a time: use the card's menu (This isn't bulk, This matters, Wrong suggestion).";
 

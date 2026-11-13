@@ -92,6 +92,8 @@ All keys below are under `interruptions`.
 | `chime` | `true` | Plays a sound in the Desk tab for a new interrupting item. |
 | `notifications` | `true` | Allows browser notifications after the person grants permission. |
 
+These keys set the stack's defaults. A reason switched on the Desk overrides its default, except that `mail: false` keeps every mail reason off. See [How the Desk interrupts](README.md#how-the-desk-interrupts).
+
 Browser notifications require a secure context such as HTTPS or localhost. Push delivery is recorded per item. A failed delivery is shown on the Desk rather than retried automatically. The command's JSON input is in [Transports](commands.md#transports).
 
 ## Voice

@@ -130,9 +130,34 @@ export function freshnessLabel(status: DeskItem["freshness"]): string | null {
   return status ? FRESHNESS_LABEL[status] : null;
 }
 
+export const INTERRUPT_REASON_CODES = ["meeting.soon", "reminder.due", "mail.meeting-today", "mail.deadline-today", "mail.vip", "mail.ranked"] as const;
+
+export type InterruptReasonCode = (typeof INTERRUPT_REASON_CODES)[number];
+
+export interface DeskInterruptReason {
+  code: InterruptReasonCode;
+  target?: string;
+  eventKey?: string;
+  dueAt?: string;
+}
+
+export type InterruptFeedback = "yes" | "no";
+
 export interface DeskInterrupt {
   delivery: "off" | "pending" | "sending" | "sent" | "buffered" | "failed";
   error?: string;
+  reason?: DeskInterruptReason;
+  feedback?: InterruptFeedback;
+}
+
+export interface InterruptReasonView {
+  code: InterruptReasonCode;
+  target?: string;
+  label: string;
+  on: boolean;
+  available: boolean;
+  setBy: "default" | "switch" | "feedback";
+  changedAt?: number;
 }
 
 export interface DeskFoldedGroup {
@@ -195,6 +220,7 @@ export interface DeskView {
   voice: DeskVoice;
   autonomy: DeskAutonomy;
   corrections: DeskCorrection[];
+  interruptions: InterruptReasonView[];
   studioBriefing?: string | null;
   mailClassifier?: DeskMailClassifier | null;
 }

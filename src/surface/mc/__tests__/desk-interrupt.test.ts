@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { composeDesk, type DeskOptions } from "../desk/compose";
-import { pushInterrupts, readDeliveries, startInterruptLoop, type DeskPush, type DeskTransport, type InterruptRules, type PushResult } from "../desk/interrupt";
+import { pushInterrupts, readDeliveries, startInterruptLoop, type DeskTransport, type InterruptRules } from "../desk/interrupt";
+import { FakeTransport, MIN, NOW, RULES } from "./desk-interrupt-fixture";
 import { discordTransport, pushText } from "../desk/transports";
 import { notifyWithResult } from "../../../adapters/notify-result";
 import { MockAdapter } from "../../../adapters/mock";
@@ -16,11 +17,6 @@ import { freshInterrupts, loadSeen, rememberSeen } from "../dashboard-v2/lib/des
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-const NOW = Date.parse("2026-10-31T09:00:00.000Z");
-const MIN = 60_000;
-
-const RULES: InterruptRules = { transport: "discord", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true };
 
 const desk = (rules: InterruptRules = RULES, rangerUrl = ""): DeskOptions => ({
   enabled: true,
@@ -36,16 +32,6 @@ const calendar = (events: unknown[]): SourceCache => {
   const runner: CommandRunner = async () => JSON.stringify({ events });
   return new SourceCache(runner);
 };
-
-class FakeTransport implements DeskTransport {
-  readonly id = "discord" as const;
-  readonly sent: DeskPush[] = [];
-  constructor(private readonly answer: PushResult = { status: "sent", ref: "m-1" }) {}
-  async send(push: DeskPush): Promise<PushResult> {
-    this.sent.push(push);
-    return this.answer;
-  }
-}
 
 describe("Desk interruptions", () => {
   let db: Database;
@@ -69,12 +55,13 @@ describe("Desk interruptions", () => {
       title: `"Stand-up" starts at ${new Date(NOW + 10 * MIN).toTimeString().slice(0, 5)}.`,
       why: "It starts in 10 minutes.",
       action: { label: "Join", url: "https://meet.example/abc" },
+      reason: { code: "meeting.soon" },
     }]);
     await tick(transport, NOW + MIN, desk(), cache);
     await tick(transport, NOW + 2 * MIN, desk(), cache);
     expect(transport.sent).toHaveLength(1);
     const later = await tick(transport, NOW + 3 * MIN, desk(), cache);
-    expect(later.view.items[0]?.interrupt).toEqual({ delivery: "sent" });
+    expect(later.view.items[0]?.interrupt).toEqual({ delivery: "sent", reason: { code: "meeting.soon" } });
     expect(readDeliveries(db).get(`meeting:cal:cal:e1@${NOW + 10 * MIN}`)?.ref).toBe("m-1");
   });
 
@@ -152,7 +139,7 @@ describe("Desk interruptions", () => {
     const second = await tick(transport, NOW + MIN, desk(), cache);
     expect(second.pushed).toEqual([]);
     const reminder = second.view.items.find((i) => i.key === "reminder:1");
-    expect(reminder?.interrupt).toEqual({ delivery: "buffered" });
+    expect(reminder?.interrupt).toEqual({ delivery: "buffered", reason: { code: "reminder.due" } });
     expect(reminder?.score).toBeLessThan(99);
     expect(readDeliveries(db).get("reminder:1")).toMatchObject({ status: "buffered", error: null, ref: null });
     expect(transport.sent).toHaveLength(1);
@@ -186,7 +173,7 @@ describe("Desk interruptions", () => {
     const off = { ...RULES, transport: "none" as const };
     const { view, pushed } = await tick(transport, NOW, desk(off));
     expect(pushed).toEqual([]);
-    expect(view.items[0]?.interrupt).toEqual({ delivery: "off" });
+    expect(view.items[0]?.interrupt).toEqual({ delivery: "off", reason: { code: "meeting.soon" } });
     expect(readDeliveries(db).size).toBe(0);
   });
 

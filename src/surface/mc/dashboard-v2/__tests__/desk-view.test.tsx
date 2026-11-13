@@ -51,6 +51,7 @@ const view: DeskViewModel = {
   voice: { enabled: true, input: "browser", output: "browser" },
   autonomy: { types: [], done: [] },
   corrections: [],
+  interruptions: [],
 };
 
 const renderCards = (items: DeskItem[], sending: string | null = null): string => renderToStaticMarkup(items.map((entry, index) => <DeskItemRow key={entry.key} item={entry} rank={index + 1} sending={sending} onOpen={() => {}} onAction={() => {}} onFocusEvent={() => {}} onCorrect={() => {}} />));

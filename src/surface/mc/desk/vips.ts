@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { removeVipSwitch } from "./interrupt-switches";
 
 export interface DeskVip {
   address: string;
@@ -38,7 +39,9 @@ export function addSender(db: Database, list: SenderList, address: string, label
 }
 
 export function removeSender(db: Database, list: SenderList, address: string): boolean {
-  return db.query(`DELETE FROM ${TABLE[list]} WHERE address = ?`).run(address).changes > 0;
+  const removed = db.query(`DELETE FROM ${TABLE[list]} WHERE address = ?`).run(address).changes > 0;
+  if (removed && list === "vips") removeVipSwitch(db, address);
+  return removed;
 }
 
 export const listVips = (db: Database): DeskVip[] => listSenders(db, "vips");
@@ -47,11 +50,16 @@ export function addVip(db: Database, address: string, label: string | null, now:
 }
 export const removeVip = (db: Database, address: string): boolean => removeSender(db, "vips", address);
 
-/** True when the sender's address or its domain is on the list. */
-export function isVip(vips: ReadonlySet<string>, address: string): boolean {
+/** The list entry the sender matches: the exact address first, then its domain; null when neither is listed. */
+export function listedEntry(vips: ReadonlySet<string>, address: string): string | null {
   const a = address.toLowerCase();
-  return vips.has(a) || vips.has(a.slice(a.indexOf("@")));
+  if (vips.has(a)) return a;
+  const domain = a.slice(a.indexOf("@"));
+  return vips.has(domain) ? domain : null;
 }
+
+/** True when the sender's address or its domain is on the list. */
+export const isVip = (vips: ReadonlySet<string>, address: string): boolean => listedEntry(vips, address) !== null;
 
 /** Mail from an unimportant sender counts as bulk, unless the sender is a VIP: VIP wins. */
 export const isUnimportant = (unimportant: ReadonlySet<string>, vips: ReadonlySet<string>, address: string): boolean =>
