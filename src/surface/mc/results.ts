@@ -9,7 +9,7 @@ export interface ResultRouteOptions {
 
 const SAFE_TAGS = new Set("p h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code em strong del hr br a table thead tbody tr th td".split(" "));
 const unsafeLink = (): false => false;
-const invalidResultRef = (): Response => new Response("Not Found", { status: 404 });
+const notFound = (): Response => new Response("Not Found", { status: 404 });
 
 function safeLink(href: string): boolean {
   try {
@@ -42,12 +42,12 @@ export async function handleResult(db: Database, encodedRef: string, options: Re
   try {
     ref = decodeURIComponent(encodedRef);
   } catch {
-    return invalidResultRef();
+    return notFound();
   }
   const content = await readSomaFile(ref, directory, options.somaHome);
-  if (content === null) return new Response("Not Found", { status: 404 });
+  if (content === null) return notFound();
   const html = renderMarkdown(content);
-  if (directory === "outputs") await readResult(db, ref, options.ledger);
+  if (directory === "outputs") readResult(db, ref, options.ledger);
   return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>${directory === "proposals" ? "Proposal" : "Result"}</title></head><body><main>${html}</main></body></html>`, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
