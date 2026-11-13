@@ -566,6 +566,7 @@ export interface HooksConfig {
 
 export interface Config {
   port: number;
+  ui?: import("../../common/config/ui-directory").UiConfig;
   /** Bind address. Defaults to "127.0.0.1" — loopback only.
    *  NEVER set to "0.0.0.0" without auth; see CLAUDE.md security rule. */
   hostname: string;

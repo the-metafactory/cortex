@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from "fs";
 import { parse as parseYaml } from "yaml";
 import { homedir } from "os";
 import { rawEventsDir as resolveRawEventsDir } from "../../common/events-path";
+import { UiSchema } from "../../common/config/ui-directory";
 import type { Config, LogLevel, CfAccessConfig, GovernanceConfig } from "./types";
 import { resolveConfigFilePath } from "../../common/config/config-path";
 import {
@@ -261,6 +262,7 @@ export function loadConfig(
   }
 
   const config: Config = {
+    ...(parsed.ui !== undefined ? { ui: UiSchema.parse(parsed.ui) } : {}),
     port:
       typeof parsed.port === "number" ? parsed.port : DEFAULT_CONFIG.port,
     hostname:

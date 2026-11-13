@@ -2380,7 +2380,7 @@
   },
   "src/common/config/loader.ts": {
     "cortex/no-comments": {
-      "count": 340
+      "count": 338
     }
   },
   "src/common/config/migrate-config-dir.ts": {

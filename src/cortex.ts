@@ -5051,6 +5051,7 @@ export async function startCortex(
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,
+        ...(config.mc.ui ? { ui: config.mc.ui } : {}),
         ...(mcHeadless ? { headless: true } : {}),
         // FS-7 / D-3 (cortex#1839) — surface a degraded boot on MC `/health`.
         ...(options.degraded !== undefined ? { degraded: options.degraded } : {}),
