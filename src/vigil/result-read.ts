@@ -3,7 +3,7 @@ import { flushVigilResolutions, resolveVigilAttention, type ResolutionLedger } f
 
 export type ResultReadLedger = ResolutionLedger;
 
-export async function readResult(db: Database, ref: string, ledger?: ResultReadLedger): Promise<void> {
+export function readResult(db: Database, ref: string, ledger?: ResultReadLedger): void {
   resolveVigilAttention(db, `att:vigil:result:${ref}`, "read");
-  if (ledger) await flushVigilResolutions(db, ledger);
+  if (ledger) void flushVigilResolutions(db, ledger);
 }

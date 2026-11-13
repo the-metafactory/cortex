@@ -353,6 +353,10 @@ export function startServer(
         if (req.method !== "GET") return methodNotAllowed(["GET"]);
         const denial = checkRebindGuard(req, guard);
         if (denial) return denial;
+        const fetchSite = req.headers.get("Sec-Fetch-Site");
+        if (fetchSite !== null && fetchSite !== "same-origin" && fetchSite !== "none") {
+          return new Response("Forbidden", { status: 403 });
+        }
         const directory = url.pathname.startsWith("/proposals/") ? "proposals" : "outputs";
         const prefix = directory === "proposals" ? "/proposals/" : "/results/";
         return handleResult(db, url.pathname.slice(prefix.length), options.results, directory);

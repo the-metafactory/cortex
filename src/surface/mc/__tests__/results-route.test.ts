@@ -9,6 +9,7 @@ import type { Envelope } from "../../../bus/myelin/envelope-validator";
 import { ingestFromSourceStack, ENDED_AT, ledgerEnvelope } from "../../../vigil/__tests__/fixtures";
 import { LEDGER_REPLAY_HANDLERS } from "../../../vigil/replay";
 import { readSomaFile } from "../../../vigil/soma-output";
+import { flushVigilResolutions } from "../../../vigil/resolution";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
 import { TABLE_NAMES } from "../db/schema";
@@ -25,6 +26,12 @@ let publish: ReturnType<typeof mock<(envelope: Envelope, subject: string) => Pro
 
 function seed(ref = REF, target = db): void {
   ingestFromSourceStack(target, ledgerEnvelope({ outcome: "succeeded", result_ref: ref }), ENDED_AT);
+}
+
+function expectUnreadResult(): void {
+  expect(getAttentionItem(db, attentionId())?.status).toBe("open");
+  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
+  expect(publish).not.toHaveBeenCalled();
 }
 
 function openRef(ref = REF, init?: RequestInit): Promise<Response> {
@@ -92,9 +99,7 @@ test.each([
   const response = await openRef(ref);
   expect(response.status).toBe(404);
   expect(await response.text()).toBe("Not Found");
-  expect(getAttentionItem(db, attentionId())?.status).toBe("open");
-  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
-  expect(publish).not.toHaveBeenCalled();
+  expectUnreadResult();
 });
 
 test("refuses encoded dot-dot and malformed encoding over HTTP", async () => {
@@ -234,6 +239,55 @@ test("rejects non-GET methods and foreign Host or Origin without reading an item
   expect((await openRef(REF, { headers: { origin: "https://foreign.example" } })).status).toBe(403);
   expect(getAttentionItem(db, attentionId())?.status).toBe("open");
   expect(publish).not.toHaveBeenCalled();
+});
+
+test.each(["cross-site", "same-site", "unexpected", ""])("rejects fetch site %j without resolving attention", async (site) => {
+  seed();
+  for (const mode of ["no-cors", "navigate"]) {
+    const response = await openRef(REF, { headers: { "Sec-Fetch-Site": site, "Sec-Fetch-Mode": mode } });
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain("Private");
+    expectUnreadResult();
+  }
+});
+
+test.each(["same-origin", "none"])("permits fetch site %s and resolves attention", async (site) => {
+  seed();
+  const response = await openRef(REF, { headers: { "Sec-Fetch-Site": site } });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("<h1>Weekly result</h1>");
+  expect(getAttentionItem(db, attentionId())?.resolution).toBe("read");
+});
+
+test("result pages return during stalled publication with a durable receipt and no duplicate publish", async () => {
+  seed();
+  writeFileSync(join(home, "outputs", "untracked.md"), "# Untracked result");
+  const started = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  publish.mockImplementationOnce(async (envelope, subject) => {
+    published.push({ envelope, subject });
+    started.resolve(undefined);
+    await release.promise;
+  });
+  const requests = [openRef(REF, { signal: AbortSignal.timeout(3000) })];
+  try {
+    await started.promise;
+    requests.push(openRef(REF, { signal: AbortSignal.timeout(3000) }));
+    requests.push(openRef("soma:outputs/untracked.md", { signal: AbortSignal.timeout(3000) }));
+    const responses = await Promise.all(requests);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+    expect(await responses[0]!.text()).toContain("<h1>Weekly result</h1>");
+    expect(await responses[2]!.text()).toContain("<h1>Untracked result</h1>");
+    expect(getAttentionItem(db, attentionId())?.resolution).toBe("read");
+    expect(db.query("SELECT published FROM vigil_attention_resolutions").all()).toEqual([{ published: 0 }]);
+    expect(publish).toHaveBeenCalledTimes(1);
+  } finally {
+    release.resolve(undefined);
+    await Promise.allSettled(requests);
+    await flushVigilResolutions(db, { principal: "example", stack: "default", publish });
+  }
+  expect(db.query("SELECT published FROM vigil_attention_resolutions").all()).toEqual([{ published: 1 }]);
+  expect(publish).toHaveBeenCalledTimes(1);
 });
 
 test("does not expose the route on a non-loopback bind", async () => {
