@@ -87,6 +87,7 @@ export interface DeskItem {
   rangerMap?: { key: string; label: string };
   attention?: "action" | "update";
   dueAt?: string;
+  dueFrom?: import("./deadline").DeadlineSource;
   sourceRevision?: string;
   todoFingerprint?: string;
   key: string;

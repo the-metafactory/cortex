@@ -71,7 +71,7 @@ composed owner-setup API is deferred to a separate integration change.
 
 ## How the Desk interrupts
 
-Only some items interrupt you: a meeting about to start, fresh mail ranked for today, and a reminder that is due. A blocked agent or a deadline goes into the briefing instead. A broken system never interrupts.
+Only some items interrupt you: a meeting about to start, fresh mail ranked for today (including mail whose deadline is today), and a reminder that is due. A blocked agent, or a deadline on a later day, goes into the briefing instead. A broken system never interrupts.
 
 Every interruption has a reason, and each reason is a switch:
 
@@ -80,11 +80,13 @@ Every interruption has a reason, and each reason is a switch:
 | `meeting.soon` | a meeting starts within `meetingMinutes` | on when `meetingMinutes` is above 0 |
 | `reminder.due` | a reminder is due and fresh | `reminders` |
 | `mail.meeting-today` | fresh mail the classifier linked to a meeting that starts later today | on |
-| `mail.deadline-today` | fresh mail whose deadline falls today (mail carries no deadline yet, so it does not fire) | on |
+| `mail.deadline-today` | fresh mail whose deadline falls on today's local date, from the mail source's `dueAt` or, failing that, a deadline the classifier read from the mail; an overdue deadline from an earlier day does not fire | on |
 | `mail.vip` | fresh mail from a VIP; one switch per VIP address or domain | on |
 | `mail.ranked` | any other fresh mail ranked for today | on |
 
 Mail is checked in the order of the table. The first reason that fires and is switched on is the item's reason, shown as `interrupt.reason` (`code`, plus `target` for a VIP and `eventKey` for a meeting). When every reason that fires is off, the item stays in the list without interrupting. `interruptions.mail: false` turns every mail reason off for the stack, and `meetingMinutes: 0` turns `meeting.soon` off, whatever their switches say; such reasons read `available: false`.
+
+A mail's deadline is on its item as `dueAt`, with `dueFrom` set to `source` or `classifier`. A deadline today puts the mail on today's list even when `mail.deadline-today` is switched off.
 
 The switches are stored per stack. `GET /api/desk/interruptions` lists the reasons with `on`, `available`, `setBy` (`default`, `switch` or `feedback`) and `changedAt`; `GET /api/desk` carries the same list as `interruptions`. `POST /api/desk/interruptions` with `{ code, target?, on }` switches one reason; switching it back to its default removes the stored switch. Removing a VIP removes its switch.
 

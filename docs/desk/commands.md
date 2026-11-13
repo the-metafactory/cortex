@@ -147,6 +147,7 @@ Mail fields:
 | `receivedAt` | yes | Date and time string. Use ISO 8601 with a timezone. |
 | `unread` | yes | Boolean. Only unread mail appears as ranked mail items. |
 | `firstParagraph` | no | String for the item's preview and classifier. |
+| `dueAt` | no | Due date the mail carries, such as a flag's due date: `YYYY-MM-DD` or a date and time with a timezone. It wins over a deadline the classifier reads. An invalid value drops only the date, not the mail. |
 | `url` | no | Link beginning with `http:`, `https:`, or `message:`. |
 | `account` | no | Account name understood by the mail action commands. Required to trash or draft a reply. |
 
@@ -272,9 +273,9 @@ The command exits 0 and prints one object:
 }
 ```
 
-`category` is required: `action`, `reply`, `meeting`, `fyi`, or `bulk`. `reason` is required, nonempty, and at most 200 characters. Optional `meetingKey` must be one of the supplied keys. Bulk classifications discard it. Optional command-only details are `summary` (at most 600 characters), `suggestedAction` (`reply`, `archive`, `link-meeting`, `task`, or `none`), and `evidence` (at most 5 entries). Each evidence entry has `kind` (`mail`, `event`, or `note`), nonempty `ref` (at most 300 characters), and nonempty `title` (at most 200 characters).
+`category` is required: `action`, `reply`, `meeting`, `fyi`, or `bulk`. `reason` is required, nonempty, and at most 200 characters. Optional `meetingKey` must be one of the supplied keys. Bulk classifications discard it. Optional `deadline` is the date the mail asks the person to act or answer by, as `YYYY-MM-DD` or a date and time with its offset; relative dates are resolved from `receivedAt`. A deadline that does not parse, or lies more than a day before `receivedAt` or more than a year after it, is dropped and the rest of the answer kept. Optional command-only details are `summary` (at most 600 characters), `suggestedAction` (`reply`, `archive`, `link-meeting`, `task`, or `none`), and `evidence` (at most 5 entries). Each evidence entry has `kind` (`mail`, `event`, or `note`), nonempty `ref` (at most 300 characters), and nonempty `title` (at most 200 characters).
 
-The endpoint form of the classifier uses OpenAI-compatible chat completions and reads the base category, reason, and meeting key. Command-only details are validated for command classifiers. Invalid output or nonzero exit leaves fixed-rule ranking in use and schedules a later retry.
+The endpoint form of the classifier uses OpenAI-compatible chat completions and reads the base category, reason, meeting key, and deadline. Command-only details are validated for command classifiers. Invalid output or nonzero exit leaves fixed-rule ranking in use and schedules a later retry.
 
 ## Mail actions
 

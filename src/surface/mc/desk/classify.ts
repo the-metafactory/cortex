@@ -9,13 +9,14 @@ import type { SourceEvent, SourceMail } from "./sources/command";
 import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
+import { classifierDeadline, isDeadlineForm } from "./deadline";
 import type { MailSimilarity, MailText, SimilarDecisions, SimilarityBasis, SimilarityContext } from "./mail-similar";
 
 export const SIMILARITY_BASES = ["content", "sender"] as const;
 
 export const MAIL_COMMITMENTS = ["request", "invitation", "none", "unknown"] as const;
 export type MailCommitment = (typeof MAIL_COMMITMENTS)[number];
-export const MAIL_CLASSIFIER_CONTRACT = 2;
+export const MAIL_CLASSIFIER_CONTRACT = 3;
 
 export const MAIL_CATEGORIES = ["action", "reply", "meeting", "fyi", "bulk"] as const;
 export type MailCategory = (typeof MAIL_CATEGORIES)[number];
@@ -57,6 +58,7 @@ export interface MailClassification {
   evidence?: MailEvidence[];
   precedents?: MailPrecedents;
   suspicious?: boolean;
+  deadline?: string;
 }
 
 interface ModelAccess {
@@ -230,7 +232,7 @@ const DetailsSchema = z.object({
   evidence: z.array(EvidenceSchema).max(MAX_EVIDENCE).nullish(),
 });
 
-type Extras = Pick<MailClassification, "summary" | "suggestedAction" | "evidence" | "predictedAction" | "precedents" | "suspicious">;
+type Extras = Pick<MailClassification, "summary" | "suggestedAction" | "evidence" | "predictedAction" | "precedents" | "suspicious" | "deadline">;
 
 interface ExtrasInput {
   summary?: string | null;
@@ -239,10 +241,12 @@ interface ExtrasInput {
   predictedAction?: PredictedAction | null;
   precedents?: MailPrecedents | null;
   suspicious?: boolean | null;
+  deadline?: string | null;
 }
 
-function extras({ summary, suggestedAction, evidence, predictedAction, precedents, suspicious }: ExtrasInput): Extras {
+function extras({ summary, suggestedAction, evidence, predictedAction, precedents, suspicious, deadline }: ExtrasInput): Extras {
   return {
+    ...(deadline ? { deadline } : {}),
     ...(summary ? { summary } : {}),
     ...(suggestedAction ? { suggestedAction } : {}),
     ...(evidence?.length ? { evidence } : {}),
@@ -252,7 +256,7 @@ function extras({ summary, suggestedAction, evidence, predictedAction, precedent
   };
 }
 
-export function validateAnswer(answer: unknown, meetingKeys: ReadonlySet<string>, withDetails = false): MailClassification | null {
+export function validateAnswer(answer: unknown, meetingKeys: ReadonlySet<string>, withDetails = false, receivedAt?: string): MailClassification | null {
   const parsed = BaseAnswerSchema.safeParse(answer);
   const details = withDetails ? DetailsSchema.safeParse(answer) : null;
   if (!parsed.success || details?.success === false) return null;
@@ -260,7 +264,8 @@ export function validateAnswer(answer: unknown, meetingKeys: ReadonlySet<string>
   if (meetingKey && !meetingKeys.has(meetingKey)) return null;
   const predictedAction = field(PredictedSchema, (answer as { predictedAction?: unknown }).predictedAction);
   const suspicious = (answer as { suspicious?: unknown }).suspicious === true;
-  const more = { ...(details?.success ? extras(details.data) : {}), ...(commitment ? { commitment } : {}), ...(predictedAction ? { predictedAction } : {}), ...(suspicious ? { suspicious } : {}) };
+  const deadline = receivedAt === undefined ? undefined : classifierDeadline((answer as { deadline?: unknown }).deadline, receivedAt);
+  const more = { ...(details?.success ? extras(details.data) : {}), ...(deadline ? { deadline } : {}), ...(commitment ? { commitment } : {}), ...(predictedAction ? { predictedAction } : {}), ...(suspicious ? { suspicious } : {}) };
   if (category === "bulk" || !meetingKey) return { category, reason, ...more };
   return { category, meetingKey, reason, ...more };
 }
@@ -282,7 +287,8 @@ export const SYSTEM_PROMPT = [
   "examples are past mails like this one and what the person did with each (action), most similar first; weight 2 marks a correction the person made, which outweighs an ordinary decision. corrections lists the person's latest corrections of the Desk's suggestions.",
   `Predict what the person will do with this mail as predictedAction, one of ${PREDICTED_ACTIONS.join(", ")}. Follow the examples when they agree with each other and fit the mail; otherwise judge the mail on its own.`,
   "Set suspicious to true only when the mail looks like phishing or fraud: it pushes for credentials, payment, a gift card or an urgent click, or pretends to be someone it is not. Otherwise set it to false.",
-  `Answer with one JSON object and nothing else: {"category": "...", "commitment": "request" | "invitation" | "none" | "unknown", "meetingKey": "..." (only for a meeting), "predictedAction": "...", "suspicious": true | false, "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
+  'Set deadline only when the mail asks the person to act or answer by a certain date: the date as "YYYY-MM-DD", or a date and time with its UTC offset. Resolve relative dates such as "by Friday" from receivedAt. Leave it out otherwise.',
+  `Answer with one JSON object and nothing else: {"category": "...", "commitment": "request" | "invitation" | "none" | "unknown", "meetingKey": "..." (only for a meeting), "predictedAction": "...", "suspicious": true | false, "deadline": "..." (only when the mail asks for something by a date), "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
 ].join("\n");
 
 export function buildMessages({ mail, meetings, vips, unimportant, corrections, examples }: ClassifierRequest): { role: "system" | "user"; content: string }[] {
@@ -442,10 +448,10 @@ const parseStored =(raw: string): unknown => {
 function readDetails(raw: string | null): Extras & Pick<MailClassification, "commitment"> {
   const stored = raw ? field(StoredSchema, parseStored(raw)) : undefined;
   if (!stored) return {};
-  const { summary, suggestedAction, evidence, predictedAction, precedents, suspicious } = stored;
+  const { summary, suggestedAction, evidence, predictedAction, precedents, suspicious, deadline } = stored;
   const items = Array.isArray(evidence) ? evidence.flatMap((e) => field(EvidenceSchema, e) ?? []).slice(0, MAX_EVIDENCE) : [];
   const commitment = stored.contractVersion === MAIL_CLASSIFIER_CONTRACT ? field(z.enum(MAIL_COMMITMENTS), stored.commitment) : undefined;
-  const learned = { predictedAction: field(PredictedSchema, predictedAction), precedents: field(PrecedentsSchema, precedents), suspicious: suspicious === true };
+  const learned = { predictedAction: field(PredictedSchema, predictedAction), precedents: field(PrecedentsSchema, precedents), suspicious: suspicious === true, ...(isDeadlineForm(deadline) ? { deadline } : {}) };
   return { ...extras({ summary: field(SummarySchema, summary), suggestedAction: field(SuggestedSchema, suggestedAction), evidence: items, ...learned }), ...(commitment ? { commitment } : {}) };
 }
 
@@ -586,7 +592,7 @@ export class MailClassifier {
       let answer: MailClassification | null = null;
       let problem = "the classifier sent an answer the Desk does not accept";
       try {
-        answer = validateAnswer(await this.run(request, this.config.timeoutSeconds * 1000, contentFrom(localSources, [m.sourceId, ...meetings.map((meeting) => meeting.sourceId)])), keys, isCommand(this.config));
+        answer = validateAnswer(await this.run(request, this.config.timeoutSeconds * 1000, contentFrom(localSources, [m.sourceId, ...meetings.map((meeting) => meeting.sourceId)])), keys, isCommand(this.config), m.receivedAt);
       } catch (err) {
         if (err instanceof MissingKey) {
           if (!this.keyMissing) this.log(`desk: mail classifier: ${err.message}`);

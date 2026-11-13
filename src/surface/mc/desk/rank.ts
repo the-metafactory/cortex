@@ -8,6 +8,7 @@ import { approvable, retryable } from "./actions";
 import { agentQuestion, RULING_ACTION, type RulingExplanation } from "./ruling";
 import { clock, DAY_MS, startOfDay } from "./time";
 import { isUnimportant, isVip } from "./vips";
+import { deadlineLine, deadlineToday } from "./deadline";
 import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
 import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "./mail-triage";
@@ -486,6 +487,10 @@ export function mailItems(input: MailInput): DeskItem[] {
     const rest = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), ...(ivy ? [TO_IVY] : []), SNOOZE];
     const offered = inviting.length > 0 ? [...inviting, ...rest.map((a) => ({ ...a, role: "secondary" as const }))] : rest;
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
+    const deadline = m.dueAt ? { dueAt: m.dueAt, dueFrom: "source" as const } : triage?.deadline ? { dueAt: triage.deadline, dueFrom: "classifier" as const } : null;
+    const deadlineSays = deadline ? deadlineLine(deadline.dueAt, deadline.dueFrom) : null;
+    if (deadlineSays) history.push(deadlineSays);
+    const dueToday = deadlineToday(deadline?.dueAt, now);
     if (invite) history.push(`Invitation: "${invite.summary}", ${invite.when}${invite.location ? `, ${invite.location}` : ""}, from ${invite.organizer}${invite.recurring ? "; it repeats" : ""}.`);
     if (invite?.decision) history.push(decisionSentence(invite.decision, ago(now, invite.decision.at)));
     const soon = invite !== undefined && !invite.decision && Date.parse(invite.start) - now < INVITE_SOON_MS;
@@ -497,12 +502,12 @@ export function mailItems(input: MailInput): DeskItem[] {
     return {
       key: `mail:${m.id}`,
       sourceRevision: m.receivedAt,
-      ...(m.dueAt ? { dueAt: m.dueAt } : {}),
+      ...(deadline ?? {}),
       attention: verdict.sorted === "fyi" || verdict.sorted === "bulk" ? "update" : "action",
       kind: "mail",
       source: m.sourceId,
       area: m.area,
-      urgency: vip || verdict.pressing || soon ? "today" : "waiting",
+      urgency: vip || verdict.pressing || soon || dueToday ? "today" : "waiting",
       title: `${sender} wrote: "${m.subject}"`,
       why: invite ? inviteWhy(invite, now) : why,
       score: (vip ? 80 : verdict.score) - ageDays * 5,
