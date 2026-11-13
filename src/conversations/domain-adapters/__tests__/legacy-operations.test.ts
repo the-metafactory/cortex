@@ -17,9 +17,9 @@ const { hosts, open } = journalStoreTestFixture();
 const ids = (id: string) => [operationUuid(id), studioRequestId(id), graphMarker(id)];
 
 test("F1/F2/F3/F11/F12 import preserves actual legacy DTOs, owner identities and uncertainty across reopen", async () => {
-  for (const state of ["created", "running", "uncertain", "failed", "proposed", "confirmed"] as const) {
+  for (const kind of ["task", "project"] as const) for (const state of ["created", "running", "uncertain", "failed", "proposed", "confirmed"] as const) {
     const host = await open();
-    const source = legacyFixture(state);
+    const source = legacyFixture(state, kind);
     const before = JSON.stringify(source);
     const identity = ids(source.record.operationId);
     const preview = previewLegacyOperation(source, legacyContext(source));
@@ -275,4 +275,19 @@ test("graph-node history that cannot be mapped exactly is legacy_destination_amb
   const other = { ...graphNodeLegacyContext(base).destinations[0]!, canonicalId: "github:github.com/example/other" };
   expect(ambiguous(base, { ...graphNodeLegacyContext(base), destinations: [other] })).toContain("legacy_destination_ambiguous");
   expect(ambiguous(base, { ...graphNodeLegacyContext(base), canonicalReference: { ...graphNodeLegacyContext(base).canonicalReference!, canonicalId: "example/desk#41" } })).toContain("legacy_canonical_mapping_unsupported");
+});
+
+test("project imports keep exact project identity, receipt links and edits, and reject mismatched destination and object mappings", async () => {
+  const host = await open();
+  const source = legacyFixture("created", "project");
+  const context = legacyContext(source);
+  expect(previewLegacyOperation(source, context).issues).toEqual([]);
+  const imported = await importLegacyOperation(host.journal, source, context, AT);
+  expect(projectLegacyOperation(imported, context)).toEqual(source.record);
+  expect(readOperationEvidence(imported)).toMatchObject({ kind: "legacy", source, dispatchAllowed: false, retryAllowed: false });
+  await expect(importLegacyOperation(host.journal, { ...source, ownerReceipts: [] }, context, AT)).rejects.toThrow();
+  expect(await host.journal.read(source.record.operationId)).toEqual(imported);
+  expect(previewLegacyOperation(source, { ...context, canonicalReference: { ...context.canonicalReference!, objectType: "task" } }).issues).toContain("legacy_canonical_mapping_unsupported");
+  expect(previewLegacyOperation(source, { ...context, destinations: [{ ...context.destinations[0]!, canonicalId: "area-other" }] }).issues).toContain("legacy_destination_ambiguous");
+  expect(previewLegacyOperation(source, { ...context, capabilityId: "balance.task.create" }).issues).toContain("legacy_capability_mapping_unsupported");
 });

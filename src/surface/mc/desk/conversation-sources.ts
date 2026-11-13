@@ -4,7 +4,9 @@ import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OwnerWriter, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
-import { routedBalanceTaskWriter, type BalanceTaskCutover } from "./balance-task-cutover";
+import { routedBalanceCreateWriter, type BalanceCreateCutover } from "./balance-create-cutover";
+import type { BalanceProjectCutover } from "./balance-project-cutover";
+import type { BalanceTaskCutover } from "./balance-task-cutover";
 import { calendarWriter } from "./calendar-conversation-writer";
 import { DESK_NOTE_WITHHELD, deskNoteWriter } from "./desk-note-conversation-writer";
 import { flowWriter } from "./flow-conversation-writer";
@@ -66,6 +68,7 @@ export interface SourceDeps {
   listGoals?: GoalRunner;
   captureModel?: CaptureModel;
   runWorker?: WriterRunner;
+  balanceProjectCutover?: () => BalanceProjectCutover | undefined;
   balanceTaskCutover?: () => BalanceTaskCutover | undefined;
 }
 
@@ -113,13 +116,13 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const studioCapture = studioCaptureWriter({ ...studioWriterDeps, ...(deps.captureModel ? { model: deps.captureModel } : {}) });
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
-  const balanceTask = (): OwnerWriter => {
-    const cutover = deps.balanceTaskCutover?.();
-    return cutover ? routedBalanceTaskWriter({ legacy: balanceWriters["balance-task"], cutover }) : balanceWriters["balance-task"];
+  const routedBalance = (owner: "balance-task" | "balance-project", getCutover?: () => BalanceCreateCutover | undefined): OwnerWriter => {
+    const cutover = getCutover?.();
+    return cutover ? routedBalanceCreateWriter({ legacy: balanceWriters[owner], cutover }) : balanceWriters[owner];
   };
-  const balanceTaskCutover = async (): Promise<{ connectionId: string } | null> => {
-    const route = await deps.balanceTaskCutover?.()?.route();
-    return route?.kind === "active" ? { connectionId: route.connectionId } : null;
+  const balanceCutoverView = async (getCutover?: () => BalanceCreateCutover | undefined): Promise<{ connectionId: string; reviewRevision: string } | null> => {
+    const route = await getCutover?.()?.route();
+    return route?.kind === "active" ? { connectionId: route.connectionId, reviewRevision: route.cutoverRef } : null;
   };
   const routine = routineWriter({ routines: () => deps.desk()?.routines, flows: () => deps.desk()?.flows, ...(deps.runRoutine ? { run: deps.runRoutine } : {}), ...(deps.runFlow ? { runPulse: deps.runFlow } : {}) });
   const flow = flowWriter({ flows: () => deps.desk()?.flows, ...(deps.runFlow ? { run: deps.runFlow } : {}) });
@@ -146,7 +149,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
       return {
-        ...(hasBalanceState(deps.db) ? { ...balanceWriters, "balance-task": balanceTask() } : {}),
+        ...(hasBalanceState(deps.db) ? { ...balanceWriters, "balance-task": routedBalance("balance-task", deps.balanceTaskCutover), "balance-project": routedBalance("balance-project", deps.balanceProjectCutover) } : {}),
         ...(desk.studio ? { "studio-response": studioResponse, "studio-thread": studioThread, "studio-note": studioNote, "studio-close": studioClose, "studio-capture": studioCapture } : {}),
         ...(desk.routines ? { routine } : {}),
         ...(desk.flows ? { flow } : {}),
@@ -191,6 +194,6 @@ export function conversationSources(deps: SourceDeps): HostSources {
       "balance-project": ref => Promise.resolve(balance(ref)),
     },
     readbacks: { "studio-note": studioCommit, "studio-thread": studioCommit },
-    cutovers: { "balance-task": balanceTaskCutover },
+    cutovers: { "balance-task": () => balanceCutoverView(deps.balanceTaskCutover), "balance-project": () => balanceCutoverView(deps.balanceProjectCutover) },
   };
 }

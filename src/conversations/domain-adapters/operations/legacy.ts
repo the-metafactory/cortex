@@ -7,6 +7,7 @@ import { operationUuid, studioRequestId } from "../../conversation-ids";
 import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { canonicalGraphRef } from "../work-graph/read";
 import { flowName } from "../flow/schema";
+import { BALANCE_CREATE_CONTRACTS } from "../balance/create-contracts";
 import { OperationJournalStore, StoredSchema, type StoredOperation } from "./journal";
 import { parseWire, type Json, type OperationJournal } from "./types";
 import { canonicalWire } from "./validation";
@@ -28,7 +29,10 @@ export interface LegacyContext {
   canonicalReference?: ObjectReference;
 }
 type LegacyBinding = Pick<LegacyContext, "owner" | "adapterId" | "connectionId" | "capabilityId">;
-const isBalanceTaskBinding = (binding: LegacyBinding | undefined): boolean => binding?.owner === "balance-task" && binding.adapterId === "balance" && binding.capabilityId === "balance.task.create";
+const balanceObjectType = (binding: LegacyBinding | undefined): "task" | "project" | undefined => {
+  if (binding?.adapterId !== "balance") return undefined;
+  return Object.values(BALANCE_CREATE_CONTRACTS).find(contract => contract.owner === binding.owner && contract.capabilityId === binding.capabilityId)?.kind;
+};
 const ContextSchema = z.object({ owner: OperationRecordSchema.shape.owner, adapterId: z.string().min(1), connectionId: z.string().min(1), capabilityId: z.string().min(1), fields: z.record(z.string(), z.string()), destinations: z.array(ObjectReferenceSchema), canonicalReference: ObjectReferenceSchema.optional() }).strict();
 const SourceSchema = z.object({ proposal: ProposalSchema, record: OperationRecordSchema, ownerReceipts: z.json(), createResult: z.discriminatedUnion("state", [z.object({ state: z.literal("created"), canonicalId: z.string(), url: z.string().optional() }).strict(), z.object({ state: z.literal("accepted"), receipt: z.string().optional() }).strict(), z.object({ state: z.literal("failed"), error: z.string() }).strict()]).optional(), readback: z.union([z.object({ found: z.literal(true), canonicalId: z.string(), url: z.string().optional() }).strict(), z.object({ found: z.literal(false) }).strict(), z.null()]).optional() }).strict();
 const ImportEvidenceSchema = z.object({ source: SourceSchema, context: ContextSchema.nullable(), issues: z.array(z.string()) }).strict();
@@ -78,17 +82,18 @@ function flowLegacyIssues(source: LegacySource, context: LegacyContext): string[
 function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
   if (source.record.owner === "flow" && context.owner === "flow" && context.adapterId === "flow" && context.capabilityId === "flow.saved.create") return flowLegacyIssues(source, context);
   if (source.record.owner === "graph-node" && isGraphNodeBinding(context)) return graphNodeIssues(source, context);
-  if (source.record.owner !== "balance-task" || !isBalanceTaskBinding(context)) return ["legacy_capability_mapping_unsupported"];
+  const objectType = balanceObjectType(context);
+  if (!objectType || source.record.owner !== context.owner) return ["legacy_capability_mapping_unsupported"];
   const fields = source.proposal.fields;
-  const project = canonicalProject(fields.project);
+  const project = objectType === "task" ? canonicalProject(fields.project) : undefined;
   const destinations = ["area", "project"].flatMap(objectType => {
     const canonicalId = objectType === "project" ? project : fields[objectType];
     return canonicalId ? [{ adapterId: context.adapterId, connectionId: context.connectionId, objectType, canonicalId }] : [];
   });
   const issues: string[] = [];
-  const titledProject = fields.project !== undefined && fields.project.trim().length > 0 && project === undefined;
+  const titledProject = objectType === "task" && fields.project !== undefined && fields.project.trim().length > 0 && project === undefined;
   if (!fields.area || titledProject || destinations.some(ref => ref.canonicalId.trim() !== ref.canonicalId) || canonicalWire(context.destinations.map(canonicalWire).sort()) !== canonicalWire(destinations.map(canonicalWire).sort())) issues.push("legacy_destination_ambiguous");
-  if (context.canonicalReference && (context.canonicalReference.objectType !== "task" || context.canonicalReference.canonicalId !== source.record.canonicalId)) issues.push("legacy_canonical_mapping_unsupported");
+  if (context.canonicalReference && (context.canonicalReference.objectType !== objectType || context.canonicalReference.canonicalId !== source.record.canonicalId)) issues.push("legacy_canonical_mapping_unsupported");
   return issues;
 }
 
@@ -168,7 +173,7 @@ export function projectLegacyOperation(raw: unknown, binding?: LegacyBinding): O
   }
   if ("kind" in journal.snapshot) throw new UpgradeRequired();
   const snapshot = journal.snapshot;
-  if (!binding || !isBalanceTaskBinding(binding)) throw new UpgradeRequired();
+  if (!binding || !balanceObjectType(binding)) throw new UpgradeRequired();
   const approval = journal.events.find(item => item.event.kind === "approved");
   if (approval?.event.kind !== "approved" || snapshot.capabilityId !== binding.capabilityId || snapshot.adapterId !== binding.adapterId || snapshot.connectionId !== binding.connectionId) throw new UpgradeRequired();
   const states: Partial<Record<OperationJournal["state"], OperationRecord["state"]>> = { confirmed: "confirmed", dispatching: "running", pending: "running", uncertain: "uncertain" };
@@ -179,7 +184,7 @@ export function projectLegacyOperation(raw: unknown, binding?: LegacyBinding): O
     const result = success?.event.kind === "owner-result" ? success.event.response.result : undefined;
     if (result?.kind !== "succeeded" || result.evidence.refs.length !== 1) throw new UpgradeRequired();
     const ref = result.evidence.refs[0];
-    if (ref?.adapterId !== binding.adapterId || ref.connectionId !== binding.connectionId || ref.objectType !== "task") throw new UpgradeRequired();
+    if (ref?.adapterId !== binding.adapterId || ref.connectionId !== binding.connectionId || ref.objectType !== balanceObjectType(binding)) throw new UpgradeRequired();
     canonicalId = ref.canonicalId;
     state = "created";
   }

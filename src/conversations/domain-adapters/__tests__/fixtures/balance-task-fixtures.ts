@@ -18,7 +18,8 @@ import { DomainAdapterRegistry } from "../../registry";
 import type { OperationBridge } from "../../operations/dispatch";
 import type { OperationJournalStore } from "../../operations/journal";
 import { confirmationAuthority, lifecycleRig, openJournal } from "./lifecycle-rig";
-import { balanceTaskApprovedSnapshot, balanceTaskCreateBindings, balanceTaskCreateDeclaration, createBalanceTaskBinding, createBalanceTaskFacade, type BalanceTaskBinding, type BalanceTaskCreateInput, type BalanceTaskFacade, type BalanceTaskFields } from "../../balance/task-binding";
+import { createBalanceBinding, createBalanceFacade, type BalanceCreateContract } from "../../balance/create-binding";
+import { balanceTaskApprovedSnapshot, balanceTaskCreateBindings, type BalanceTaskBinding, type BalanceTaskCreateInput, type BalanceTaskFacade, type BalanceTaskFields, type BalanceTaskReview, BALANCE_TASK_CONTRACT } from "../../balance/task-binding";
 
 export const BALANCE_TASK_CONNECTION = "connection-example";
 export const BALANCE_TASK_STACK = "test";
@@ -84,21 +85,21 @@ export async function approveBalanceTask(rig: BalanceTaskRig, operationIdValue: 
   await rig.journal.approve({ operationId: operationIdValue, idempotencyKey: operationIdValue, ownerRequestId: operationUuid(operationIdValue), snapshot, authority: balanceTaskAuthority, at: new Date(BALANCE_TASK_NOW).toISOString() });
 }
 
-export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
+export async function openBalanceTaskRig(contract: BalanceCreateContract<BalanceTaskCreateInput, BalanceTaskReview> = BALANCE_TASK_CONTRACT): Promise<BalanceTaskRig> {
   const dir = await mkdtemp(join(tmpdir(), "balance-task-binding-"));
   const db = initDatabase(join(dir, "desk.sqlite"));
   saveBalanceState(db, balanceTaskState());
   const areas = [{ id: "area-example", label: "Lab", color: "#2563eb", repos: [], goals: [] }, { id: "area-home", label: "Home", color: "#059669", repos: [], goals: [] }];
   const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas, sources: [] };
   const registry = new DomainAdapterRegistry();
-  const declaration = balanceTaskCreateDeclaration();
+  const declaration = contract.declaration();
   const registered = registry.register(declaration, balanceTaskCreateBindings());
   if (!registered.ok) throw new Error(registered.error.code);
   const { journal, closeEngine } = await openJournal(dir, registry);
-  const baseWriter = balanceWriter("task", { db, desk: () => options, now: () => BALANCE_TASK_NOW });
+  const baseWriter = balanceWriter(contract.kind, { db, desk: () => options, now: () => BALANCE_TASK_NOW });
   const build = (owner: Pick<OwnerWriter, "create" | "readback">): { binding: BalanceTaskBinding; facade: BalanceTaskFacade } => {
-    const binding = createBalanceTaskBinding({ stack: BALANCE_TASK_STACK, connectionId: BALANCE_TASK_CONNECTION, db, desk: () => options, areas: () => areas, journal, now: () => BALANCE_TASK_NOW, owner });
-    return { binding, facade: createBalanceTaskFacade({ binding, journal, areas: () => areas, state: () => loadBalanceState(db), now: () => BALANCE_TASK_NOW }) };
+    const binding = createBalanceBinding({ stack: BALANCE_TASK_STACK, connectionId: BALANCE_TASK_CONNECTION, db, desk: () => options, areas: () => areas, journal, now: () => BALANCE_TASK_NOW, owner }, contract);
+    return { binding, facade: createBalanceFacade({ binding, journal, areas: () => areas, state: () => loadBalanceState(db), now: () => BALANCE_TASK_NOW }, contract) };
   };
   let current = build(baseWriter);
   const live = (): BalanceTaskBinding => current.binding;

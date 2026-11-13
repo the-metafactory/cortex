@@ -1,28 +1,17 @@
-import type { Database } from "bun:sqlite";
+import { BALANCE_CREATE_DEDUP_RETENTION_MS, balanceCreateSupport, balanceReference as reference, balanceCreateBindings, createBalanceBinding, createBalanceFacade, type BalanceCreateContract, type BalanceCreateBindingOptions, type BalanceCreateBinding, type BalanceCreateFacadeOptions, type BalanceCreateFacade } from "./create-binding";
 import { z } from "zod";
 import type { AppState, DestinationArea } from "../../../balance";
 import { areaProjects, balanceDestinations, balanceProjectsByTitle, isBalanceProjectId, resolveBalanceProject, type BalanceDestination } from "../../../surface/mc/desk/balance-destinations";
-import { STALE_OUTLINE } from "../../../surface/mc/desk/balance-outline";
-import { balanceWriter } from "../../../surface/mc/desk/balance-conversation-writer";
-import type { DeskOptions } from "../../../surface/mc/desk/compose";
-import { operationUuid } from "../../conversation-ids";
-import { loadMeta } from "../../../surface/mc/desk/my-day";
-import type { LookupRequest, TrustedConnector } from "../../authority";
-import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../types";
-import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
+import type { AdapterDeclaration, ObjectReference } from "../types";
 import { ObjectReferenceSchema } from "../types";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, objectSchema, ref, referenceSchema } from "./schema";
-import type { DispatchOutcome } from "../operations/dispatch";
-import type { OperationJournalStore, StoredOperation } from "../operations/journal";
-import type { WriterBinding } from "../operations/writer-authority";
-import type { ApprovedSnapshot, Authority, DispatchRequest, Json, OperationLookup, OwnerResult, OwnerSupport, Provenance } from "../operations/types";
+import type { ApprovedSnapshot, OwnerSupport, Provenance } from "../operations/types";
 import { adapterErrorSchema } from "../schema-primitives";
-import { buildApprovedSnapshot, createOutcome, ownerResultKit, requestParts, resultsOf, type CreateOutcome, type OwnerResultParts } from "../operations/owner-results";
+import { buildApprovedSnapshot } from "../operations/owner-results";
 
 const CAPABILITY_ID = "balance.task.create";
-const OWNER = "balance-task";
 export const BALANCE_TASK_CREATE_SUPPORT_ID = "balance.task.create.v1";
-export const BALANCE_TASK_DEDUP_RETENTION_MS = 86_400_000;
+export const BALANCE_TASK_DEDUP_RETENTION_MS = BALANCE_CREATE_DEDUP_RETENTION_MS;
 
 const AREA_SCHEMA_REF = ref("balance.task.create.area");
 const PROJECT_SCHEMA_REF = ref("balance.task.create.project");
@@ -75,20 +64,10 @@ export function balanceTaskCreateDeclaration(): AdapterDeclaration {
   };
 }
 
-export const balanceTaskCreateBindings = (): AdapterBindings => ({ handlers: {}, observations: {} });
+export const balanceTaskCreateBindings = balanceCreateBindings;
 
 export function balanceTaskCreateSupport(connectionId: string, declarationId = BALANCE_TASK_CREATE_SUPPORT_ID): OwnerSupport {
-  return {
-    lifecycleVersion: "1.0.0",
-    adapterId: ADAPTER_ID,
-    connectionId,
-    capabilityId: CAPABILITY_ID,
-    declarationId,
-    dedup: { kind: "guaranteed", scope: "connection-capability", retentionMs: BALANCE_TASK_DEDUP_RETENTION_MS, bindsSnapshot: true, concurrent: true },
-    operationLookup: "historical",
-    conditionalUpdate: "none",
-    cancellation: "none",
-  };
+  return balanceCreateSupport(CAPABILITY_ID, connectionId, declarationId);
 }
 
 export const BalanceTaskCreateInputSchema = z.object({
@@ -107,7 +86,6 @@ export type BalanceTaskReview =
   | { kind: "refused"; reason: string; fields: BalanceTaskFields };
 
 const refusedReview = (reason: string, fields: BalanceTaskFields): BalanceTaskReview => ({ kind: "refused", reason, fields: { ...fields } });
-const reference = (connectionId: string, objectType: "area" | "project" | "task", canonicalId: string): ObjectReference => ({ adapterId: ADAPTER_ID, connectionId, objectType, canonicalId });
 
 function checkedReference(raw: ObjectReference, connectionId: string, objectType: "area" | "project"): ObjectReference {
   if (raw.adapterId !== ADAPTER_ID || raw.connectionId !== connectionId || raw.objectType !== objectType) throw new Error("balance.invalid_input");
@@ -163,6 +141,8 @@ export interface BalanceTaskSnapshotOptions {
   policy?: "local" | "cloud";
 }
 
+const taskDestinations = (input: BalanceTaskCreateInput): ObjectReference[] => [input.area, ...(input.project ? [input.project] : [])];
+
 export function balanceTaskApprovedSnapshot(options: BalanceTaskSnapshotOptions): ApprovedSnapshot {
   const input = parseBalanceTaskInput(options.input, options.connectionId);
   return buildApprovedSnapshot({
@@ -174,199 +154,20 @@ export function balanceTaskApprovedSnapshot(options: BalanceTaskSnapshotOptions)
     outputSchemaRef: OUTPUT_SCHEMA_REF,
     errorSchemaRef: ERROR_SCHEMA_REF,
     input,
-    destinations: [input.area, ...(input.project ? [input.project] : [])],
+    destinations: taskDestinations(input),
     policy: options.policy ?? "local",
   });
 }
 
-export function balanceTaskReceiptId(operationId: string): string {
-  return operationUuid(operationId);
-}
-
-const refusedEnvelope = (reason: string): BalanceTaskFacadeOutcome => ({ kind: "refused", reason, result: { state: "failed", error: `${reason} Nothing was created.` } });
-
-export type BalanceTaskReceipt = ReturnType<typeof loadMeta>["receipts"][number];
-
-export interface BalanceTaskBindingOptions {
-  stack: string;
-  connectionId: string;
-  db: Database;
-  desk: () => DeskOptions | undefined;
-  areas: () => readonly DestinationArea[];
-  journal: OperationJournalStore;
-  now?: () => number;
-  owner?: Pick<OwnerWriter, "create" | "readback">;
-  supportDeclarationId?: string;
-}
-
-export interface BalanceTaskBinding {
-  readonly declaration: AdapterDeclaration;
-  readonly support: OwnerSupport;
-  readonly bindings: AdapterBindings;
-  readonly writerBinding: WriterBinding;
-  readonly connector: Pick<TrustedConnector, "writerOwner" | "support" | "dispatch" | "lookup">;
-  receipt(operationId: string): BalanceTaskReceipt | undefined;
-  dispatch(request: DispatchRequest, signal?: AbortSignal): Promise<OwnerResult>;
-  lookup(request: LookupRequest, signal?: AbortSignal): Promise<OperationLookup>;
-  readback(operation: OperationRecord): Promise<ReadbackResult>;
-}
-
-const kit = ownerResultKit("balance");
-const succeededResult = (options: OwnerResultParts & { readonly connectionId: string; readonly canonicalId: string; readonly receipt: Json; readonly at: string }): OwnerResult => kit.succeeded(options, reference(options.connectionId, "task", options.canonicalId), options.receipt, options.at);
-const { refused: refusedResult, uncertain: uncertainResult } = kit;
-
-const jsonReceipt = (receipt: BalanceTaskReceipt | undefined, canonicalId?: string): Json => {
-  if (receipt !== undefined) return receipt;
-  if (canonicalId === undefined) return {};
-  return { canonicalId };
-};
-
-export type BalanceTaskCreateOutcome = CreateOutcome;
-export const balanceTaskCreateOutcome = createOutcome;
-
-export const balanceTaskLegacyResult = (stored: StoredOperation | null): CreateResult => kit.legacyResult(stored, "Balance");
-
-export interface BalanceTaskLifecycle {
-  activate(): Promise<boolean>;
-  dispatch(operationId: string): Promise<DispatchOutcome>;
-}
-
-export interface BalanceTaskFacadeOptions {
-  binding: BalanceTaskBinding;
-  journal: OperationJournalStore;
-  areas: () => readonly DestinationArea[];
-  state: () => AppState | null;
-  now?: () => number;
-}
-
-export type BalanceTaskFacadeOutcome =
-  | { kind: "refused"; reason: string; result: CreateResult }
-  | { kind: "dispatched"; outcome: DispatchOutcome; stored: StoredOperation | null; result: CreateResult };
-
-export interface BalanceTaskFacade {
-  review(fields: BalanceTaskFields): BalanceTaskReview;
-  create(request: CreateRequest, authority: Authority, lifecycle: BalanceTaskLifecycle): Promise<BalanceTaskFacadeOutcome>;
-}
-
-export function createBalanceTaskFacade(options: BalanceTaskFacadeOptions): BalanceTaskFacade {
-  const at = (): string => new Date((options.now ?? Date.now)()).toISOString();
-  const facade: BalanceTaskFacade = {
-    review(fields) {
-      const state = options.state();
-      if (!state) return refusedReview("Balance has no saved outline on this stack yet.", fields);
-      return reviewBalanceTask(fields, state, options.areas(), options.binding.support.connectionId);
-    },
-    async create(request, authority, lifecycle) {
-      const review = facade.review(request.fields);
-      if (review.kind !== "resolved") return refusedEnvelope(review.reason);
-      let snapshot: ApprovedSnapshot;
-      try {
-        snapshot = balanceTaskApprovedSnapshot({ connectionId: options.binding.support.connectionId, provenance: { conversationId: request.provenance.conversationId, proposalId: request.provenance.proposalId, revision: request.provenance.revision, entryId: request.provenance.entryId, link: request.provenance.link }, input: review.input });
-      } catch {
-        return refusedEnvelope("The reviewed Balance task is not an approvable task.");
-      }
-      try {
-        await options.journal.approve({ operationId: request.operationId, idempotencyKey: request.operationId, ownerRequestId: operationUuid(request.operationId), snapshot, authority, at: at() });
-      } catch {
-        return refusedEnvelope("The approved Balance task no longer matches this operation.");
-      }
-      if (!await lifecycle.activate()) return refusedEnvelope("The Balance task binding is inactive.");
-      const outcome = await lifecycle.dispatch(request.operationId);
-      const stored = await options.journal.read(request.operationId);
-      return { kind: "dispatched", outcome, stored, result: balanceTaskLegacyResult(stored) };
-    },
-  };
-  return facade;
-}
-
-export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): BalanceTaskBinding {
-  const at = (): string => new Date((options.now ?? Date.now)()).toISOString();
-  const support = balanceTaskCreateSupport(options.connectionId, options.supportDeclarationId);
-  const writer: Pick<OwnerWriter, "create" | "readback"> = options.owner ?? balanceWriter("task", { db: options.db, desk: options.desk, now: options.now });
-
-  const receipt = (operationId: string): BalanceTaskReceipt | undefined => {
-    try {
-      const id = balanceTaskReceiptId(operationId);
-      return loadMeta(options.db).receipts.find(item => item.id === id);
-    } catch {
-      return undefined;
-    }
-  };
-
-  const dispatch = async (request: DispatchRequest, signal?: AbortSignal): Promise<OwnerResult> => {
-    const reportedAt = at();
-    if (request.snapshot.adapterId !== ADAPTER_ID || request.snapshot.capabilityId !== CAPABILITY_ID || request.snapshot.connectionId !== options.connectionId) {
-      return refusedResult(request, "The approved snapshot belongs to another Balance connection or capability. Nothing was created.", reportedAt);
-    }
-    let input: BalanceTaskCreateInput;
-    try {
-      input = parseBalanceTaskInput(request.snapshot.input, options.connectionId);
-    } catch {
-      return refusedResult(request, "The approved snapshot is not a valid Balance task. Nothing was created.", reportedAt);
-    }
-    const create: CreateRequest = {
-      operationId: request.operationId,
-      type: "balance-task",
-      fields: balanceTaskLegacyFields(input),
-      activation: "none",
-      provenance: { ...request.snapshot.provenance, operationId: request.operationId },
-      signal: signal ?? new AbortController().signal,
-    };
-    const earlier = receipt(request.operationId);
-    if (earlier?.outlineId) return succeededResult({ ...requestParts(request), connectionId: options.connectionId, canonicalId: earlier.outlineId, receipt: earlier, at: reportedAt });
-    const stale = (error: unknown): boolean => error instanceof Error && error.constructor === Error && error.message === STALE_OUTLINE;
-    const call = async (): Promise<CreateResult> => writer.create(create);
-    const uncertainFrom = (error: unknown): OwnerResult => uncertainResult(request, error instanceof Error ? error.message : "The Balance owner call failed without a result.", at(), jsonReceipt(receipt(request.operationId)));
-    let result: CreateResult;
-    try {
-      result = await call();
-    } catch (error) {
-      if (!stale(error)) return uncertainFrom(error);
-      try {
-        result = await call();
-      } catch (retry) {
-        if (stale(retry)) return refusedResult(request, STALE_OUTLINE, at());
-        return uncertainFrom(retry);
-      }
-    }
-    if (result.state === "created") return succeededResult({ ...requestParts(request), connectionId: options.connectionId, canonicalId: result.canonicalId, receipt: jsonReceipt(receipt(request.operationId), result.canonicalId), at: at() });
-    if (result.state === "failed") return refusedResult(request, result.error, at());
-    return kit.accepted(request, jsonReceipt(receipt(request.operationId), result.receipt), at());
-  };
-
-  const lookup = async (request: LookupRequest): Promise<OperationLookup> => {
-    const checkedAt = at();
-    const checked = await kit.approvedForLookup(options.journal, request, checkedAt, "Balance");
-    if ("reply" in checked) return checked.reply;
-    const { stored, snapshotDigest, attempt, replies: { respond, unknown } } = checked;
-    const found = receipt(request.operationId);
-    if (found?.outlineId) {
-      const response = succeededResult({ operationId: request.operationId, attemptId: attempt.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest, connectionId: options.connectionId, canonicalId: found.outlineId, receipt: found, at: checkedAt });
-      return respond({ kind: "known", response });
-    }
-    const success = resultsOf(stored).findLast(response => response.result.kind === "succeeded");
-    if (success?.result.kind === "succeeded") return respond({ kind: "known", response: success });
-    const failure = resultsOf(stored).findLast(response => response.result.kind === "failed");
-    if (failure?.result.kind === "failed" && failure.result.evidence.ownerRequestId === request.ownerRequestId) return respond({ kind: "no-effect", evidence: failure.result.evidence });
-    return unknown("balance.receipt_missing", "Balance keeps no receipt for this operation.");
-  };
-
-  const connector: Pick<TrustedConnector, "writerOwner" | "support" | "dispatch" | "lookup"> = {
-    writerOwner: OWNER,
-    support,
-    dispatch: (request, signal) => dispatch(request, signal),
-    lookup: request => lookup(request),
-  };
-
-  return {
-    declaration: balanceTaskCreateDeclaration(),
-    support,
-    bindings: balanceTaskCreateBindings(),
-    writerBinding: { stack: options.stack, owner: OWNER, adapterId: ADAPTER_ID, connectionId: options.connectionId, capabilityId: CAPABILITY_ID },
-    connector,
-    receipt,
-    dispatch,
-    lookup,
-    readback: operation => writer.readback(operation),
-  };
-}
+export const BALANCE_TASK_CONTRACT = {
+  kind: "task", owner: "balance-task", capabilityId: CAPABILITY_ID,
+  declaration: balanceTaskCreateDeclaration, support: balanceTaskCreateSupport,
+  parse: parseBalanceTaskInput, legacyFields: balanceTaskLegacyFields,
+  destinations: taskDestinations,
+  review: reviewBalanceTask, refusedReview, snapshot: balanceTaskApprovedSnapshot,
+} satisfies BalanceCreateContract<BalanceTaskCreateInput, BalanceTaskReview>;
+export const createBalanceTaskBinding = (options: BalanceCreateBindingOptions): BalanceCreateBinding => createBalanceBinding(options, BALANCE_TASK_CONTRACT);
+export const createBalanceTaskFacade = (options: BalanceCreateFacadeOptions): BalanceCreateFacade<BalanceTaskReview> => createBalanceFacade(options, BALANCE_TASK_CONTRACT);
+export type BalanceTaskFacade = BalanceCreateFacade<BalanceTaskReview>;
+export { balanceCreateReceiptId as balanceTaskReceiptId, balanceCreateOutcome as balanceTaskCreateOutcome, balanceCreateLegacyResult as balanceTaskLegacyResult } from "./create-binding";
+export type { BalanceCreateReceipt as BalanceTaskReceipt, BalanceCreateBindingOptions as BalanceTaskBindingOptions, BalanceCreateBinding as BalanceTaskBinding, BalanceCreateOutcome as BalanceTaskCreateOutcome, BalanceCreateLifecycle as BalanceTaskLifecycle, BalanceCreateFacadeOptions as BalanceTaskFacadeOptions, BalanceCreateFacadeOutcome as BalanceTaskFacadeOutcome } from "./create-binding";

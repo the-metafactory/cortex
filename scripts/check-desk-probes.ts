@@ -84,6 +84,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs a browser and a disposable temporary stack: it seeds legacy records, runs the cutover and approves the card in Playwright Chromium",
   },
   {
+    file: "probe-desk-balance-project-cutover.ts",
+    reason: "needs a browser and a disposable temporary stack: it seeds legacy projects, runs their independent cutover and approves the card in Playwright Chromium",
+  },
+  {
     file: "probe-desk-balance-drag.ts",
     reason: "needs a browser: it verifies Balance dragging in Playwright Chromium",
   },

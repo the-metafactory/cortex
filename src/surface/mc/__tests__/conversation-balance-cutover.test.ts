@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { findNode, type OutlineNode } from "../../../balance";
-import { balanceTaskCreateBindings, balanceTaskCreateDeclaration } from "../../../conversations/domain-adapters/balance/task-binding";
+import { BALANCE_TASK_CONTRACT } from "../../../conversations/domain-adapters/balance/task-binding";
+import { BALANCE_PROJECT_CONTRACT } from "../../../conversations/domain-adapters/balance/project-binding";
 import { readLegacyImportWatermark, readOperationEvidence } from "../../../conversations/domain-adapters/operations/legacy";
 import { DomainAdapterRegistry } from "../../../conversations/domain-adapters/registry";
 import type { WriterCutoverSteps, WriterPlan, WriterRecord } from "../../../conversations/domain-adapters/operations/writer-authority";
@@ -10,10 +11,10 @@ import { BALANCE_TASK_CONNECTION, balanceTaskState, taskFields } from "../../../
 import { HandledLedger } from "../desk/actions";
 import { balanceWriter } from "../desk/balance-conversation-writer";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
-import { balanceTaskRoute } from "../desk/balance-task-cutover";
+import { balanceCreateRoute } from "../desk/balance-create-cutover";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { conversationSources, operationUuid } from "../desk/conversation-sources";
-import { balanceCutoverFixture, balanceTasks, legacyInFlightCutover } from "../desk/fixtures/balance-cutover";
+import { BALANCE_CUTOVER_INBOX_ITEM, balanceCutoverFixture, balanceTasks, legacyInFlightCutover } from "../desk/fixtures/balance-cutover";
 import { loadMeta } from "../desk/my-day";
 import { conversationWriterRig } from "./conversation-writer-rig";
 
@@ -27,24 +28,26 @@ function deskOptions(): DeskOptions {
   return { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [{ id: AREA, label: "Lab", color: "", repos: [], goals: [], policy: "local" }, { id: "area-home", label: "Home", color: "", repos: [], goals: [] }], sources: [] };
 }
 
-async function openRig() {
+async function openRigFor(kind: "task" | "project") {
+  const contract = kind === "task" ? BALANCE_TASK_CONTRACT : BALANCE_PROJECT_CONTRACT;
+  const owner = contract.owner;
   const db = writerRig.database();
   saveBalanceState(db, balanceTaskState());
   const desk = deskOptions();
   const runtime: DeskRuntime = { ledger: new HandledLedger(), options: desk };
   const opened = await writerRig.open<Reply>(db, runtime);
   const registry = new DomainAdapterRegistry();
-  const registered = registry.register(balanceTaskCreateDeclaration(), balanceTaskCreateBindings());
+  const registered = registry.register(contract.declaration(), { handlers: {}, observations: {} });
   if (!registered.ok) throw new Error(registered.error.code);
   const journal = opened.host.lifecycleJournal(registry);
   const writers = opened.host.lifecycleWriters();
-  const fixture = balanceCutoverFixture({ db, desk: () => desk, journal, writers });
-  await opened.host.attachSources(conversationSources({ db, desk: () => desk, balanceTaskCutover: () => fixture.cutover }));
+  const fixture = balanceCutoverFixture({ db, desk: () => desk, journal, writers, contract, fences: opened.host.lifecycleFences() });
+  await opened.host.attachSources(conversationSources({ db, desk: () => desk, [kind === "task" ? "balanceTaskCutover" : "balanceProjectCutover"]: () => fixture.cutover, deskItems: () => Promise.resolve([BALANCE_CUTOVER_INBOX_ITEM]) }));
   const tasks = (title: string): OutlineNode[] => balanceTasks(db, title);
   const receipts = () => loadMeta(db).receipts;
   const unwrap = (reply: { body: Reply }): ProposalView => reply.body.proposal;
   const talk = (conversationId: string) => {
-    const propose = async (fields: Record<string, string>): Promise<ProposalView> => unwrap(await opened.call("POST", `/api/conversations/${conversationId}/proposals`, { proposalId: randomUUID(), type: "balance-task", fields }));
+    const propose = async (fields: Record<string, string>, type: string = owner): Promise<ProposalView> => unwrap(await opened.call("POST", `/api/conversations/${conversationId}/proposals`, { proposalId: randomUUID(), type, fields }));
     const revise = async (view: ProposalView, fields: Record<string, string>): Promise<ProposalView> => unwrap(await opened.call("PATCH", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}`, { revision: view.proposal.revision, fields }));
     const confirm = async (view: ProposalView, extra: Record<string, unknown> = {}) => opened.call("POST", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest, ...extra });
     const list = async (): Promise<{ proposals: ProposalView[]; grants: Grant[] }> => (await opened.call("GET", `/api/conversations/${conversationId}/proposals`)).body as unknown as { proposals: ProposalView[]; grants: Grant[] };
@@ -56,10 +59,11 @@ async function openRig() {
     return writers.resume(begun.bindingKey, steps);
   };
   const start = async (title: string) => talk(await opened.start(title));
-  return { db, desk, host: opened.host, journal, writers, tasks, receipts, runCutover, start, ...(await start("Cutover conversation")) };
+  return { fixture, kind, owner, contract, inFlight: () => legacyInFlightCutover(journal, { kind }), db, desk, host: opened.host, journal, writers, tasks, receipts, runCutover, start, ...(await start("Cutover conversation")) };
 }
 
-describe("Balance task creation after the per-binding cutover", () => {
+describe.each(["task", "project"] as const)("Balance %s creation after its own cutover", kind => {
+  const openRig = () => openRigFor(kind);
   test("an existing proposal keeps its identity and edits, the saved task keeps its receipt, and a repeated approval creates one task", async () => {
     const rig = await openRig();
     const created = rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "Before the cutover" }))));
@@ -74,7 +78,7 @@ describe("Balance task creation after the per-binding cutover", () => {
     const draft = await rig.propose(taskFields({ title: "Draft before the cutover" }));
     const edited = await rig.revise(draft, taskFields({ title: "Edited before the cutover", note: "Kept through cutover" }));
 
-    await rig.runCutover(legacyInFlightCutover(rig.journal).steps, legacyInFlightCutover(rig.journal).plan);
+    await rig.runCutover(rig.inFlight().steps, rig.inFlight().plan);
     const afterCutover = await rig.list();
     expect(afterCutover.proposals.find(item => item.proposal.proposalId === created.proposal.proposalId)?.feedback).toBe("created");
     const keptEdited = afterCutover.proposals.find(item => item.proposal.proposalId === edited.proposal.proposalId);
@@ -95,7 +99,7 @@ describe("Balance task creation after the per-binding cutover", () => {
 
   test("an operation running at cutover imports uncertain without retry, and only the lifecycle writer creates afterwards", async () => {
     const rig = await openRig();
-    const inFlight = legacyInFlightCutover(rig.journal);
+    const inFlight = rig.inFlight();
     const active = await rig.runCutover(inFlight.steps, inFlight.plan);
     expect(active.phase).toBe("active");
     const imported = await rig.journal.read(inFlight.source.record.operationId);
@@ -105,8 +109,8 @@ describe("Balance task creation after the per-binding cutover", () => {
     expect(evidence.kind).toBe("legacy");
     expect(evidence.kind === "legacy" && evidence.retryAllowed).toBe(false);
     expect(evidence.kind === "legacy" && evidence.dispatchAllowed).toBe(false);
-    expect(await rig.writers.legacyAllowed({ stack: "test", owner: "balance-task", adapterId: "balance", connectionId: BALANCE_TASK_CONNECTION, capabilityId: "balance.task.create" }, true)).toBe(false);
-    expect(await rig.writers.legacyOwnerAllowed("test", "balance-task")).toBe(false);
+    expect(await rig.writers.legacyAllowed({ stack: "test", owner: rig.owner, adapterId: "balance", connectionId: BALANCE_TASK_CONNECTION, capabilityId: `balance.${kind}.create` }, true)).toBe(false);
+    expect(await rig.writers.legacyOwnerAllowed("test", rig.owner)).toBe(false);
 
     const created = rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "After the cutover" }))));
     expect(created.feedback).toBe("created");
@@ -121,17 +125,17 @@ describe("Balance task creation after the per-binding cutover", () => {
 
   test("an operation left uncertain after cutover still checks the owner through the routed readback", async () => {
     const rig = await openRig();
-    const inFlight = legacyInFlightCutover(rig.journal);
+    const inFlight = rig.inFlight();
     await rig.runCutover(inFlight.steps, inFlight.plan);
     const draft = await rig.propose(taskFields({ title: "Uncertain after cutover" }));
     expect(draft.feedback).toBe("proposed");
     const operationId = `${rig.conversationId}:${draft.proposal.proposalId}:${draft.proposal.revision}`;
-    let operation = await rig.host.propose(rig.conversationId, draft.proposal.proposalId, draft.proposal.revision, "balance-task", proposalDigest("balance-task", draft.proposal.fields));
+    let operation = await rig.host.propose(rig.conversationId, draft.proposal.proposalId, draft.proposal.revision, rig.owner, proposalDigest(rig.owner, draft.proposal.fields));
     operation = await rig.host.transition(operation.operationId, "confirmed", { authority: { kind: "confirmation", transport: "web" } });
     operation = await rig.host.transition(operation.operationId, "running");
     operation = await rig.host.transition(operation.operationId, "uncertain", { note: "The owner call failed without a result." });
-    const owner = balanceWriter("task", { db: rig.db, desk: () => rig.desk });
-    const created = await owner.create({ operationId, type: "balance-task", fields: draft.proposal.fields, activation: "none", signal: new AbortController().signal, provenance: { conversationId: rig.conversationId, proposalId: draft.proposal.proposalId, revision: draft.proposal.revision, operationId, entryId: null, link: `?desk=conversation&conversation=${rig.conversationId}` } });
+    const owner = balanceWriter(kind, { db: rig.db, desk: () => rig.desk });
+    const created = await owner.create({ operationId, type: rig.owner, fields: draft.proposal.fields, activation: "none", signal: new AbortController().signal, provenance: { conversationId: rig.conversationId, proposalId: draft.proposal.proposalId, revision: draft.proposal.revision, operationId, entryId: null, link: `?desk=conversation&conversation=${rig.conversationId}` } });
     expect(created.state).toBe("created");
     expect(await rig.host.readback(operation)).toEqual({ found: true, canonicalId: created.state === "created" ? created.canonicalId : "" });
     const checked = await rig.check(draft);
@@ -145,12 +149,12 @@ describe("Balance task creation after the per-binding cutover", () => {
     const rig = await openRig();
     const standing = await rig.propose(taskFields({ title: "Under the old grant" }));
     expect(rig.unwrap(await rig.confirm(standing, { grant: { scope: "conversation" } })).feedback).toBe("created");
-    const old = (await rig.list()).grants.find(grant => grant.type === "balance-task");
+    const old = (await rig.list()).grants.find(grant => grant.type === rig.owner);
     expect(old).toBeDefined();
     expect(old?.connectionId).toBeUndefined();
     expect(old?.renewal).toBeUndefined();
 
-    await rig.runCutover(legacyInFlightCutover(rig.journal).steps, legacyInFlightCutover(rig.journal).plan);
+    await rig.runCutover(rig.inFlight().steps, rig.inFlight().plan);
     const lapsed = (await rig.list()).grants.find(grant => grant.grantId === old?.grantId);
     expect(lapsed?.renewal?.reason).toContain("Confirm one creation again");
     expect(lapsed?.supersededAt).toBeUndefined();
@@ -163,11 +167,16 @@ describe("Balance task creation after the per-binding cutover", () => {
     expect(renewed.feedback).toBe("created");
     const [task] = rig.tasks("Asks once after cutover");
     expect(task?.id).toBe(renewed.operation?.canonicalId);
-    const grants = (await rig.list()).grants.filter(grant => grant.type === "balance-task");
+    const grants = (await rig.list()).grants.filter(grant => grant.type === rig.owner);
     const fresh = grants.find(grant => grant.grantId !== old?.grantId);
     expect(fresh?.connectionId).toBe(BALANCE_TASK_CONNECTION);
+    expect(fresh?.renewalRequired).toBe(false);
     expect(fresh?.destinations).toEqual([{ objectType: "area", canonicalId: AREA }]);
     expect(grants.find(grant => grant.grantId === old?.grantId)?.supersededAt).toBeDefined();
+
+    const underBoundGrant = await rig.propose(taskFields({ title: "Under the bound grant" }));
+    expect(underBoundGrant.feedback).toBe("created");
+    expect(rig.tasks("Under the bound grant")).toHaveLength(1);
 
     const elsewhere = await rig.propose(taskFields({ area: "area-home", title: "Into another area" }));
     expect(elsewhere.feedback).toBe("proposed");
@@ -185,7 +194,7 @@ describe("Balance task creation after the per-binding cutover", () => {
     expect(other.unwrap(await other.confirm(await other.propose(taskFields({ title: "Under the second grant" })), { grant: { scope: "conversation" } })).feedback).toBe("created");
     const firstOld = (await rig.list()).grants[0];
     const secondOld = (await other.list()).grants[0];
-    await rig.runCutover(legacyInFlightCutover(rig.journal).steps, legacyInFlightCutover(rig.journal).plan);
+    await rig.runCutover(rig.inFlight().steps, rig.inFlight().plan);
     expect((await other.list()).grants.find(grant => grant.grantId === secondOld?.grantId)?.renewal).toBeDefined();
 
     const renewed = rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "Renewed here" })), { grant: { scope: "conversation" } }));
@@ -199,7 +208,7 @@ describe("Balance task creation after the per-binding cutover", () => {
 
   test("a removed area denies approval with nothing created, and a read-only downgrade keeps the sidecar evidence", async () => {
     const rig = await openRig();
-    const inFlight = legacyInFlightCutover(rig.journal);
+    const inFlight = rig.inFlight();
     const active = await rig.runCutover(inFlight.steps, inFlight.plan);
     const before = rig.receipts().length;
     rig.desk.areas = rig.desk.areas.filter(area => area.id !== AREA);
@@ -212,7 +221,7 @@ describe("Balance task creation after the per-binding cutover", () => {
 
     const retired = await rig.writers.begin({ ...inFlight.plan, cutoverId: "read-only-downgrade" }, active.revision);
     expect(retired.phase).toBe("disabled");
-    expect((await balanceTaskRoute(rig.writers, "test")).kind).toBe("disabled");
+    expect((await balanceCreateRoute(rig.writers, "test", rig.contract)).kind).toBe("disabled");
     const afterDowngrade = rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "After the downgrade" }))));
     expect(afterDowngrade.feedback).toBe("failed");
     expect(afterDowngrade.operation?.history.at(-1)?.detail).toContain("cutover has not completed");
@@ -222,4 +231,45 @@ describe("Balance task creation after the per-binding cutover", () => {
     expect(evidence.kind === "legacy" && evidence.retryAllowed).toBe(false);
     expect(await readLegacyImportWatermark(rig.journal, inFlight.plan.sources)).toBeDefined();
   });
+  test("a hard trigger fences this binding permanently away from legacy while Inbox remains native", async () => {
+    const rig = await openRig();
+    const inFlight = rig.inFlight();
+    await rig.runCutover(inFlight.steps, inFlight.plan);
+    await rig.host.lifecycleFences().trigger({ kind: "duplicate_owner_object", target: { adapterId: "balance", connectionId: BALANCE_TASK_CONNECTION, capabilityId: `balance.${kind}.create` } });
+    expect(rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "Fenced creation" }))))).toMatchObject({ feedback: "failed" });
+    expect(rig.tasks("Fenced creation")).toHaveLength(0);
+    expect(await rig.writers.legacyOwnerAllowed("test", rig.owner)).toBe(false);
+    expect(await rig.writers.legacyOwnerAllowed("test", "balance-inbox-task")).toBe(true);
+    expect(await rig.writers.legacyOwnerAllowed("test", kind === "task" ? "balance-project" : "balance-task")).toBe(true);
+  });
+
+  test("the native Inbox writer and the lifecycle writer share the Balance transaction after cutover", async () => {
+    const rig = await openRig();
+    const inFlight = rig.inFlight();
+    await rig.runCutover(inFlight.steps, inFlight.plan);
+    const native = rig.unwrap(await rig.confirm(await rig.propose({ item: BALANCE_CUTOVER_INBOX_ITEM.key, title: BALANCE_CUTOVER_INBOX_ITEM.title }, "balance-inbox-task")));
+    expect(native.feedback).toBe("created");
+    const created = rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "Lifecycle beside Inbox" }))));
+    expect(created.feedback).toBe("created");
+    expect(loadMeta(rig.db).inbox.map(item => item.id)).toContain(native.operation!.canonicalId!);
+    for (const view of [native, created]) expect(rig.receipts().find(receipt => receipt.id === operationUuid(view.operation!.operationId))?.outlineId).toBe(view.operation!.canonicalId);
+    expect(await rig.journal.read(native.operation!.operationId)).toBeNull();
+    expect((await rig.journal.read(created.operation!.operationId))?.journal.state).toBe("succeeded");
+    expect(await rig.writers.legacyOwnerAllowed("test", "balance-inbox-task")).toBe(true);
+  });
+
+  test("a changed writer between review and creation refuses the old approval at the lifecycle entry", async () => {
+    const rig = await openRig();
+    const inFlight = rig.inFlight();
+    await rig.runCutover(inFlight.steps, inFlight.plan);
+    const route = await rig.fixture.cutover.route();
+    if (route.kind !== "active") throw new Error("Expected active cutover");
+    const operationId = `${rig.conversationId}:stale-writer:1`;
+    const writer = rig.fixture.cutover.writer(route);
+    const result = await writer.create({ writerRevision: `${route.cutoverRef}-retired`, operationId, type: rig.owner, fields: taskFields({ title: "Stale writer review" }), activation: "none", signal: new AbortController().signal, provenance: { conversationId: rig.conversationId, proposalId: "stale-writer", revision: 1, operationId, entryId: null, link: `?desk=conversation&conversation=${rig.conversationId}` } });
+    expect(result).toMatchObject({ state: "failed", error: expect.stringContaining("writer changed since review") });
+    expect(rig.tasks("Stale writer review")).toHaveLength(0);
+    expect(await rig.journal.read(operationId)).toBeNull();
+  });
+
 });

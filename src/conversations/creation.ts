@@ -261,12 +261,14 @@ export class ConversationCreation {
     await this.settleCutover();
     const grants = (await this.allGrants()).filter(grant => samePrincipal(grant.principal, principal)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const writers = await this.host.lifecycleWriters().inspect();
+    const cutovers = await this.host.cutovers();
     const views = new Map<string, Grant>();
     await Promise.all([...new Set(grants.map(g => g.type))].map(async type => {
       const group = grants.filter(g => g.type === type);
       const lifecycle = await this.host.creationLifecycle(type);
       const retired = Object.values(writers.records).some(history => history.at(-1)?.plan.binding.owner === type);
-      const projected = lifecycle ? await lifecycle.grantViews(group) : group.map(grant => retired ? { ...grant, renewalRequired: true } : grant);
+      const cutover = cutovers[type];
+      const projected = lifecycle ? await lifecycle.grantViews(group) : group.map(grant => retired ? { ...grant, renewalRequired: grant.renewalRequired === true || !cutover?.reviewRevision || grant.connectionId !== cutover.connectionId || !grant.destinations?.length } : grant);
       for (const grant of projected) views.set(grant.grantId, grant);
     }));
     return grants.map(grant => views.get(grant.grantId) ?? { ...grant, renewalRequired: true });
@@ -278,7 +280,7 @@ export class ConversationCreation {
 
   private async reviewRevision(proposal: Proposal): Promise<string | undefined> {
     const lifecycle = proposal.type ? await this.host.creationLifecycle(proposal.type) : undefined;
-    return lifecycle?.reviewRevision();
+    return lifecycle ? lifecycle.reviewRevision() : proposal.type ? (await this.host.cutovers())[proposal.type]?.reviewRevision : undefined;
   }
 
   private async review(proposal: Proposal, revision = this.reviewRevision(proposal)): Promise<{ digest: string; revision?: string }> {
@@ -488,7 +490,8 @@ export class ConversationCreation {
     const { promise: timedOut, resolve } = Promise.withResolvers<"timeout">();
     const timer = setTimeout(() => { controller.abort(); resolve("timeout"); }, this.timeoutMs);
     let result: CreateResult | "timeout";
-    const request: CreateRequest = { operationId: operation.operationId, type, fields: clean(proposal.fields), activation: "none", signal: controller.signal, provenance: { conversationId: proposal.conversationId, proposalId: proposal.proposalId, revision: proposal.revision, operationId: operation.operationId, entryId: proposal.entryId, link: `?desk=conversation&conversation=${proposal.conversationId}` } };
+    const writerRevision = reviewRevision ?? (authority.kind === "grant" ? await this.reviewRevision(proposal) : undefined);
+    const request: CreateRequest = { ...(writerRevision !== undefined ? { writerRevision } : {}), operationId: operation.operationId, type, fields: clean(proposal.fields), activation: "none", signal: controller.signal, provenance: { conversationId: proposal.conversationId, proposalId: proposal.proposalId, revision: proposal.revision, operationId: operation.operationId, entryId: proposal.entryId, link: `?desk=conversation&conversation=${proposal.conversationId}` } };
     try {
       result = await Promise.race([
         lifecycle ? lifecycle.create(request, authority, actor, reviewRevision) : writer.create(request),
