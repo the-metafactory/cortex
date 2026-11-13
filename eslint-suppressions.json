@@ -3140,9 +3140,6 @@
     }
   },
   "src/common/untrusted-fence.ts": {
-    "cortex/no-comments": {
-      "count": 6
-    },
     "no-control-regex": {
       "count": 1
     }

@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { stripControlCharacters } from "../../../../common/untrusted-fence";
 
 export const THREAD_TYPES = ["question", "topic", "making"] as const;
 export const THREAD_STATES = ["active", "parked", "closed"] as const;
@@ -86,6 +87,8 @@ export interface MaterialLink {
   kind: string;
   label: string;
   href?: string;
+  text?: string;
+  textTruncated?: true;
 }
 
 export interface LogEntry {
@@ -251,11 +254,10 @@ function parseNotes(text: string): Parsed<IvyNote[]> {
   return { ok: true, value: notes };
 }
 
-const bullets = (text: string): string[] =>
-  text
-    .split("\n")
-    .map((l) => /^[-*][ \t]+(.*)$/.exec(l.trim())?.[1]?.trim() ?? "")
-    .filter((l) => l !== "");
+const BULLET = /^[-*][ \t]+(.*)$/;
+const bulletItem = (line: string | undefined): string => BULLET.exec(line?.trim() ?? "")?.[1]?.trim() ?? "";
+
+const bullets = (text: string): string[] => text.split("\n").map(bulletItem).filter((l) => l !== "");
 
 const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
 const KIND_PREFIX = /^([a-z][a-z-]*):[ \t]+(.+)$/;
@@ -269,7 +271,35 @@ export function parseMaterialItem(item: string): MaterialLink {
   return link ? { kind, label: link[1] ?? rest, href: link[2] ?? "" } : { kind, label: rest };
 }
 
-const parseMaterial = (text: string): MaterialLink[] => bullets(text).map(parseMaterialItem);
+export const MAX_MATERIAL_TEXT = 2000;
+const QUOTE_MARK = /^> ?/;
+
+export const continuation = (line: string | undefined): boolean => line !== undefined && line.startsWith("  ") && line.trim() !== "";
+
+export function entryBlock(lines: readonly string[], at: number): string[] {
+  let end = at + 1;
+  while (continuation(lines[end])) end++;
+  return lines.slice(at, end);
+}
+
+function materialText(lines: readonly string[]): Pick<MaterialLink, "text" | "textTruncated"> {
+  const text = stripControlCharacters(lines.map((l) => l.slice(2).replace(QUOTE_MARK, "")).join("\n")).trim();
+  if (text === "") return {};
+  return text.length > MAX_MATERIAL_TEXT ? { text: text.slice(0, MAX_MATERIAL_TEXT), textTruncated: true } : { text };
+}
+
+function parseMaterial(text: string): MaterialLink[] {
+  const lines = text.split("\n");
+  const out: MaterialLink[] = [];
+  for (let at = 0; at < lines.length; at++) {
+    const item = bulletItem(lines[at]);
+    if (!item) continue;
+    const block = entryBlock(lines, at);
+    out.push({ ...parseMaterialItem(item), ...materialText(block.slice(1)) });
+    at += block.length - 1;
+  }
+  return out;
+}
 
 function parseResponses(text: string): Parsed<StudioResponse[]> {
   const out: StudioResponse[] = [];

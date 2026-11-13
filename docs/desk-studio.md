@@ -118,6 +118,7 @@ Rules:
   - `sample: true` marks an example note that no model wrote.
 - **Responses** are your answers to Ivy, as H3 entries headed by an ISO time with a zone. An optional first line `re: <time>` names the note answered; the rest is the text. **Ivy waits on you** while Ivy's latest note has `status: open` and no response is dated at or after it.
 - **Material** and **Log** are bullet lists. A material item is `kind: [label](href)` or `kind: label`; without a kind it is a `link`. A log item may start with an ISO date.
+- Lines indented by two spaces under a material bullet are that item's **text**, with a leading `> ` removed: a mail filed with its text writes its first paragraph there, and you or Ivy can paste an excerpt under any item. Capture undo removes the bullet with these lines. Cortex never fetches a material link to get text.
 
 ## Inbox file
 
@@ -167,6 +168,9 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 - `problems`: one entry per file that could not be read or parsed, with its `path` and a `reason`. A broken file never breaks the response.
 
 Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText`, its effective `policy` and its sparring `personas`.
+
+A material item carries `text` when the file holds indented lines under its bullet. The text is cut at 2000 characters, and a cut item carries `textTruncated: true`; the full text stays in the file. Control characters are removed. The response carries `"materialText": "untrusted"`: material text is data from mail and pasted sources, so a client renders it as plain text, never as Markdown or HTML, and never turns it into links.
+
 
 `GET /api/desk/studio/relations?thread=<slug>` returns one thread's **Relates to** groups, computed on request and never stored:
 
