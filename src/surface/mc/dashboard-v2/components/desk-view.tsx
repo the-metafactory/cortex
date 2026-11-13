@@ -20,6 +20,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
+import { InterruptionsSection, switchInterruption, type InterruptionSwitch } from "./desk-interruptions";
 import { fetchInviteProposal, fetchMailThreadProposal, noteMailOpened, submitAdapterAction, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareAcceptDraft, prepareDeclineDraft, prepareProposalDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
@@ -724,6 +725,12 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
+  const switchReason = async (change: InterruptionSwitch): Promise<void> => {
+    const result = await switchInterruption(change);
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
   const correctMail = async (item: DeskItem, said: MailCorrection, correction?: number): Promise<void> => {
     const request = (): Promise<Outcome> => submitMailAction({ action: "correct", key: item.key, said, ...(correction !== undefined ? { correction } : {}) });
     if (CORRECTION_MOVES[said]) {
@@ -963,6 +970,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           )}
 
           <RankingSection corrections={view.corrections} onUndo={(c) => void correct(c.kind, c.source, null)} />
+
+          <InterruptionsSection reasons={view.interruptions} onSwitch={(change) => void switchReason(change)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">Systems</h3>

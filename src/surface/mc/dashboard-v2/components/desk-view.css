@@ -213,6 +213,9 @@
 .desk-vips li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;font-size:14px;color:var(--ink2)}
 .desk-vips li button{width:22px;height:22px;border-radius:6px;color:var(--faint);font-size:16px;line-height:1;text-align:center}
 .desk-vips li button:hover{background:#f4f4f5;color:var(--ink)}
+.desk-interruptions li{flex-wrap:wrap;justify-content:flex-start}
+.desk-interruptions label{display:flex;align-items:center;gap:8px;cursor:pointer}
+.desk-interruptions small{flex-basis:100%;padding-left:24px;color:var(--faint);font-size:12px}
 
 .desk-group{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:0;border-radius:6px;color:inherit}
 .desk-group:hover div,.desk-group[aria-pressed="true"] div{color:var(--ink)}

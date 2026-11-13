@@ -472,6 +472,17 @@ describe("ranking corrections on the Desk", () => {
     expect(html).toContain('aria-label="Undo &quot;Less like this&quot; for Goals that need a look, from vigil"');
     expect(renderToStaticMarkup(<RankingSection corrections={[]} onUndo={() => {}} />)).toBe("");
   });
+
+  it("shows the interruption switches directly below Ranking", () => {
+    const corrections = [{ kind: "goal" as const, source: "vigil", mode: "less" as const, label: "Goals", createdAt: NOW }];
+    const interruptions = [{ code: "mail.ranked" as const, label: "Other mail ranked for today", on: true, available: true, setBy: "default" as const }];
+    const html = renderToStaticMarkup(<DeskBody view={{ ...view, corrections, interruptions }} error={null} onOpenMissionControl={() => {}} />);
+    const ranking = html.indexOf('aria-label="Ranking"');
+    const switches = html.indexOf('aria-label="Interruptions"');
+    expect(ranking).toBeGreaterThan(-1);
+    expect(switches).toBeGreaterThan(ranking);
+    expect(html.slice(ranking, switches).match(/<section/g)).toHaveLength(1);
+  });
 });
 
 describe("a goal item's actions", () => {
