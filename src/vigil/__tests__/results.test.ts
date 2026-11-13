@@ -9,8 +9,8 @@ import { getAttentionItem, listOpenAttention, setAttentionItemStatus } from "../
 import { handleAttentionLifecycle, handleListAttention } from "../../surface/mc/api/attention";
 import { handleListVigilSubjects } from "../../surface/mc/api/vigil";
 import { buildDigest, sendDigest } from "../digest";
-import { renderResult, somaGoalWording } from "../result-render";
-import { expireResults, pendingResults, RESULT_TTL_MS, type VigilResultRow } from "../results";
+import { renderResult, resultPresentation, somaGoalWording } from "../result-render";
+import { expireResults, getResult, pendingResults, RESULT_TTL_MS } from "../results";
 import { ingestFromSourceStack, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope } from "./fixtures";
 
 const REF = "soma:outputs/weekly.md";
@@ -22,8 +22,8 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "vigil-results-"));
   mkdirSync(join(home, "outputs"));
   mkdirSync(join(home, "profile", "goals"), { recursive: true });
-  writeFileSync(join(home, "outputs", "weekly.md"), "# Private file title\nPrivate body contents");
-  writeFileSync(join(home, "profile", "goals", "G1.md"), "---\nid: G1\nstatus: active\n---\nPrivate goal wording\nPrivate goal body");
+  writeFileSync(join(home, "outputs", "weekly.md"), "# Private file title\nPrivate file contents");
+  writeFileSync(join(home, "profile", "goals", "G1.md"), "---\nid: G1\nstatus: active\n---\nPrivate goal wording\nPrivate goal contents");
 });
 afterEach(() => { db.close(); rmSync(home, { recursive: true, force: true }); });
 
@@ -34,7 +34,7 @@ function report(overrides: Parameters<typeof ledgerEnvelope>[0] = {}, options: {
   const delta = ingestFromSourceStack(db, envelope, Date.parse(String(envelope.payload.ended_at)), options);
   return { envelope, delta };
 }
-const result = (ref = REF) => db.query<VigilResultRow, [string]>("SELECT * FROM vigil_results WHERE result_ref = ?").get(ref)!;
+const result = (ref = REF) => getResult(db, ref)!;
 const later = (ms: number) => new Date(ENDED_AT + ms).toISOString();
 const options = () => ({ db, now: ENDED_AT, somaHome: home });
 const sender = () => mock(async (_text: string) => ({ delivered: true as const, messageId: "digest" }));
@@ -117,19 +117,19 @@ test("digest reads fresh goal wording and file title only at render time, never 
   report({ serves: { goal: "G1" } });
   const text = await buildDigest({ ...options(), resultBaseUrl: "https://mc.example.test/" });
   expect(text).toContain("waiting for you\nPrivate goal wording — Private file title — https://mc.example.test/results/soma%3Aoutputs%2Fweekly.md");
-  expect(text).not.toContain("Private body contents");
+  expect(text).not.toContain("Private file contents");
   const response = await handleListAttention(db, { somaHome: home, resultBaseUrl: "https://mc.example.test" });
   expect(response.headers.get("cache-control")).toBe("no-store");
   expect((await response.json()).attention[0].link).toEqual({
     kind: "result", label: "Private goal wording — Private file title",
     url: "https://mc.example.test/results/soma%3Aoutputs%2Fweekly.md",
   });
-  writeFileSync(join(home, "outputs", "weekly.md"), "# Revised title\nPrivate revised body");
+  writeFileSync(join(home, "outputs", "weekly.md"), "# Revised title\nPrivate revised contents");
   writeFileSync(join(home, "profile", "goals", "G1.md"), "---\nid: G1\n---\nRevised goal wording");
   expect(await buildDigest(options())).toContain("Revised goal wording — Revised title");
   for (const table of TABLE_NAMES) {
     const stored = JSON.stringify(db.query(`SELECT * FROM ${table}`).all());
-    for (const privateText of ["Private file title", "Private body contents", "Private goal wording", "Private goal body", "Revised title", "Private revised body", "Revised goal wording"]) {
+    for (const privateText of ["Private file title", "Private file contents", "Private goal wording", "Private goal contents", "Revised title", "Private revised contents", "Revised goal wording"]) {
       expect(stored).not.toContain(privateText);
     }
   }
@@ -162,6 +162,14 @@ test("an update during digest delivery remains pending for the next digest", asy
   } });
   expect(result()).toMatchObject({ version: 2, digested_version: 1 });
   expect(await buildDigest(options())).toContain("updated: Private file title");
+});
+
+test("result titles come from a bounded prefix and fall back beyond it", async () => {
+  writeFileSync(join(home, "outputs", "near.md"), "---\nid: near\n---\nNear title");
+  writeFileSync(join(home, "outputs", "deep.md"), `---\nnote: ${"x".repeat(9000)}\n---\nDeep title`);
+  const label = async (ref: string) => (await resultPresentation({ ...result(), result_ref: ref }, { somaHome: home })).label;
+  expect(await label("soma:outputs/near.md")).toBe("Near title");
+  expect(await label("soma:outputs/deep.md")).toBe("soma:outputs/deep.md");
 });
 
 test("rendering unavailable or escaping files falls back to references without leaking outside contents", async () => {

@@ -5,7 +5,8 @@ import { dirname, join } from "node:path";
 import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { getAttentionItem, listOpenAttention, setAttentionItemStatus } from "../../surface/mc/db/attention";
-import { REF_ATTENTION_TTL_MS, type VigilRefRow } from "../ref-attention";
+import { REF_ATTENTION_TTL_MS } from "../ref-attention";
+import { getProposal } from "../proposals";
 import { ingestFromSourceStack, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const REF = "soma:proposals/first.md";
@@ -27,9 +28,7 @@ function report(overrides: Parameters<typeof ledgerEnvelope>[0] = {}, opts: { re
 }
 
 function proposal(ref = REF) {
-  return db.query<VigilRefRow & { proposal_ref: string }, [string]>(
-    "SELECT * FROM vigil_proposals WHERE proposal_ref = ?",
-  ).get(ref)!;
+  return getProposal(db, ref)!;
 }
 
 test("two new refs open low proposal items once without notifications or budget", async () => {

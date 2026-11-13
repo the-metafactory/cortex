@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OBSERVATION_LIMITS } from "../src/conversations/domain-adapters/reads/observation-policy";
-import { runCommand } from "../src/surface/mc/desk/spawn";
+import { runCommand } from "../src/surface/mc/common/spawn";
 import { OBSERVED, OBSERVED_NODE, OBSERVED_NODE_THREE, OBSERVED_NODE_TWO, openGraphObservationRig, syntheticListing, syntheticRow, type SyntheticListingRow } from "../src/conversations/domain-adapters/__tests__/fixtures/graph-observation-fixtures";
 import { runWithTemporaryHome } from "./probe-temp-home";
 

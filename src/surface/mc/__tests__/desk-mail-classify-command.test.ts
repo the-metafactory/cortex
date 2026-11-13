@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import type { SourceMail } from "../desk/sources/command";
-import { runCommand } from "../desk/spawn";
+import { runCommand } from "../common/spawn";
 import { listCorrections, setCorrection } from "../desk/corrections";
 import {
   CLASSIFIER_KEY_ENV,

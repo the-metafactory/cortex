@@ -4,7 +4,7 @@ import { z } from "zod";
 import { CLASSIFIER_FORM_ERROR } from "../../../common/types/config";
 import { oneLine } from "./actions";
 import { assertRoute, contentFrom, NOTHING_LEAVES, routeOf, type LocalSources, type PromptContent } from "./source-boundary";
-import { CommandTimeout, runModelCommand, type CommandResult } from "./spawn";
+import { CommandTimeout, runModelCommand, type CommandResult } from "../common/spawn";
 import type { SourceEvent, SourceMail } from "./sources/command";
 import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";

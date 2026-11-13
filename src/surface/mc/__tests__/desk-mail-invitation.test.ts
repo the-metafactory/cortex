@@ -190,7 +190,7 @@ describe("replies", () => {
     expect(await replyToInvitation(mail(), input(), deps())).toEqual({ ok: false, status: 502, error: "The answer was not sent: The work mail server did not take the reply: refused" });
     expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")?.status).toBe("failed");
     expect(queryMailLog(db, {})).toHaveLength(0);
-    const { CommandTimeout } = await import("../desk/spawn");
+    const { CommandTimeout } = await import("../common/spawn");
     const slow: WriterRunner = async () => { throw new CommandTimeout("timed out after 30 s"); };
     expect(await replyToInvitation(mail(), input(), deps({ run: slow }))).toMatchObject({ ok: false, status: 504 });
     expect(await replyToInvitation(mail(), input(), deps())).toMatchObject({ ok: false, status: 409 });
@@ -233,7 +233,7 @@ describe("replies", () => {
     expect(failed).toEqual({ ok: true, message: "Declined. The decline went to Olga. The calendar still holds the tentative copy: Exchange answered HTTP 401." });
     expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")).toMatchObject({ status: "sent", calendar: "The calendar still holds the tentative copy: Exchange answered HTTP 401." });
     expect(queryMailLog(db, {}).map((e) => e.action)).toEqual(["decline"]);
-    const { CommandTimeout } = await import("../desk/spawn");
+    const { CommandTimeout } = await import("../common/spawn");
     const slow: WriterRunner = async (argv) => {
       if (argv[0] === "exchange-remover") throw new CommandTimeout("timed out after 30 s");
       return { code: 0, stdout: JSON.stringify({ id: "r2" }), stderr: "" };

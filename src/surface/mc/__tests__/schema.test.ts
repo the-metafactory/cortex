@@ -114,6 +114,18 @@ describe("mission-control schema", () => {
     }).toThrow();
   });
 
+  it("indexes the Vigil reference tables by job and expiry", () => {
+    const indexNames = (db
+      .query("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_vigil_%'")
+      .all() as { name: string }[]).map((index) => index.name);
+    expect(indexNames).toEqual(expect.arrayContaining([
+      "idx_vigil_results_ran_ref",
+      "idx_vigil_results_expires_at",
+      "idx_vigil_proposals_ran_ref",
+      "idx_vigil_proposals_expires_at",
+    ]));
+  });
+
   it("creates indices on events and assignments", () => {
     const indices = db
       .query("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'")

@@ -9,7 +9,7 @@ import { digestedIds } from "./mail-rules";
 import { mirrorWeek } from "./mirror";
 import { localDay } from "./my-day";
 import type { SourceReading } from "./sources/command";
-import { CommandTimeout } from "./spawn";
+import { CommandTimeout } from "../common/spawn";
 import { DAY_MS } from "./time";
 import type { DeskItem } from "./types";
 import { CARD_DAYS, REFUSED_EXIT, type DmarcConfig, type DmarcFailOn } from "./mail-dmarc-schema";

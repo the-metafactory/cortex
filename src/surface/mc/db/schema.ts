@@ -291,6 +291,10 @@ export const SCHEMA_SQL: string[] = [
     FROM vigil_result_reads WHERE true ON CONFLICT(id) DO NOTHING`,
   vigilRefTableSql("vigil_results", "result_ref"),
   vigilRefTableSql("vigil_proposals", "proposal_ref"),
+  "CREATE INDEX IF NOT EXISTS idx_vigil_results_ran_ref ON vigil_results(ran_ref)",
+  "CREATE INDEX IF NOT EXISTS idx_vigil_results_expires_at ON vigil_results(expires_at)",
+  "CREATE INDEX IF NOT EXISTS idx_vigil_proposals_ran_ref ON vigil_proposals(ran_ref)",
+  "CREATE INDEX IF NOT EXISTS idx_vigil_proposals_expires_at ON vigil_proposals(expires_at)",
   `CREATE TABLE IF NOT EXISTS vigil_result_subjects (
     subject_key TEXT PRIMARY KEY,
     result_ref TEXT NOT NULL,

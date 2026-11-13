@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { fileProposal, type ProposalFilingOptions } from "../../../vigil/file-proposal";
-import { proposalPresentation, type VigilProposalRow } from "../../../vigil/proposals";
+import { getProposalByAttentionId, proposalPresentation, setProposalFilingError } from "../../../vigil/proposals";
 import { resultPresentation, type ResultRenderOptions } from "../../../vigil/result-render";
 import { isVigilAttention, resolveVigilAttention } from "../../../vigil/resolution";
-import type { VigilResultRow } from "../../../vigil/results";
+import { getResultByAttentionId } from "../../../vigil/results";
 import type { AttentionItem } from "../types";
 import {
   listOpenAttention,
@@ -42,9 +42,7 @@ function resolveLink(db: Database, item: AttentionItem): AttentionLink {
 /** The open attention queue, each item with its resolved deep-link target. */
 export function getAttentionQueue(db: Database): AttentionEntry[] {
   return listOpenAttention(db).map((item) => {
-    const error = item.kind === "proposal" ? db.query<{ filing_error: string | null }, [string]>(
-      "SELECT filing_error FROM vigil_proposals WHERE attention_id = ?",
-    ).get(item.id)?.filing_error : null;
+    const error = item.kind === "proposal" ? getProposalByAttentionId(db, item.id)?.filing_error ?? null : null;
     return { item, link: resolveLink(db, item), ...(error ? { error } : {}) };
   });
 }
@@ -53,11 +51,11 @@ export function getAttentionQueue(db: Database): AttentionEntry[] {
 export async function handleListAttention(db: Database, options: ResultRenderOptions = {}): Promise<Response> {
   const attention = await Promise.all(getAttentionQueue(db).map(async (entry): Promise<AttentionEntry> => {
     if (entry.item.kind === "proposal") {
-      const proposal = db.query<VigilProposalRow, [string]>("SELECT * FROM vigil_proposals WHERE attention_id = ?").get(entry.item.id);
+      const proposal = getProposalByAttentionId(db, entry.item.id);
       return proposal ? { ...entry, link: { kind: "proposal", ...await proposalPresentation(proposal, options) } } : entry;
     }
     if (entry.item.kind !== "result") return entry;
-    const result = db.query<VigilResultRow, [string]>("SELECT * FROM vigil_results WHERE attention_id = ?").get(entry.item.id);
+    const result = getResultByAttentionId(db, entry.item.id);
     return result ? { ...entry, link: { kind: "result", ...await resultPresentation(result, options) } } : entry;
   }));
   return new Response(JSON.stringify({ attention }), {
@@ -88,9 +86,7 @@ export async function handleAttentionLifecycle(
     filings.set(db, pending);
     pending.add(id);
     try {
-      const row = db.query<{ proposal_ref: string }, [string]>(
-        "SELECT proposal_ref FROM vigil_proposals WHERE attention_id = ?",
-      ).get(id);
+      const row = getProposalByAttentionId(db, id);
       const result = row ? await fileProposal(row.proposal_ref, options)
         : { error: "proposal_ref missing", status: 400 };
       let error: string;
@@ -99,7 +95,7 @@ export async function handleAttentionLifecycle(
         try {
           const resolved = db.transaction(() => {
             const changed = resolveVigilAttention(db, id, "approved", { filed: result.filed });
-            if (changed) db.query("UPDATE vigil_proposals SET filing_error = NULL WHERE attention_id = ?").run(id);
+            if (changed) setProposalFilingError(db, id, null);
             return changed;
           })();
           if (!resolved) {
@@ -113,7 +109,7 @@ export async function handleAttentionLifecycle(
       } else {
         ({ error, status } = result);
       }
-      db.query("UPDATE vigil_proposals SET filing_error = ? WHERE attention_id = ?").run(error, id);
+      setProposalFilingError(db, id, error);
       return json({ error }, status);
     } finally {
       pending.delete(id);

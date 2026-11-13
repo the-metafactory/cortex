@@ -8,7 +8,7 @@ import { handleDeskSenders } from "../api/desk-vips";
 import { HandledLedger } from "../desk/actions";
 import { buildMessages, MailClassifier, readClassifications, UNIMPORTANT_MODEL, type ClassifierRequest } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
-import { CommandTimeout } from "../desk/spawn";
+import { CommandTimeout } from "../common/spawn";
 import type { WriterResult } from "../desk/create";
 import { mailItems } from "../desk/rank";
 import { SourceCache, type SourceMail } from "../desk/sources/command";

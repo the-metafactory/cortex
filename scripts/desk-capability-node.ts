@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { CAPABILITY_MARKER_LABEL, CapabilityStepSchema, FILEABLE_CAPABILITY, capabilityMarker, type CapabilityStep } from "../src/surface/mc/desk/routine-capability-contract";
-import { runCommand } from "../src/surface/mc/desk/spawn";
+import { runCommand } from "../src/surface/mc/common/spawn";
 import { CapabilityBuildSchema } from "../src/common/types/desk-routines";
 
 const WriterInputSchema = z.object({
