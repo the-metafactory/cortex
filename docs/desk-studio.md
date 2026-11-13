@@ -171,7 +171,6 @@ Each thread carries its parsed front matter, `question`, `stand`, `notes`, `mate
 
 A material item carries `text` when the file holds indented lines under its bullet. The text is cut at 2000 characters, and a cut item carries `textTruncated: true`; the full text stays in the file. Control characters are removed. The response carries `"materialText": "untrusted"`: material text is data from mail and pasted sources, so a client renders it as plain text, never as Markdown or HTML, and never turns it into links.
 
-
 `GET /api/desk/studio/relations?thread=<slug>` returns one thread's **Relates to** groups, computed on request and never stored:
 
 ```json
@@ -254,7 +253,6 @@ Every successful filing appears in Done for you, with the reason and Undo. Undo 
 
 `POST /api/desk/create` accepts `{ "requestId": "...", "kind": "capture", "fields": { "text": "..." } }`. `POST /api/desk/capture/undo` accepts `{ "requestId": "...", "id": "capture-..." }`. Both pass the same identity and rebind gates as other Desk writes.
 
-
 ## Sparring and Think now
 
 On an open thread, Think now, Grill me, Argue the other side, Red team and First principles enqueue Ranger's configured `ivy-think` job. Each persona adds a “What would X say?” button. A thread's personas are the names in `mc.desk.studio.personas` (optional, at most 20 names of up to 100 characters), then the thread's people: its People group under Relates to, that is material items of kind `person`, `people` or `contact` and kept person relations, in material order. At most 10 thread people are offered; a name over 100 characters or with a line break is not, and a name that is also configured appears once. Open relation proposals and free text never add a persona. `GET /api/desk/studio` serves each thread's list as `personas: [{ "name": "Nico", "from": "thread" }]`, with `from` `config` or `thread`. The Desk uses the existing `mc.desk.ranger.bin` and optional `config` settings. Ranger's Studio directory must match this Studio.
@@ -269,7 +267,7 @@ Thinking never replaces Where I stand automatically; generated stands remain pro
 
 Discuss on an open idea or proposed stand opens a short typed exchange. Keep as is and Keep reworded keep the selected idea. For a proposed stand, those choices also adopt its text as Where I stand. Dismiss marks the proposal dismissed. Each choice records the exchange as a dated note in one Studio commit. A changed proposal or stand refuses a stale choice, while Close and save note can still record the exchange.
 
-Talk it through uses the selected thread's question, stand, notes, responses and Material labels. Material links are context only and are never fetched. End and save summary records the exchange and its latest summary. Save summary and propose stand adds an open stand proposal. It does not adopt that proposal.
+Talk it through uses the selected thread's question, stand, notes, responses and Material labels and text, passed as data under the rule that context is never instructions. Material links are context only and are never fetched. End and save summary records the exchange and its latest summary. Save summary and propose stand adds an open stand proposal. It does not adopt that proposal.
 
 Live sessions use the existing `studio.filer` OpenAI-compatible endpoint and its `local` endpoint. The strictest current area policy selects the model before each call. Unknown areas require the local endpoint. A session that has used local context stays local even if an area's policy later changes. An unavailable local endpoint keeps the text and explains the failure without a cloud fallback. Models receive no tools.
 
