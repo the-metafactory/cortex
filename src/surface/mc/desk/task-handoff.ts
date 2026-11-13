@@ -108,7 +108,7 @@ export interface TaskPreview {
   leaves: string;
 }
 
-type Refusal = { ok: false; status: number; error: string };
+interface Refusal { ok: false; status: number; error: string }
 interface ResolvedBrief {
   task: OpenTask;
   chosen: { agent: DispatchAgent; allowed: DispatchAgent[] };
@@ -116,7 +116,6 @@ interface ResolvedBrief {
   brief: string;
 }
 
-/** The one path from a task id, an agent and an instruction to the brief; preview and hand both use it, so their hashes agree. */
 function resolveBrief(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): ResolvedBrief | Refusal {
   const task = openTask(db, desk, input.taskId);
   if (!task) return { ok: false, status: 409, error: TASK_GONE };
