@@ -167,9 +167,9 @@ function decisionRelations(thread: StudioThreadView, studio: StudioView): Relati
       const hit = sharedLink(thread, c);
       const area = hit ? undefined : c.areas.find((a) => thread.areas.includes(a));
       const topic = area === undefined ? undefined : sharedTopic(thread, c, isRare);
-      const basis: RelationBasis | null = hit ? { rule: "shared-source", source: hit.label } : area !== undefined && topic !== undefined ? { rule: "same-area-word", area, word: topic } : null;
+      const basis: Extract<RelationBasis, { rule: "shared-source" | "same-area-word" }> | null = hit ? { rule: "shared-source", source: hit.label } : area !== undefined && topic !== undefined ? { rule: "same-area-word", area, word: topic } : null;
       if (!basis) return [];
-      const via = basis.rule === "shared-source" ? `Shares a source: ${basis.source}.` : `Same area: ${areaLabel.get(area ?? "") ?? area}, and both mention “${topic}”.`;
+      const via = basis.rule === "shared-source" ? `Shares a source: ${basis.source}.` : `Same area: ${areaLabel.get(basis.area) ?? basis.area}, and both mention “${basis.word}”.`;
       const head = `${outcomeLabel(c)}${c.closed ? ` ${c.closed}` : ""}.`;
       const said = c.expect ? ` Expected: ${clip(c.expect, 80)}` : c.outcomeText ? ` ${clip(c.outcomeText, 80)}` : "";
       return [{ kind: "decision", key: `decision:${c.slug}`, title: c.question, why: `${head}${said} ${via}`.replace(/\s+/g, " "), basis: [basis], open: c.slug }];
