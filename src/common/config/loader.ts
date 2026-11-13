@@ -9,6 +9,7 @@
 import { readFileSync, readdirSync, existsSync, statSync, lstatSync, realpathSync } from "fs";
 import { join, dirname, resolve, isAbsolute, basename } from "path";
 import { parse as parseYaml } from "yaml";
+import { expandTilde } from "./expand-tilde";
 import { AgentConfigSchema, DeskSchema, NetworkFileSchema, type AgentConfig, type NetworkFile } from "../types/config";
 import {
   AgentSchema,
@@ -55,6 +56,7 @@ import {
 } from "./resolve-env-placeholders";
 
 export type { SurfaceTokenWarning } from "./resolve-env-placeholders";
+export { expandTilde } from "./expand-tilde";
 
 /**
  * Hardening cap on a single fragment file's size. Echo M3 on cortex#62 —
@@ -65,27 +67,6 @@ export type { SurfaceTokenWarning } from "./resolve-env-placeholders";
  * stall the loader.
  */
 const FRAGMENT_MAX_BYTES = 1_048_576; // 1 MiB
-
-/**
- * Expand a leading `~` in a path to `$HOME`. Single source of truth for the
- * loader + watcher to avoid drift (Echo M1 on cortex#62).
- *
- * Throws when `$HOME` is unset and the path needs expansion (Echo N3 — was
- * silently returning literal `~` strings). A path that doesn't start with
- * `~` is returned verbatim regardless of `$HOME`.
- */
-export function expandTilde(p: string): string {
-  if (p === "~" || p.startsWith("~/")) {
-    const home = process.env.HOME;
-    if (!home) {
-      throw new Error(`cannot expand "~" in path "${p}": $HOME is not set`);
-    }
-    return p === "~" ? home : join(home, p.slice(2));
-  }
-  // Bare `~foo` (no slash) is not expanded — that's user-name resolution
-  // semantics we explicitly don't support here. Return verbatim.
-  return p;
-}
 
 /**
  * Result of `loadConfigWithAgents`. `inlineAgents` is non-empty when the

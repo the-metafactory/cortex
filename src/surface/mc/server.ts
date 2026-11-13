@@ -438,9 +438,10 @@ export function startServer(
       }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-        if (uiDirectory) return externalUiResponse(uiDirectory, "index.html", { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) });
+        const shellHeaders = { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) };
+        if (uiDirectory) return externalUiResponse(uiDirectory, "index.html", shellHeaders);
         return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
-          headers: { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) },
+          headers: shellHeaders,
         });
       }
 

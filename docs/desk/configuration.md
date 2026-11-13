@@ -19,10 +19,12 @@ mc:
     dir: /opt/example-ui/dist
 ```
 
+<!-- glossary-ignore: path -->
 The directory must be an absolute path or start with `~/`, which expands to the home directory. It must exist and contain an `index.html` file. `cortex config validate` and Mission Control startup reject an invalid directory with an error naming `mc.ui.dir`; there is no fallback to the Desk.
 
 Mission Control serves `/` and `/index.html` from this directory with the Desk's Content-Security-Policy. Static assets must be directly inside the directory and have a `js`, `css`, `svg`, `png`, `jpg`, `jpeg`, `gif`, `webp`, `ico`, `map`, `woff` or `woff2` extension. Nested asset paths and client-side route fallbacks are not supported. Files whose resolved paths escape the configured directory, including symlinks pointing outside it, return 404.
 
+<!-- glossary-ignore: host -->
 `/api/*`, `/ws`, `/health` and Cortex's `/wake/` assets keep their existing behavior. The UI uses the same origin and the existing Host, Origin and identity checks. Omit `mc.ui.dir` to serve the bundled Desk.
 
 ### Desk settings
