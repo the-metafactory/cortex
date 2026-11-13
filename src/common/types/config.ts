@@ -1,4 +1,5 @@
 import { HOST_NAME_RE } from "../host-name";
+import { UiSchema } from "../config/ui-directory";
 import { DEFAULT_RESULT_BASE_URL } from "../result-base-url";
 import { ParserPermissionsSchema } from "./desk-parser";
 import { RoutineOptionsSchema } from "./desk-routines";
@@ -740,6 +741,7 @@ export const McSchema = z.object({
   dbPath: z.string().default(""),
   /** Listen port. 0 → fall back to the MC yaml's port (default 8767). */
   port: z.number().int().nonnegative().default(0),
+  ui: UiSchema.optional(),
   /**
    * P-14 U0.1 — Tier-3 sideband endpoint (signal cortex-sideband.md §2/§3/§8).
    * MC proxies `/api/observability/*` to this base URL server-side; the
@@ -888,6 +890,7 @@ export const McSchema = z.object({
   configPath: val.configPath ?? "",
   dbPath: val.dbPath ?? "",
   port: val.port ?? 0,
+  ...(val.ui ? { ui: val.ui } : {}),
   sideband: val.sideband ?? DEFAULT_SIDEBAND_URL,
   desk: val.desk ?? DESK_DEFAULTS,
   // #1044 — re-apply the nested default ({} from `.default(emptyDefault())`

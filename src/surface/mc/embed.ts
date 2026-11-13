@@ -21,6 +21,7 @@ export interface StartMissionControlOptions extends MissionControlViews {
   configPath?: string;
   dbPath: string;
   port?: number;
+  ui?: Config["ui"];
   headless?: boolean;
   degraded?: DegradedInfo;
 }
@@ -37,6 +38,7 @@ export async function startMissionControl(
 
   const config: Config = {
     ...loaded,
+    ...(opts.ui ? { ui: opts.ui } : {}),
     port: opts.port && opts.port > 0 ? opts.port : loaded.port,
     db: { path: opts.dbPath },
     hooks: {

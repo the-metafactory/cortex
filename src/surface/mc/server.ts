@@ -165,12 +165,14 @@ import {
   type StepUpEnrollment,
 } from "../../common/step-up/enrollment";
 import { expandTilde } from "../../common/config/loader";
+import { resolveUiDirectory } from "../../common/config/ui-directory";
+import { realpath, stat } from "node:fs/promises";
 import { handleGetGovernance } from "./api/governance";
 import { handleGetObservability } from "./api/observability-tab";
 import { proxySideband } from "../../common/sideband/proxy";
 import type { ProcessManager } from "./session/process-manager";
 import type { SpawnFn } from "./session/endpoint-resolver";
-import { join, dirname } from "path";
+import { join, dirname, relative, isAbsolute, sep } from "path";
 import { fileURLToPath } from "url";
 
 const VERSION = "0.1.0";
@@ -186,6 +188,19 @@ export const DASHBOARD_DIST = join(
 );
 
 const DASHBOARD_ASSET_EXT = /^\/[\w.-]+\.(js|css|svg|png|jpe?g|gif|webp|ico|map|woff2?)$/;
+
+async function externalUiResponse(root: string, name: string, headers?: HeadersInit): Promise<Response> {
+  try {
+    const path = await realpath(join(root, name));
+    const rel = relative(root, path);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel) || !(await stat(path)).isFile()) {
+      return new Response("Not Found", { status: 404 });
+    }
+    return new Response(Bun.file(path), { headers });
+  } catch (_err) {
+    return new Response("Not Found", { status: 404 });
+  }
+}
 
 const SERVER_PING_INTERVAL_MS = 30_000;
 
@@ -250,6 +265,7 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
+  const uiDirectory = config.ui ? resolveUiDirectory(config.ui.dir) : undefined;
   if ([options.drafts, options.graphDrafts, options.balanceDrafts, options.flowDrafts].filter(Boolean).length > 1) throw new Error("Configure only one of drafts, graphDrafts, balanceDrafts or flowDrafts");
   const editor = options.graphDrafts
     ? deskGraphDraftEditor(options.graphDrafts.host, options.graphDrafts.deps, options.graphDrafts.options)
@@ -422,6 +438,7 @@ export function startServer(
       }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+        if (uiDirectory) return externalUiResponse(uiDirectory, "index.html", { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) });
         return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
           headers: { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) },
         });
@@ -434,6 +451,7 @@ export function startServer(
         if (rel.includes("..") || rel.length === 0) {
           return new Response("Not Found", { status: 404 });
         }
+        if (uiDirectory) return externalUiResponse(uiDirectory, rel);
         return new Response(Bun.file(join(DASHBOARD_DIST, rel)));
       }
 
