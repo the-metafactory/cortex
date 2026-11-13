@@ -3,7 +3,7 @@ import type { DeskView } from "../../desk/types";
 const KEEP = 200;
 
 export function freshInterrupts(view: DeskView, seen: ReadonlySet<string>): string[] {
-  return view.items.filter((i) => i.interrupt !== undefined && !seen.has(i.key)).map((i) => i.key);
+  return view.items.filter((i) => i.interrupt !== undefined && i.interrupt.delivery !== "held" && !seen.has(i.key)).map((i) => i.key);
 }
 
 export interface SeenStore {

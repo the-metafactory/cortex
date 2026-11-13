@@ -89,6 +89,8 @@ The switches are stored per stack. `GET /api/desk/interruptions` lists the reaso
 
 `POST /api/desk/interruptions/feedback` with `{ key, code, target?, important }` records the answer to "Was that important enough?" for an item, using the reason from its `interrupt.reason`. A no switches that reason off at once; a yes changes nothing. A second answer for the same item replaces the first, and the switch follows it unless you have switched the reason away from its default by hand since the earlier answer. The item then carries `interrupt.feedback`, so another device does not ask again. Answers are kept for 30 days. Whether to ask is up to the UI.
 
+During a meeting the Desk holds interruptions. Mail and reminders that arrive while a meeting runs (a `meeting` on today's calendar with an end, marked busy or unknown, not free) are marked `delivery: "held"` with `held: { eventKey, title, until }`, and are neither pushed nor chimed. Back-to-back meetings hold until the last one ends. A meeting about to start is never held, nor is mail about the meeting that is running. On the first check after the meeting ends, the item is pushed once with the sentence that it waited; its age counts from the meeting's end, and `held` stays on the item. A moved or cancelled meeting releases on the next check; the Desk keeps no record of the hold, so the item's age then counts from its arrival again, and an item older than `maxAgeMinutes` by then stays in the list without a push. `interruptions.holdDuringMeetings: false` turns the hold off.
+
 An interrupting item can reach you three ways. Each one is configured under `mc.desk.interruptions`:
 
 - a chime in the open Desk tab (`chime`)

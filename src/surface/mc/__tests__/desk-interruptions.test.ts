@@ -9,7 +9,7 @@ import { addVip } from "../desk/vips";
 import { SourceCache, type CommandRunner } from "../desk/sources/command";
 import type { InterruptReasonView } from "../desk/types";
 
-import { MIN, NOW, RULES as PUSH_RULES } from "./desk-interrupt-fixture";
+import { MIN, NOW, RULES as PUSH_RULES, vipMail } from "./desk-interrupt-fixture";
 const DAY = 86_400_000;
 
 const RULES: InterruptRules = { ...PUSH_RULES, transport: "none" };
@@ -95,8 +95,8 @@ describe("/api/desk/interruptions", () => {
 });
 
 describe("/api/desk/interruptions/feedback", () => {
-  const vipMail: CommandRunner = async () => JSON.stringify({ items: [{ kind: "mail", id: "m1", from: { name: "Boss", address: "boss@example.com" }, subject: "Budget", receivedAt: new Date(clock - 5 * MIN).toISOString(), unread: true }] });
-  const compose = async () => composeDesk(db, options(), undefined, { now: clock, sourceCache: new SourceCache(vipMail) });
+  const vipSource: CommandRunner = async () => JSON.stringify({ items: [vipMail("m1", clock - 5 * MIN)] });
+  const compose = async () => composeDesk(db, options(), undefined, { now: clock, sourceCache: new SourceCache(vipSource) });
   const answer = (important: unknown, key: unknown = "mail:m1") => handleDeskInterruptionFeedback(feedback({ key, code: "mail.vip", target: "boss@example.com", important }), db, runtime(), now);
 
   it("keeps the reason on a yes and shows the answer on the item", async () => {

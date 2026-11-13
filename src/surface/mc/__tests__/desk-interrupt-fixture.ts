@@ -3,7 +3,7 @@ import type { DeskPush, DeskTransport, InterruptRules, PushResult } from "../des
 export const NOW = Date.parse("2026-10-31T09:00:00.000Z");
 export const MIN = 60_000;
 
-export const RULES: InterruptRules = { transport: "discord", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true };
+export const RULES: InterruptRules = { transport: "discord", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true, holdDuringMeetings: true };
 
 export class FakeTransport implements DeskTransport {
   readonly id = "discord" as const;
@@ -14,3 +14,5 @@ export class FakeTransport implements DeskTransport {
     return this.answer;
   }
 }
+
+export const vipMail = (id: string, receivedAt: number) => ({ kind: "mail", id, from: { name: "Boss", address: "boss@example.com" }, subject: "Budget", receivedAt: new Date(receivedAt).toISOString(), unread: true });
