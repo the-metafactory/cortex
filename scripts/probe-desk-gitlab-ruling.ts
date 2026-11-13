@@ -17,6 +17,8 @@ const options: DeskOptions = {
 };
 const key = `ranger:${GITLAB_BLOCKED.repo}#${GITLAB_BLOCKED.nodeId}`;
 const expectedArgs = ["api", "--hostname", "gitlab.example.org", "--method", "GET", "projects/group%2Fsubgroup%2Fapp/issues/12"];
+const expectedRead = [["auth", "status"], expectedArgs];
+const login = "✓ Logged in to gitlab.example.org as example\n";
 const issue = JSON.stringify({ iid: 12, description: GITLAB_BODY });
 
 async function compose() {
@@ -44,14 +46,14 @@ async function compose() {
 
 async function probeReadable(argvFile: string) {
   assert.equal(await readNodeBody(GITLAB_BLOCKED.repo, GITLAB_BLOCKED.nodeId), GITLAB_BODY);
-  assert.deepEqual(JSON.parse(readFileSync(argvFile, "utf8")), expectedArgs);
+  assert.deepEqual(readFileSync(argvFile, "utf8").trim().split("\n").map(line => JSON.parse(line)), expectedRead);
   const readable = await compose();
   assert.deepEqual(readable.item.explanation, GITLAB_EXPLAINED);
   assert.equal(readable.explained, 1);
   assert.ok(readable.html.includes(GITLAB_EXPLAINED.sentence));
   for (const choice of GITLAB_EXPLAINED.choices) assert.ok(readable.html.includes(choice.label));
   assert.ok(!readable.html.includes(RULING_FALLBACK));
-  assert.deepEqual(JSON.parse(readFileSync(argvFile, "utf8")), expectedArgs);
+  assert.deepEqual(readFileSync(argvFile, "utf8").trim().split("\n").map(line => JSON.parse(line)), [...expectedRead, ...expectedRead]);
 
   return readable;
 }
@@ -77,7 +79,7 @@ if (process.argv[2] === "--readable") {
   const argvFile = join(dir, "argv.json");
   const stub = join(dir, "glab");
   try {
-    writeFileSync(stub, `#!${process.execPath}\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)));\nprocess.stdout.write(${JSON.stringify(issue)});\n`);
+    writeFileSync(stub, `#!${process.execPath}\nimport { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)) + "\\n");\nprocess.stdout.write(process.argv[2] === "auth" ? ${JSON.stringify(login)} : ${JSON.stringify(issue)});\n`);
     chmodSync(stub, 0o700);
     for (const mode of ["--readable", "--missing"]) {
       if (mode === "--missing") rmSync(stub);

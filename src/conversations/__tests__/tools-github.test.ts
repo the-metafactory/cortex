@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolsConfig } from "../../common/types/desk-conversations";
-import type { CommandResult } from "../../surface/mc/desk/spawn";
+import type { CommandResult } from "../../surface/mc/common/spawn";
 import type { ToolSession } from "../tools/capabilities";
 import { createGithubTools, type GithubRunner } from "../tools/github";
 import { toolBody, toolRig } from "./fixtures/tool-host";

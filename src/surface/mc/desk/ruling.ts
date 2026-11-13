@@ -3,7 +3,7 @@ import { fetchIssueOrPr, isGitHubFetchError } from "../adapters/github/fetch";
 import { fetchGitlabIssue, gitlabIssueRef } from "../adapters/gitlab/fetch";
 import { modelJson, commandJson, isCommand, readApiKey, type CommandRunner, type KeyReader, type ModelConfig } from "./classify";
 import { NOT_LOCAL_CONTENT } from "./source-boundary";
-import { runModelCommand } from "./spawn";
+import { runModelCommand } from "../common/spawn";
 import { rangerItemKey, type RangerNeedsYou, type RangerState } from "./sources/ranger";
 import { retryable } from "./actions";
 import { DAY_MS } from "./time";

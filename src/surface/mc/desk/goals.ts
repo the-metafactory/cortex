@@ -1,4 +1,4 @@
-import { runCommand } from "./spawn";
+import { runCommand } from "../common/spawn";
 
 export const GOAL_ACTIONS = ["goal.check", "goal.pause"] as const;
 export type GoalActionId = (typeof GOAL_ACTIONS)[number];

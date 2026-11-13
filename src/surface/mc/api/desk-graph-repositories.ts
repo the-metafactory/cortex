@@ -2,7 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { graphRepositoryRefs, graphRepositoryTickedAt, isGithubRef, isGitlabRef, isGraphRepositoryAllowed, listGraphNodes, listGraphRepositories, restoreGraphRepository, setGraphRepositoryEnabled, tickedGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
 import { failureReason, type GraphScope, type GraphScopePublication } from "../desk/graph-repository-authority";
-import { runCommand } from "../desk/spawn";
+import { runCommand } from "../common/spawn";
 import { GRAPH_NODES_SUFFIX as NODES_SUFFIX, GRAPH_REPOSITORIES_PATH, GRAPH_TICKED_PARAM as TICKED_PARAM } from "../desk/graph-repository-schema";
 
 const noStore = { "Cache-Control": "no-store" };

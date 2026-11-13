@@ -1,16 +1,15 @@
 // glossary-ignore: run, host
 import type { Database } from "bun:sqlite";
-import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
-import { GITLAB_HOST, GITLAB_PATH, GITLAB_REF_PREFIX, parseGitlabRef } from "./graph-repository-schema";
+import { CommandTimeout, runCommand, type CommandResult } from "../common/spawn";
+import { GLAB_STATUS_ARGV, loggedInGitlabHosts } from "../adapters/gitlab/hosts";
+import { GITLAB_PATH, GITLAB_REF_PREFIX, parseGitlabRef } from "./graph-repository-schema";
 
 export { GITLAB_REF_PREFIX } from "./graph-repository-schema";
 export const GITHUB_REF_PREFIX = "github:github.com/";
 
 const FULL_NAME = /^[^/\s]+\/[^/\s]+$/;
-const LOGGED_IN = /✓\s+Logged in to (\S+) as /;
 const FORGE_TIMEOUT_MS = 30_000;
 const GH_LIST_ARGV = ["gh", "api", "--paginate", "user/repos?affiliation=owner,organization_member", "--jq", ".[].full_name"];
-const GLAB_STATUS_ARGV = ["glab", "auth", "status"];
 const glabListArgv = (host: string): string[] => ["glab", "api", "--hostname", host, "--paginate", "projects?membership=true&simple=true"];
 
 export interface GraphRepository {
@@ -101,12 +100,7 @@ async function listGithubFullNames(run: GraphRepositoryRunner): Promise<{ ok: tr
 async function loggedInGitlabHostsIgnoringExitCode(run: GraphRepositoryRunner): Promise<{ ok: true; hosts: string[] } | { ok: false; reason: string }> {
   const ran = await attempt(run, "glab", GLAB_STATUS_ARGV);
   if (!ran.ok) return ran;
-  const hosts = new Set<string>();
-  for (const line of `${ran.result.stdout}\n${ran.result.stderr}`.split("\n")) {
-    const host = LOGGED_IN.exec(line)?.[1];
-    if (host !== undefined && GITLAB_HOST.test(host)) hosts.add(host);
-  }
-  return { ok: true, hosts: [...hosts].sort() };
+  return { ok: true, hosts: loggedInGitlabHosts(ran.result) };
 }
 
 function splitTopLevelJson(text: string): string[] | null {

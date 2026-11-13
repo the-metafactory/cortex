@@ -3,7 +3,7 @@ import type { RangerNeedsYou } from "../../desk/sources/ranger";
 export const GITLAB_BODY = "## Deliverable\nChoose CSV or JSON for the export in group/subgroup/app.\n";
 
 export const GITLAB_BLOCKED: RangerNeedsYou = {
-  key: "gitlab:gitlab.example.org/group/subgroup/app#1",
+  key: "gitlab:gitlab.example.org/group/subgroup/app#12",
   repo: "gitlab:gitlab.example.org/group/subgroup/app",
   nodeId: "12",
   title: "Pick the export format",

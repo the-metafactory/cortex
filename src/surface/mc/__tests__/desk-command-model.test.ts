@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { McSchema } from "../../../common/types/config";
 import { modelJson, modelPaths } from "../desk/classify";
 import { rulingExplainer } from "../desk/ruling";
-import { CommandTimeout, runModelCommand } from "../desk/spawn";
+import { CommandTimeout, runModelCommand } from "../common/spawn";
 
 describe("Desk command models", () => {
   it("accepts native helper commands for every personal helper with separate local access", () => {

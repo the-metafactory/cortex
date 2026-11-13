@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import type { ToolProject } from "../../common/types/desk-conversations";
-import { runCommand, type CommandResult } from "../../surface/mc/desk/spawn";
+import { runCommand, type CommandResult } from "../../surface/mc/common/spawn";
 import type { ToolContext, ToolDefinition } from "./capabilities";
 import { list, num, rec, str } from "./json";
 

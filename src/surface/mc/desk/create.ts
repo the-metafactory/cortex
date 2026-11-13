@@ -4,7 +4,7 @@ import { KIND_LABEL, notSetUp, type AskCard, type AskKind } from "./ask";
 import { addNote } from "./notes";
 import { oneLine } from "./actions";
 import { clock } from "./time";
-import { CommandTimeout, runCommand } from "./spawn";
+import { CommandTimeout, runCommand } from "../common/spawn";
 
 export const WRITER_KINDS = ["calendar", "task", "goal", "note", "reminder"] as const;
 export type WriterKind = (typeof WRITER_KINDS)[number];
@@ -34,7 +34,7 @@ export type Created =
   | { ok: true; id: string; message: string; url?: string; event?: { at: number; end?: number; title: string; allDay?: boolean } }
   | { ok: false; error: string; uncertain?: true };
 
-export { CommandTimeout as WriterTimeout } from "./spawn";
+export { CommandTimeout as WriterTimeout } from "../common/spawn";
 
 const MAYBE_CREATED = "It may have been created; check before asking again.";
 

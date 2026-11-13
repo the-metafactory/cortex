@@ -1,5 +1,7 @@
+import { z } from "zod";
 import { parseGraphRepoRef } from "../../../../common/graph-ref";
-import { CommandTimeout, runCommand } from "../../desk/spawn";
+import { CommandTimeout, runCommand } from "../../common/spawn";
+import { GLAB_STATUS_ARGV, loggedInGitlabHosts } from "./hosts";
 
 export interface GitLabIssueRef {
   host: string;
@@ -27,6 +29,7 @@ export function gitlabIssueRef(repo: string, nodeId: string): GitLabIssueRef | n
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+const IssueSchema = z.object({ iid: z.number(), description: z.string().nullable() });
 const defaultRun = (argv: string[], timeoutMs: number) => runCommand(argv, timeoutMs, undefined, undefined, true, { maxOutputBytes: MAX_OUTPUT_BYTES });
 
 function upstreamError(stderr: string): GitLabFetchError {
@@ -43,7 +46,11 @@ export async function fetchGitlabIssue(ref: GitLabIssueRef, opts: { run?: typeof
   const argv = ["glab", "api", "--hostname", validated.host, "--method", "GET", `projects/${encodeURIComponent(validated.path)}/issues/${validated.number}`];
   let stdout: string;
   try {
-    const result = await (opts.run ?? defaultRun)(argv, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const run = opts.run ?? defaultRun;
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const status = await run(GLAB_STATUS_ARGV, timeoutMs);
+    if (!loggedInGitlabHosts(status).includes(validated.host)) return { kind: "invalid_ref", message: "The GitLab host has no known login." };
+    const result = await run(argv, timeoutMs);
     if (result.code !== 0) return upstreamError(result.stderr);
     stdout = result.stdout;
   } catch (err) {
@@ -57,8 +64,9 @@ export async function fetchGitlabIssue(ref: GitLabIssueRef, opts: { run?: typeof
   } catch {
     return { kind: "parse_error", message: "The GitLab response was not JSON." };
   }
-  if (raw === null || typeof raw !== "object" || !("iid" in raw) || raw.iid !== validated.number || !("description" in raw) || (typeof raw.description !== "string" && raw.description !== null)) {
+  const parsed = IssueSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.iid !== validated.number) {
     return { kind: "parse_error", message: "The GitLab response did not contain the requested issue body." };
   }
-  return { body: raw.description };
+  return { body: parsed.data.description };
 }

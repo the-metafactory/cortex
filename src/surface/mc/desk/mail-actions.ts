@@ -5,7 +5,7 @@ import { logMailDecision, mailFeatures, type MailLogAction } from "./mail-log";
 import { loggedAction } from "./mail-similar";
 import { CORRECTION_MOVES } from "./mail-correction-schema";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult, type MoveTarget } from "./mail-move";
-import { CommandTimeout } from "./spawn";
+import { CommandTimeout } from "../common/spawn";
 import { replySubject } from "./mail-triage";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { addSender, isVip, listVips } from "./vips";
