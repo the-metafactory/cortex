@@ -99,6 +99,20 @@ describe("Desk interruptions", () => {
     expect((await tick(transport, NOW, desk(), cache)).pushed).toEqual([]);
   });
 
+  it("lists a meeting that runs past midnight once, beside another meeting in the window", async () => {
+    const late = new Date(2026, 9, 31, 23, 50).getTime();
+    const cache = calendar([
+      { ...standup, id: "budget", start: new Date(late + 5 * MIN).toISOString(), end: new Date(late + 35 * MIN).toISOString() },
+      { ...standup, id: "sync", start: new Date(late + 8 * MIN).toISOString() },
+    ]);
+    const view = await composeDesk(db, desk(), undefined, { now: late, sourceCache: cache });
+    expect(view.today.some((e) => e.key === "cal:cal:budget")).toBe(true);
+    expect(view.ahead.some((e) => e.key === "cal:cal:budget")).toBe(true);
+    expect(view.items.filter((i) => i.kind === "meeting").map((i) => i.key).sort()).toEqual([`meeting:cal:cal:budget@${late + 5 * MIN}`, `meeting:cal:cal:sync@${late + 8 * MIN}`]);
+    const keys = view.items.map((i) => i.key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
   it("does not push a blocked agent that is not due today; it stays for the briefing", async () => {
     const ranger: RangerState = {
       current: [],
