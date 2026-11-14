@@ -5,14 +5,15 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { join } from "node:path";
 import { DeskPackageLoader, type DeskPackageCandidate, type DeskTrustedConnectorOptions } from "../../conversations/domain-adapters/package";
 import { DeskGenerationStore } from "../../conversations/domain-adapters/package-generation";
+import type { MailConnectionBinding, MailReadSource } from "../../conversations/domain-adapters/mail-read";
 import type { ObjectReference } from "../../conversations/domain-adapters/types";
 import { probeAction } from "./actions";
+import { CONFORMANCE_CONNECTION_ID } from "./connection";
 import { recordConnector } from "./connectors";
 import { listDestinations, probeObservation, probeQuery, schemaIndex, type ProbeEnv } from "./probes";
 import { emptyOwnerCalls, overallVerdict, refused, type CapabilityReport, type ConformanceReport, type OwnerCalls } from "./report";
 import { ConformanceRefusal, openConformanceRig, SYNTHETIC_CREDENTIAL_HANDLE } from "./rig";
 
-export const CONNECTION_ID = "conformance-connection";
 
 export const authorizeConnection: DeskTrustedConnectorOptions["authorizeConnection"] = current =>
   Promise.resolve({ version: 1, available: current.status === "active" && current.credentialHandle === SYNTHETIC_CREDENTIAL_HANDLE, revision: "conformance-credential-1" });
@@ -40,8 +41,14 @@ export async function openConformanceStore(dir: string): Promise<{ engine: Harne
   return { engine, store: new DeskGenerationStore(engine) };
 }
 
-export async function exercise(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, skeleton: Skeleton): Promise<Outcome> {
+function conformanceMailBinding(mail: MailReadSource | undefined, adapterId: string): MailConnectionBinding | undefined {
+  const matches = mail?.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === CONFORMANCE_CONNECTION_ID) ?? [];
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export async function exercise(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, skeleton: Skeleton, mail?: MailReadSource): Promise<Outcome> {
   const { adapterId, manifest } = candidate;
+  const mailBinding = conformanceMailBinding(mail, adapterId);
   const declaration = manifest.declaration;
   const actionIds = declaration.capabilities.filter(capability => capability.kind === "action").map(capability => capability.capabilityId);
   const readIds = declaration.capabilities.filter(capability => capability.kind !== "action").map(capability => capability.capabilityId);
@@ -49,17 +56,17 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
   const capabilities: CapabilityReport[] = [];
   const ownerCalls = emptyOwnerCalls();
   const destinations: ObjectReference[] = [];
-  const sample = { schemas: schemaIndex(manifest), destinations, adapterId, connectionId: CONNECTION_ID };
+  const sample = { schemas: schemaIndex(manifest), destinations, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
   const groups: (string | undefined)[] = actionIds.length > 0 ? actionIds : [undefined];
   for (const [index, actionId] of groups.entries()) {
-    const built = loader.trustedConnector(adapterId, { adapterId, connectionId: CONNECTION_ID }, { authorizeConnection, ...(actionId === undefined ? {} : { actionCapabilityId: actionId }) });
+    const built = loader.trustedConnector(adapterId, { adapterId, connectionId: CONFORMANCE_CONNECTION_ID }, { authorizeConnection, ...(actionId === undefined ? {} : { actionCapabilityId: actionId }) });
     if (!built.ok) {
       capabilities.push(refused(actionId ?? adapterId, "action", built.error.code, built.error.message));
       continue;
     }
     const plain = built.value.connector;
     if (index === 0) {
-      const listed = await listDestinations({ registry, manifest, sample, plain, adapterId, connectionId: CONNECTION_ID });
+      const listed = await listDestinations({ registry, manifest, sample, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID });
       destinations.push(...listed.destinations);
       capabilities.push(...listed.reports);
     }
@@ -67,15 +74,15 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
     let rig;
     try {
       rig = await openConformanceRig({
-        dir: temp, registry, connector, adapterId, connectionId: CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
-        writeCapabilityIds: actionId === undefined ? [] : [actionId], writerCapabilityId: actionId ?? plain.support.capabilityId, destinations,
+        dir: temp, registry, connector, adapterId, connectionId: CONFORMANCE_CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
+        writeCapabilityIds: actionId === undefined ? [] : [actionId], writerCapabilityId: actionId ?? plain.support.capabilityId, destinations, ...(mailBinding ? { mailBinding } : {}),
       });
     } catch (error) {
       const code = error instanceof ConformanceRefusal ? error.code : "host_unavailable";
       capabilities.push(refused(actionId ?? adapterId, "action", code, error instanceof Error ? error.message : "The host seam could not open."));
       continue;
     }
-    const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONNECTION_ID };
+    const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
     try {
       if (index === 0) {
         for (const binding of manifest.readBindings) {
@@ -92,11 +99,11 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
   return finish({ ...skeleton, actions: actionIds }, capabilities, ownerCalls);
 }
 
-export async function executePackage(packageDir: string, temp: string): Promise<Outcome> {
+export async function executePackage(packageDir: string, temp: string, mail?: MailReadSource): Promise<Outcome> {
   const skeleton: Skeleton = { packageDir, actions: [], credentialRequests: 0 };
   const { engine, store } = await openConformanceStore(temp);
   try {
-    const loader = new DeskPackageLoader({ bundledPackages: [packageDir], store });
+    const loader = new DeskPackageLoader({ bundledPackages: [packageDir], store, ...(mail ? { mail } : {}) });
     const discovery = await loader.discover();
     const candidate = discovery.candidates[0];
     if (!candidate) {
@@ -111,7 +118,7 @@ export async function executePackage(packageDir: string, temp: string): Promise<
     }
     const activated = await loader.activate(candidate.packageId);
     if (!activated.ok) return stopped(named, "refused", activated.error.code, activated.error.message);
-    return await exercise(loader, candidate, temp, named);
+    return await exercise(loader, candidate, temp, named, mail);
   } finally {
     await engine.close(BACKGROUND_CONTEXT);
   }
