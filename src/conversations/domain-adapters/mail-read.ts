@@ -1,7 +1,9 @@
 // glossary-ignore: host, run, data, message, body
 import type { DeskAdapterConnection, DeskListedMail, DeskMailHealth, DeskMailListing, DeskMailReadBridge } from "../../desk-sdk";
 import type { RestrictionRecord } from "../authority-records";
-import { admittedCallKey, connectionKey, DeskBackendUnavailableError } from "./package-backend";
+import { admittedCallKey, admittedDispatch, connectionKey, DeskBackendUnavailableError } from "./package-backend";
+import { canonicalWire } from "./operations/validation";
+import type { MailJudgementStore } from "./mail/judgement-store";
 import type { ObjectReference } from "./types";
 import type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceListing } from "./mail-read-source";
 
@@ -55,7 +57,7 @@ function listingOf(binding: MailConnectionBinding, listing: MailSourceListing | 
  * adapter, only from inside a backend call the host admitted for that same connection, only mail the bound source
  * listed under the bound account, and refuses once the generation is fenced.
  */
-export function mailReadBridge(source: MailReadSource | undefined, adapterId: string, published: () => boolean): DeskMailReadBridge {
+export function mailReadBridge(source: MailReadSource | undefined, adapterId: string, published: () => boolean, judgements?: Pick<MailJudgementStore, "dispatch">): DeskMailReadBridge {
   return {
     listed(connection) {
       if (!published()) return Promise.reject(new DeskBackendUnavailableError(ADAPTER_UNAVAILABLE));
@@ -63,6 +65,15 @@ export function mailReadBridge(source: MailReadSource | undefined, adapterId: st
       const binding = source ? bindingFor(source, adapterId, connection) : null;
       if (!source || !binding) return Promise.resolve(null);
       return Promise.resolve(listingOf(binding, source.listings().find(listing => listing.id === binding.sourceId)));
+    },
+    changeJudgement(request) {
+      if (!published()) return Promise.reject(new DeskBackendUnavailableError(ADAPTER_UNAVAILABLE));
+      const admitted = admittedDispatch();
+      const connection = { adapterId, connectionId: request.snapshot.connectionId };
+      if (!admitted || admittedCallKey() !== connectionKey(connection) || canonicalWire(admitted) !== canonicalWire(request)) return Promise.reject(new DeskBackendUnavailableError({ code: "mail_judgement_unadmitted", message: "A Mail judgement requires the exact dispatch the Cortex runtime admitted." }));
+      const binding = source ? bindingFor(source, adapterId, connection) : null;
+      if (!judgements || !binding) return Promise.reject(new DeskBackendUnavailableError({ code: "mail_judgement_unavailable", message: "This connection has no Mail judgement store binding." }));
+      return judgements.dispatch(binding, structuredClone(request), published);
     },
   };
 }

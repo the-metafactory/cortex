@@ -1,7 +1,7 @@
 <!-- glossary-ignore: host, token, path, user, data, message, body, run -->
 # Desk adapter package and SDK authoring contract
 
-This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.8.0, an additive amendment of 1.0.0 through 1.7.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.8.0"`).
+This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.9.0, an additive amendment of 1.0.0 through 1.8.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.9.0"`).
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
@@ -303,3 +303,19 @@ The packaging probe loads a bundled default and an explicitly approved synthetic
 ## Not in this contract
 
 Credential provisioning, connection setup UI, asset HTTP delivery, live package installation or restart, provider-family migration and untrusted-code sandbox execution remain separate slices. The frame bridge that mounts a view or an editor, the Cortex runtime's draft handling behind `draft:change` and `action:propose`, and the enforcement of the per-view bridge traffic split remain separate slices (#3326). The exported conformance harness is described above.
+
+## Mail judgement changes (SDK 1.9.0, node #3541)
+
+Mail keeps judgement state in Cortex. A package can import `mailJudgementDeclaration`, `mailJudgementSnapshot`, `judgementCapability` and the `MailJudgementInput` type from the Desk SDK. The declaration defines `mail.judgement.unimportant`, `block-domain`, `correct`, `not-phishing`, `snooze`, `snooze-cancel`, `waiting` and `undo`. Each input carries its exact action and a connection-qualified message reference. Waiting includes its operation; corrections include what the principal said; snooze includes its time, meeting or person choice.
+
+An action connector delegates its exact admitted `DispatchRequest` to `host.mail.changeJudgement(request)`. The method is optional so packages can detect older runtimes. It rejects outside dispatch, after the dispatch settles, for a substituted request, for a fenced generation, or without a configured Mail store. Queries cannot use it to write. Package loading does not create a store or enable a connection.
+
+The Cortex binding supplies `DeskPackageLoaderOptions.mailJudgements`, a `MailJudgementStore` over the existing Mail database, and the source/account mappings in `mail`. The store requires an `authorize(binding, request)` callback that revalidates current connection, scope, grant or confirmation and policy authority when queued work reaches its effects. It must return false after revocation. Native tables remain canonical: `desk_unimportant`, `desk_mail_trusted`, `desk_mail_classes`, `desk_mail_snoozes`, `desk_mail_waiting` and `desk_mail_log`. Owner receipts, deduplication and Undo evidence live in that same database. The host journal retains authorization and lifecycle evidence.
+
+`MailJudgementHost` uses the same authority port as the Mail move host. A reversible action can receive a grant naming that action and Undo on one connection. New actions require their own approval. A correction without a move has no Undo, so each press returns a confirmation card even if a correction grant exists. Existing list entries are true no-ops, with no new log entry and no claim to Undo them. Unimportant and Block domain never move mail; their Undo removes only the entry that operation inserted. Replaced or edited entries cause a conflict.
+
+Correction moves use the existing move slice through a trusted `MailJudgementMoves` port; no native provider fallback is supplied. This port must attest `replay: "historical-idempotent"`: repeated move or restore calls for the same operation must return the original outcome and token, without repeating the effect, including after restart. The move result's token must identify its original location and restore precondition. Restore must refuse missing mail, denied accounts and a changed location. A successful restore withdraws only the linked correction log row. The owner commits local changes and their receipt/Undo evidence in one transaction; replay can recover a provider outcome if local persistence failed afterward. Without the replay-safe port, move corrections are unavailable.
+
+Snooze and waiting Undo compare owner versions and the current row before restoring previous state. Native edits invalidate older Undo even if they happen to reproduce the same field values. Message-ID collisions across listed accounts or sources are refused, and a snooze belonging to another source cannot be changed. The native seven-day Undo window applies.
+
+Run `bun scripts/probe-desk-mail-judgements.ts` for the host-side live probe. It applies and undoes each judgement family through the SDK bridge and a real journal, reopens the Mail store, and reads canonical state back. Its move port and connection are synthetic. The production helm-mail declaration, binding and real provider parity probe belong to the dependent adapter node; this host slice does not activate them.

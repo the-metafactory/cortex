@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
-import { forgetClassification, PREDICTED_ACTIONS, saveUnimportant } from "./classify";
+import { forgetClassification, saveUnimportant } from "./classify";
+import type { MailCorrection } from "./mail-action-schema";
+export { MAIL_CORRECTIONS, type MailCorrection } from "./mail-action-schema";
 import { logMailDecision, mailFeatures, type MailLogAction } from "./mail-log";
 import { loggedAction } from "./mail-similar";
 import { CORRECTION_MOVES } from "./mail-correction-schema";
@@ -163,8 +165,6 @@ export async function reportMail(mail: ListedMail, report: MailReportConfig | un
   }
 }
 
-export const MAIL_CORRECTIONS = ["not-bulk", "matters", ...PREDICTED_ACTIONS] as const;
-export type MailCorrection = (typeof MAIL_CORRECTIONS)[number];
 
 export const CORRECTED_CATEGORY: Partial<Record<MailCorrection, string>> = { "not-bulk": "not bulk", matters: "matters" };
 
@@ -192,6 +192,14 @@ const loggedCorrection = (db: Database, id: number, mail: ListedMail, said: Mail
 const carriedOut = (db: Database, id: number): boolean =>
   db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM desk_mail_moves WHERE correction_id = ? AND undone_at IS NULL").get(id)?.n !== 0;
 
+export function recordMailCorrection(db: Database, mail: ListedMail, said: MailCorrection, now: number): number {
+  const features = mailFeatures(db, mail);
+  const category = CORRECTED_CATEGORY[said];
+  const id = logMailDecision(db, category ? { ...features, category } : features, correctionAction(said), "correction", now);
+  forgetClassification(db, mail.id);
+  return id;
+}
+
 /**
  * Logs the principal's correction of one mail's triage as a weighted decision, and forgets the mail's classification so
  * the next pass sorts it again with the correction as its closest example. Archive, spam and delete then move the mail
@@ -201,13 +209,12 @@ const carriedOut = (db: Database, id: number): boolean =>
 export async function correctMail(mail: ListedMail, said: MailCorrection, deps: MoveDeps, retry?: number): Promise<CorrectionResult> {
   const { db, now } = deps;
   const features = mailFeatures(db, mail);
-  const category = CORRECTED_CATEGORY[said];
   const target = CORRECTION_MOVES[said];
   if (retry !== undefined) {
     if (!target || !loggedCorrection(db, retry, mail, said)) return refuse(409, "The Desk has no record of that correction for this mail.");
     if (carriedOut(db, retry)) return refuse(409, "That correction was already carried out.");
   }
-  const correction = retry ?? logMailDecision(db, category ? { ...features, category } : features, correctionAction(said), "correction", now);
+  const correction = retry ?? recordMailCorrection(db, mail, said, now);
   forgetClassification(db, mail.id);
   if (!target) return { ok: true, message: `${CORRECTION_DONE[said]} The Desk sorts it and mail like it again with that in mind.` };
   const moved = await moveMail(mail, target, deps, correctionAction(said), features, { where: "correction", doneAction: "mail.move", title: CORRECTED_TITLE[target], correction });

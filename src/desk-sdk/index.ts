@@ -1,6 +1,6 @@
 // glossary-ignore: host, run, message, body
 export { DESK_ADAPTER_SDK_VERSION } from "./version";
-import type { CancelRequest, DispatchRequest, LookupRequest, OwnerSupport, ReadbackRequest } from "../conversations/domain-adapters/operations/types";
+import type { CancelRequest, DispatchRequest, LookupRequest, OwnerResult, OwnerSupport, ReadbackRequest } from "../conversations/domain-adapters/operations/types";
 import type { ObservationRequest } from "../conversations/domain-adapters/reads/observation-types";
 import type { QueryFetchRequest } from "../conversations/domain-adapters/reads/query-types";
 import type { AdapterDeclaration } from "../conversations/domain-adapters/types";
@@ -119,7 +119,11 @@ export interface DeskMailListing {
  */
 export interface DeskMailReadBridge {
   listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;
+  changeJudgement?(request: DispatchRequest): Promise<OwnerResult>;
 }
+
+export { MAIL_JUDGEMENT_ACTIONS, judgementCapability, judgementHasUndo, mailJudgementDeclaration, mailJudgementSnapshot } from "../conversations/domain-adapters/mail/judgement-contract";
+export type { MailJudgementAction, MailJudgementInput, MailJudgementOutput } from "../conversations/domain-adapters/mail/judgement-contract";
 
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {

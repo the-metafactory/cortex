@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { UNDO_WINDOW_MS } from "../../../surface/mc/desk/mail-move";
-import type { OperationJournalStore, StoredOperation } from "../operations/journal";
+import type { StoredOperation } from "../operations/journal";
 import type { ApprovedSnapshot, Authority, OperationJournal, Provenance } from "../operations/types";
 import type { HostContext } from "../../authority";
-import type { BoundaryError, CapabilityDiscovery } from "../types";
+import type { BoundaryError } from "../types";
 import { MAIL_ACTION_CAPABILITY, MAIL_MOVE_CAPABILITIES, MAIL_REFUSAL, MAIL_RESTORE_CAPABILITY, MailMoveOutputSchema, mailAccountRef, mailMessageRef, mailMoveSnapshot, type MailMoveAction, type MailMoveInput, type MailMoveTarget } from "./move-contract";
-import { readLegacyMove, type OperationIndex } from "./legacy-move";
+import { readLegacyMove } from "./legacy-move";
+import { dispatchMailOperation, type MailHostOptions } from "./host-operation";
 
 export type GrantChoice = "always" | "once" | "cancel";
 export const GRANT_OPTIONS: readonly { choice: GrantChoice; label: string }[] = [
@@ -32,16 +33,7 @@ export interface MailMoveAuthority {
   approve(input: MailApprovalInput, grantId: string | null): Promise<ApprovalDecision>;
 }
 
-export interface MailMoveHostOptions {
-  adapterId: string;
-  connectionId: string;
-  account: string;
-  journal: OperationJournalStore;
-  index: OperationIndex;
-  authority: MailMoveAuthority;
-  capability(capabilityId: string): CapabilityDiscovery;
-  dispatch(operationId: string): Promise<unknown>;
-  now?: () => number;
+export interface MailMoveHostOptions extends MailHostOptions {
   newId?: () => string;
 }
 
@@ -196,10 +188,8 @@ export class MailMoveHost {
       return { kind: "unavailable", reason: reason("mail.invalid_request", "That mail cannot be moved: the request does not match the Mail contract.") };
     }
     const operationId = `mail-move:${this.newId()}`;
-    const decision = await this.options.authority.approve({ operationId, idempotencyKey: operationId, ownerRequestId: randomUUID(), snapshot, ...(compensates ? { links: { compensatesOperationId: compensates } } : {}) }, grantId);
+    const decision = await dispatchMailOperation(this.options, snapshot, operationId, grantId, compensates);
     if (decision.kind === "denied") return { kind: "denied", reason: decision.reason };
-    await this.options.index.add(operationId, compensates);
-    await this.options.dispatch(operationId);
     const receipt = await this.receiptOf(operationId, true);
     if (!receipt) return { kind: "denied", reason: reason("mail.receipt_missing", "The attempt left no journal record.") };
     return { kind: "receipt", receipt };
