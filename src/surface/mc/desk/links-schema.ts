@@ -30,7 +30,8 @@ export type LinkFromKind = (typeof LINK_FROM_KINDS)[number];
 export const LINK_TO_KINDS = ["task", "meeting", "thread"] as const;
 export type LinkToKind = (typeof LINK_TO_KINDS)[number];
 
-export type LinkOrigin = "desk" | "rule";
+/** Who made a link: the principal on the Desk, an approved rule, or the Desk on its own under the `mail.link-meeting` grant. */
+export type LinkOrigin = "desk" | "rule" | "auto";
 export type LinkState = "linked" | "undone" | "lost";
 
 /** What a mail link keeps of the mail, so the link still reads after the mail leaves the inbox. */

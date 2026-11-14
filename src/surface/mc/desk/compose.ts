@@ -33,7 +33,7 @@ import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { backSnoozes, hiddenMail, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
-import { backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
+import { AUTO_LINK_DONE, backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
 import { expireTaskHandoffs, openTaskHandoffs, type DispatchOptions } from "./task-handoff-store";
@@ -52,7 +52,7 @@ import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS,
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
 import { listReasons, readFeedback, readSwitches } from "./interrupt-switches";
-import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
+import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type ClassifierMail, type MailClassification, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
 import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
 import { readRoutines } from "./routines";
@@ -64,6 +64,7 @@ import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type G
 
 import { studioBriefing } from "./studio/overseer";
 import { routeOf, sourceBoundary } from "./source-boundary";
+import { AUTO_LINK_GRANT, autoLinkMeeting } from "./mail-auto-link";
 
 export interface AdapterCapabilityRequest {
   adapterId: string;
@@ -274,6 +275,7 @@ export async function composeDesk(
   const boundary = sourceBoundary(desk);
   const cloudSources = new Set(readings.filter((r) => !boundary.has(r.id)).map((r) => r.id));
   const localSources = boundary;
+  const linkOnSorted = (sorted: ClassifierMail, classification: MailClassification): void => void autoLinkMeeting({ db, events: wakeFacts.events, vips: vipSet, now }, sorted, classification);
   if (localClassifier) {
     const sourceIds = new Set(readings.filter((r) => boundary.has(r.id)).map((r) => r.id));
     void localClassifier.kick(db, {
@@ -283,6 +285,7 @@ export async function composeDesk(
       vips: vips.map((v) => v.address),
       unimportant,
       corrections: mailCorrections(db, sourceIds),
+      onSorted: linkOnSorted,
     });
   }
   if (classifier) {
@@ -298,6 +301,7 @@ export async function composeDesk(
       vips: vips.filter((v) => permittedSender(v.address)).map((v) => v.address),
       unimportant: unimportant.filter(permittedSender),
       corrections: mailCorrections(db, sourceIds),
+      onSorted: linkOnSorted,
     });
   }
   const classified = classifier || localClassifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
@@ -406,7 +410,7 @@ export async function composeDesk(
     voice: voiceView(desk.voice),
     chime: rules.chime,
     notifications: rules.notifications,
-    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove, Boolean(desk.routines?.capabilityBuild?.install)),
+    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove, Boolean(desk.routines?.capabilityBuild?.install), Boolean(desk.mailClassifier)),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),
     mailHidden: hiddenMail(db),
@@ -509,14 +513,14 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
   });
 }
 
-const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep", TRUST_DONE, "capability.install"];
+const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep", AUTO_LINK_DONE, TRUST_DONE, "capability.install"];
 
-function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean, canInstall: boolean): DeskView["autonomy"] {
+function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean, canInstall: boolean, classifier: boolean): DeskView["autonomy"] {
   const grants = listGrants(db);
   const shown = done.filter((d) => d.status !== "running").slice(0, 10);
   const ruleOf = rulesOfRuns(db, shown.filter((d) => d.action.startsWith("mail.rule")).map((d) => d.itemKey));
   const on = new Set(listRules(db).filter((r) => r.on).map((r) => r.id));
-  const ready = (a: string): boolean => a === "capability.install" ? canInstall : a === "studio.capture" ? studio : a === "mail.rules" ? canMove && (grants.has(a) || on.size > 0) : rangerActions;
+  const ready = (a: string): boolean => a === "capability.install" ? canInstall : a === "studio.capture" ? studio : a === "mail.rules" ? canMove && (grants.has(a) || on.size > 0) : a === AUTO_LINK_GRANT ? classifier || grants.has(a) : rangerActions;
   return {
     types: PROMOTABLE.filter(ready).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
     done: shown.map((d) => {

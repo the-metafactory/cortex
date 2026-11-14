@@ -381,6 +381,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     onChanged();
   };
 
+  const undoLink = async (id: string): Promise<void> => {
+    const result = await submitMailAction({ action: "attach.undo", link: id });
+    setNote(result.text);
+    if (!result.ok) return;
+    const restored = result.restored;
+    if (restored) setSnoozed((s) => { const next = new Set(s); next.delete(restored); return next; });
+    onChanged();
+  };
+
   const stopRule = async (rule: string): Promise<void> => {
     const result = await submitMailRule({ op: "stop", rule });
     setNote(result.text);
@@ -432,7 +441,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     } catch (error) { setNote(error instanceof Error ? error.message : "The uninstall command did not answer."); }
   };
 
-  const undoBy: Record<string, (id: string) => Promise<void>> = { "capability.install": undoCapabilityInstall, "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep, "mail.trust": undoTrust };
+  const undoBy: Record<string, (id: string) => Promise<void>> = { "capability.install": undoCapabilityInstall, "mail.link": undoLink, "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep, "mail.trust": undoTrust };
   const undoDone = (id: string, action?: string): void => void (undoBy[action ?? ""] ?? undoCapture)(id);
 
   const blockDomain = async (r: Receipt): Promise<void> => {

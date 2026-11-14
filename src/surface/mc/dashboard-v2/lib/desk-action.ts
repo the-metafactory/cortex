@@ -59,6 +59,7 @@ export type MailActionBody =
   | { action: "undo" | "block"; move: string }
   | { action: "sweep"; sweep: string; keys: string[]; target?: import("../../desk/mail-move").MoveTarget }
   | { action: "sweep.undo"; sweep: string }
+  | { action: "attach.undo"; link: string }
   | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection; correction?: number }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }
   | { action: "studio.add"; key: string; requestId: string; thread: string | null; reason?: string; includeText: boolean }

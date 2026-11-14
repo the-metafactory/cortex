@@ -269,8 +269,19 @@ export async function undoAttach(db: Database, id: string, deps: UndoAttachDeps)
   if (row.fromKind !== "mail") return { ok: true, message: `${quoted(row.fromTitle)} is no longer linked to ${quoted(row.toTitle)}.` };
   const features = loggedFeatures(db, messageIdOf(row.fromKey));
   if (features) logMailDecision(db, features, "restore", "desk", deps.now);
-  if (!deps.listed(row.fromKey)) return { ok: true, message: `The link to ${quoted(row.toTitle)} is gone. ${quoted(row.fromTitle)} is no longer in your inbox, so nothing returns.` };
-  return { ok: true, message: `${quoted(row.fromTitle)} is back on the Desk.`, restored: row.fromKey };
+  const result: UndoAttachResult = deps.listed(row.fromKey)
+    ? { ok: true, message: `${quoted(row.fromTitle)} is back on the Desk.`, restored: row.fromKey }
+    : { ok: true, message: `The link to ${quoted(row.toTitle)} is gone. ${quoted(row.fromTitle)} is no longer in your inbox, so nothing returns.` };
+  if (row.origin === "auto") markAutoLinkUndone(db, row.id, result.message, deps.now);
+  return result;
+}
+
+/** The Done for you action of one auto-link under the `mail.link-meeting` grant; it becomes `mail.link.undone` once the link is undone. */
+export const AUTO_LINK_DONE = "mail.link";
+export const autoLinkDoneKey = (linkId: string): string => `mail-link:${linkId}`;
+
+function markAutoLinkUndone(db: Database, linkId: string, message: string, now: number): void {
+  db.query("UPDATE desk_done SET action = ?, message = ?, updated_at = ? WHERE attempt_key = ? AND action = ?").run(`${AUTO_LINK_DONE}.undone`, message, now, autoLinkDoneKey(linkId), AUTO_LINK_DONE);
 }
 
 /** Marks every active link to or from a task the outline no longer has as lost: a mail attached to it comes back with the reason, and a meeting stops listing it. */
