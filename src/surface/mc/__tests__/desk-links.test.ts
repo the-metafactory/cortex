@@ -7,6 +7,9 @@ import { HandledLedger } from "../desk/actions";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { activeMailLink, linkedMailIds, linkStudioMail, offDeskIds, readLink } from "../desk/links";
+import { handleDeskLinks } from "../api/desk-links";
+import { addNote } from "../desk/notes";
+import type { SourceEvent } from "../desk/sources/command";
 import { historySentence, queryMailLog } from "../desk/mail-log";
 import { createRule, pendingRuleMail } from "../desk/mail-rules";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
@@ -140,5 +143,73 @@ describe("a task that is removed", () => {
     expect(readLink(db, "link-1")).toMatchObject({ state: "lost", reason: "“Kickoff prep” was removed" });
     expect(back?.why.startsWith("Back because “Kickoff prep” was removed.")).toBe(true);
     expect(back?.back).toEqual({ line: "Back because “Kickoff prep” was removed.", at: at(4, 11) });
+  });
+});
+
+describe("link to a meeting", () => {
+  const coverage = { from: new Date(at(4, 0)).toISOString(), to: new Date(at(11, 0)).toISOString(), calendars: [{ id: "c1", name: "Work" }], status: "complete", provenance: "test" };
+  const meeting = (start = at(4, 14), end = at(4, 15), title = "Board call"): SourceEvent => ({ id: "e1", start: new Date(start).toISOString(), end: new Date(end).toISOString(), title, calendar: "Work", calendarId: "c1" });
+  const withEvents = (items: SourceMail[], events: SourceEvent[]): DeskRuntime => ({ options, ledger: new HandledLedger(), sourceCache: new SourceCache(async () => JSON.stringify({ capabilities: ["calendar"], calendarCoverage: coverage, items, events })) });
+  const EVENT = "cal:work-mail:e1";
+  const link = async (rt: DeskRuntime, body: unknown, now = NOW) => {
+    await rt.sourceCache?.read(options.sources, now);
+    const res = await handleDeskLinks(new Request("http://localhost/api/desk/links", { method: "POST", body: JSON.stringify(body) }), db, rt, { now: () => now, newId: () => `link-${++ids}` });
+    return { status: res.status, json: await res.json() as Record<string, unknown> };
+  };
+  const eventLinks = async (rt: DeskRuntime, now = NOW) => (await composeWith(db, options, rt, now)).today.find((e) => e.key === EVENT)?.links;
+
+  it("attaches a mail to an upcoming meeting and lists it on the event", async () => {
+    const rt = withEvents([mail("m1")], [meeting()]);
+    expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } })).toEqual({ status: 200, json: {
+      ok: true, message: "Linked “Venue quote” to “Board call” today at 14:00.",
+      link: { id: "link-1", from: { kind: "mail", key: "mail:m1", title: "Venue quote" }, to: { kind: "meeting", key: EVENT, title: "Board call", at: at(4, 14), end: at(4, 15) }, origin: "desk", at: NOW },
+    } });
+    const view = await composeWith(db, options, rt, NOW);
+    expect(view.items.some((i) => i.key === "mail:m1")).toBe(false);
+    expect(view.today.find((e) => e.key === EVENT)?.links).toEqual([{ id: "link-1", kind: "mail", key: "mail:m1", title: "Venue quote", origin: "desk" }]);
+  });
+
+  it("refuses a meeting that is over or unknown for a mail, and a reused request id for another mail", async () => {
+    const rt = withEvents([mail("m1"), mail("m2")], [meeting(at(4, 8), at(4, 9))]);
+    expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } })).toEqual({ status: 409, json: { ok: false, error: "That meeting is already over." } });
+    expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: "cal:work-mail:nope" } })).toEqual({ status: 409, json: { ok: false, error: "The Desk no longer sees that meeting. Pick another one." } });
+    await attach(rt);
+    expect(await attach(rt, "kickoff", REQUEST, "mail:m2")).toEqual({ status: 409, json: { ok: false, error: "That request id was already used for another link." } });
+  });
+
+  it("links a task and a note, past meetings included, once per pair, and a replay is idempotent", async () => {
+    const rt = withEvents([], [meeting(at(4, 8), at(4, 9))]);
+    const note = addNote(db, "note", "Ask about the budget", null, NOW);
+    const linkTask = { op: "link", requestId: REQUEST, from: { kind: "task", id: "kickoff" }, to: { kind: "meeting", event: EVENT } };
+    const first = await link(rt, linkTask);
+    expect(first).toMatchObject({ status: 200, json: { ok: true, message: "Linked “Kickoff prep” to “Board call” today at 08:00.", link: { from: { kind: "task", key: "task:kickoff" } } } });
+    expect(await link(rt, linkTask)).toEqual(first);
+    expect(await link(rt, { ...linkTask, requestId: "5f9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed" })).toEqual({ status: 409, json: { ok: false, error: "This is already linked to “Board call”." } });
+    expect((await link(rt, { op: "link", requestId: "6a9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", from: { kind: "note", id: note.id }, to: { kind: "meeting", event: EVENT } })).status).toBe(200);
+    expect((await eventLinks(rt))?.map((l) => [l.kind, l.title])).toEqual([["task", "Kickoff prep"], ["note", "Ask about the budget"]]);
+    expect((await myDay(rt)).links).toMatchObject([{ from: { kind: "task", key: "task:kickoff" }, to: { kind: "meeting", key: EVENT, at: at(4, 8) } }]);
+    expect(await link(rt, { ...linkTask, requestId: "7b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", from: { kind: "task", id: "nope" } })).toEqual({ status: 404, json: { ok: false, error: "That task, thread or note no longer exists." } });
+    expect(await link(rt, { op: "link", from: { kind: "task", id: "kickoff" } })).toEqual({ status: 400, json: { ok: false, error: "A link needs a subject, a meeting and a request id." } });
+    expect(await link(rt, { op: "unlink", link: "link-1" })).toEqual({ status: 200, json: { ok: true, message: "“Kickoff prep” is no longer linked to “Board call”." } });
+    expect((await eventLinks(rt))?.map((l) => l.kind)).toEqual(["note"]);
+  });
+
+  it("follows a meeting that moves, keeps the mail after it ends, and returns it when the meeting is cancelled", async () => {
+    await act(withEvents([mail("m1")], [meeting()]), { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } });
+    expect(await eventLinks(withEvents([mail("m1")], [meeting(at(4, 16), at(4, 17), "Board call (moved)")]))).toHaveLength(1);
+    expect(readLink(db, "link-1")).toMatchObject({ state: "linked", toKey: EVENT, toTitle: "Board call (moved)", toAt: at(4, 16), toEnd: at(4, 17) });
+    expect((await composeWith(db, options, withEvents([mail("m1")], [meeting(at(4, 16), at(4, 17), "Board call (moved)")]), at(4, 18))).items.some((i) => i.key === "mail:m1")).toBe(false);
+    const back = (await composeWith(db, options, withEvents([mail("m1")], []), at(4, 18))).items.find((i) => i.key === "mail:m1");
+    expect(readLink(db, "link-1")).toMatchObject({ state: "lost", reason: "“Board call (moved)” was cancelled" });
+    expect(back?.why.startsWith("Back because “Board call (moved)” was cancelled.")).toBe(true);
+    expect(await act(withEvents([mail("m1")], []), { action: "attach.undo", link: "link-1" })).toEqual({ status: 409, json: { ok: false, error: "That link already ended: “Board call (moved)” was cancelled." } });
+  });
+
+  it("unlinking a mail through either door brings it back", async () => {
+    const rt = withEvents([mail("m1")], [meeting()]);
+    await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } });
+    expect(await link(rt, { op: "unlink", link: "link-1" })).toEqual({ status: 200, json: { ok: true, message: "“Venue quote” is back on the Desk.", restored: "mail:m1" } });
+    expect(await eventLinks(rt)).toBeUndefined();
+    expect((await composeWith(db, options, rt, NOW)).items.some((i) => i.key === "mail:m1")).toBe(true);
   });
 });

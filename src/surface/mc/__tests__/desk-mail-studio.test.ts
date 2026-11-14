@@ -7,6 +7,7 @@ import { initDatabase } from "../db/init";
 import { handleDeskMail } from "../api/desk-mail";
 import { handleGetDeskStudio } from "../api/desk-studio";
 import { handleDeskCaptureUndo } from "../api/desk-ask";
+import { handleDeskLinks } from "../api/desk-links";
 import { HandledLedger } from "../desk/actions";
 import { readDone } from "../desk/autonomy";
 import { saveClassification } from "../desk/classify";
@@ -182,6 +183,14 @@ describe("Add a mail to a Studio thread", () => {
     expect(body.materialText).toBe("untrusted");
     const material = body.studio.active.find((t) => t.slug === "engines")?.material ?? [];
     expect(material.map((m) => [m.kind, m.text ?? null])).toEqual([["link", null], ["capture", "The analytical engine could weave patterns.\nSecond line of the body."]]);
+  });
+
+  it("links a Studio thread to a meeting", async () => {
+    const event = { id: "e1", start: "2026-11-02T13:00:00.000Z", end: "2026-11-02T14:00:00.000Z", title: "Engine review" };
+    runtime = { ...runtime, sourceCache: new SourceCache(async (argv) => JSON.stringify({ items: argv[0] === "work" ? [mail("w1")] : [], events: argv[0] === "work" ? [event] : [] })) };
+    await runtime.sourceCache?.read(runtime.options?.sources ?? [], NOW);
+    const res = await handleDeskLinks(new Request("http://localhost/api/desk/links", { method: "POST", body: JSON.stringify({ op: "link", requestId: "0f3c1a52-6c1e-4b8f-9d2a-1f0e5b7c9a11", from: { kind: "thread", slug: "engines" }, to: { kind: "meeting", event: "cal:work-mail:e1" } }) }), db, runtime, { now: () => NOW, newId: () => "link-1" });
+    expect(await res.json()).toMatchObject({ ok: true, link: { from: { kind: "thread", key: "thread:engines", title: "What can engines make?" }, to: { kind: "meeting", title: "Engine review" } } });
   });
 
   it("refuses a mail the Desk does not list, an inactive thread and a stack without a Studio", async () => {

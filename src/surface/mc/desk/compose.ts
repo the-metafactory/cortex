@@ -33,7 +33,7 @@ import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { backSnoozes, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
-import { backLinks, loseTaskLinks, offDeskIds } from "./links";
+import { backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
 import { expireTaskHandoffs, openTaskHandoffs, type DispatchOptions } from "./task-handoff-store";
@@ -250,7 +250,9 @@ export async function composeDesk(
     return { myDay: readMyDay(db, desk, now, source, projection ?? undefined), studio };
   });
   loseTaskLinks(db, myDay, now);
-  wakeSnoozes(db, snoozeFacts(db, readings, availability), now);
+  const wakeFacts = snoozeFacts(db, readings, availability);
+  wakeSnoozes(db, wakeFacts, now);
+  followMeetingLinks(db, wakeFacts, now);
   const offDesk = offDeskIds(db);
   const snoozeBack = new Map([...backSnoozes(db, now), ...backLinks(db, now)]);
   const digested = digestedIds(db, readings.flatMap((r) => r.mail.map((m) => m.id)));
@@ -317,8 +319,9 @@ export async function composeDesk(
   }));
   const calendar = [...events, ...written];
   const sod = startOfDay(now);
-  const todayCalendar = calendarEvents(calendar, sod, sod + DAY_MS);
-  const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS);
+  const linksByEvent = meetingLinks(db);
+  const todayCalendar = withEventLinks(calendarEvents(calendar, sod, sod + DAY_MS), linksByEvent);
+  const aheadCalendar = withEventLinks(calendarEvents(calendar, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS), linksByEvent);
   const deskCalendar = calendarEvents(calendar, sod, sod + TIMELINE_DAYS * DAY_MS);
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
   const interruptSwitches = readSwitches(db);
@@ -536,6 +539,10 @@ function returnedCalendars(reading: SourceReading): ReturnedCalendars[] {
 }
 
 type CalendarEvent = SourceEvent & { area: string | null; sourceId: string; color?: string };
+
+function withEventLinks(events: DeskEvent[], links: ReadonlyMap<string, EventLink[]>): DeskEvent[] {
+  return events.map((e) => { const linked = e.kind === "meeting" ? links.get(e.key) : undefined; return linked ? { ...e, links: linked } : e; });
+}
 
 function calendarEvents(events: CalendarEvent[], from: number, to: number): DeskEvent[] {
   return events
