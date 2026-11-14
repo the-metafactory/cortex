@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { UNDO_WINDOW_MS } from "../../../surface/mc/desk/mail-move";
 import type { StoredOperation } from "../operations/journal";
-import type { ApprovedSnapshot, Authority, OperationJournal, Provenance } from "../operations/types";
+import type { ApprovedSnapshot, Authority, OperationJournal, OperationState, Provenance } from "../operations/types";
 import type { HostContext } from "../../authority";
-import type { BoundaryError } from "../types";
+import type { BoundaryError, ObjectReference } from "../types";
 import { MAIL_ACTION_CAPABILITY, MAIL_MOVE_CAPABILITIES, MAIL_REFUSAL, MAIL_RESTORE_CAPABILITY, MailMoveOutputSchema, mailAccountRef, mailMessageRef, mailMoveSnapshot, mailTargetDone, mailTargetFolder, type MailMoveAction, type MailMoveInput, type MailMoveTarget } from "./move-contract";
 import { readLegacyMove } from "./legacy-move";
 import { dispatchMailOperation, type MailHostOptions } from "./host-operation";
@@ -26,11 +26,23 @@ export interface GrantPrompt {
 export type ApprovalDecision = { kind: "allowed"; authority: Authority } | { kind: "denied"; reason: BoundaryError };
 export interface MailApprovalInput { operationId: string; idempotencyKey: string; ownerRequestId: string; snapshot: ApprovedSnapshot; links?: OperationJournal["links"] }
 
+/** The exact objects one standing permission names, so it covers no other mail than these. */
+export interface MailGrantSelection {
+  destinations: readonly ObjectReference[];
+  target: ObjectReference;
+}
+
 /** What the Cortex runtime's authority offers one Mail connection: the standing grant for the move actions, and approval of one operation under it. */
 export interface MailMoveAuthority {
   findGrant(capabilityId: string): Promise<string | null>;
-  grant(capabilityIds: readonly string[]): Promise<string | null>;
+  grant(capabilityIds: readonly string[], selection?: MailGrantSelection): Promise<string | null>;
   approve(input: MailApprovalInput, grantId: string | null): Promise<ApprovalDecision>;
+}
+
+export interface MailInspection {
+  state: OperationState | null;
+  receipt: MailMoveReceipt | null;
+  restores: MailMoveReceipt[];
 }
 
 export interface MailMoveHostOptions extends MailHostOptions {
@@ -149,16 +161,16 @@ export class MailMoveHost {
     return { kind: "denied", reason: reason("authority_denied", "The standing permission does not run this move without asking.") };
   }
 
-  async undo(operationId: string, provenance: Provenance): Promise<UndoOutcome> {
+  async undo(operationId: string, provenance: Provenance, grantId?: string | null): Promise<UndoOutcome> {
     const original = await this.receipt(operationId);
     if (!original) return { kind: "unavailable", reason: reason("mail.receipt_unknown", "The Desk has no record of that move.") };
     if (original.undo.kind !== "available") return { kind: "unavailable", reason: reason("mail.undo_unavailable", `This move cannot be undone: ${original.undo.reason}.`) };
     if (this.undoing.has(operationId)) return { kind: "unavailable", reason: reason("mail.undo_unavailable", "This move is already being undone.") };
     this.undoing.add(operationId);
     try {
-      const grantId = await this.options.authority.findGrant(MAIL_RESTORE_CAPABILITY);
+      const restoreGrantId = grantId === undefined ? await this.options.authority.findGrant(MAIL_RESTORE_CAPABILITY) : grantId;
       const from = original.folder ?? (original.target ? mailTargetFolder(original.target) : "");
-      const outcome = await this.run({ action: "restore", message: this.message(original.messageId), from }, provenance, grantId, operationId);
+      const outcome = await this.run({ action: "restore", message: this.message(original.messageId), from }, provenance, restoreGrantId, operationId);
       if (outcome.kind !== "receipt") return outcome.kind === "denied" ? outcome : { kind: "unavailable", reason: reason("mail.undo_unavailable", "The move cannot be undone now.") };
       const refreshed = await this.receipt(operationId);
       return { kind: "receipt", receipt: outcome.receipt, original: refreshed ?? original };
@@ -169,6 +181,13 @@ export class MailMoveHost {
 
   async restores(operationId: string): Promise<MailMoveReceipt[]> {
     return (await this.loadCompensations(operationId)).map(item => this.project(item, []));
+  }
+
+  async inspect(operationId: string): Promise<MailInspection> {
+    const found = await this.options.journal.read(operationId);
+    if (!found) return { state: null, receipt: null, restores: [] };
+    const compensations = this.compensated(found) ? await this.loadCompensations(operationId) : [];
+    return { state: found.journal.state, receipt: this.project(found, compensations), restores: compensations.map(item => this.project(item, [])) };
   }
 
   async receipts(limit = 100): Promise<MailMoveReceipt[]> {
@@ -184,9 +203,12 @@ export class MailMoveHost {
   private async receiptOf(operationId: string, fresh: boolean): Promise<MailMoveReceipt | null> {
     const found = await this.options.journal.read(operationId);
     if (!found) return null;
-    const needsCompensations = !fresh && found.journal.state === "succeeded" && ("kind" in found.journal.snapshot || found.journal.snapshot.capabilityId !== MAIL_RESTORE_CAPABILITY);
-    const compensations = needsCompensations ? await this.loadCompensations(operationId) : [];
+    const compensations = !fresh && this.compensated(found) ? await this.loadCompensations(operationId) : [];
     return this.project(found, compensations);
+  }
+
+  private compensated(found: StoredOperation): boolean {
+    return found.journal.state === "succeeded" && ("kind" in found.journal.snapshot || found.journal.snapshot.capabilityId !== MAIL_RESTORE_CAPABILITY);
   }
 
   private message(messageId: string) { return mailMessageRef(this.options.adapterId, this.options.connectionId, messageId); }
@@ -271,7 +293,7 @@ export class MailMoveHost {
 
 export interface MailMoveAuthorityService {
   findConnectionGrant(context: HostContext, connectionId: string, capabilityId: string): Promise<string | null>;
-  grantConnectionActions(context: HostContext, connectionId: string, capabilityIds: readonly string[]): Promise<string | null>;
+  grantConnectionActions(context: HostContext, connectionId: string, capabilityIds: readonly string[], selection?: MailGrantSelection): Promise<string | null>;
   confirm(context: HostContext, input: MailApprovalInput): Promise<ApprovalDecision>;
   approveGrant(context: HostContext, input: MailApprovalInput, grantId: string): Promise<ApprovalDecision>;
 }
@@ -280,7 +302,7 @@ export interface MailMoveAuthorityService {
 export function mailMoveAuthority(service: MailMoveAuthorityService, context: HostContext, connectionId: string): MailMoveAuthority {
   return {
     findGrant: capabilityId => service.findConnectionGrant(context, connectionId, capabilityId),
-    grant: capabilityIds => service.grantConnectionActions(context, connectionId, capabilityIds),
+    grant: (capabilityIds, selection) => service.grantConnectionActions(context, connectionId, capabilityIds, selection),
     approve: (input, grantId) => grantId ? service.approveGrant(context, input, grantId) : service.confirm(context, input),
   };
 }

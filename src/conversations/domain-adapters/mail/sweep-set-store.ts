@@ -6,6 +6,7 @@ export interface MailSweepSetItem {
   messageId: string;
   subject: string;
   operationId: string;
+  authorityGrantId: string | null;
 }
 
 export interface MailSweepSetInput {
@@ -42,7 +43,7 @@ export interface MailSweepSets {
   markUndone(sweepId: string, now: number): void;
 }
 
-const ItemSchema = z.object({ messageId: z.string().min(1), subject: z.string(), operationId: z.string().min(1) }).strict();
+const ItemSchema = z.object({ messageId: z.string().min(1), subject: z.string(), operationId: z.string().min(1), authorityGrantId: z.string().min(1).nullable() }).strict();
 const SetSchema = z.object({
   sweepId: z.uuid(),
   adapterId: z.string().min(1),
@@ -72,9 +73,10 @@ interface ItemRow {
   message_id: string;
   subject: string;
   operation_id: string;
+  authority_grant_id: string | null;
 }
 
-/** The exact messages one sweep set out to move, so its Undo names each one without rereading the mailbox. */
+/** The exact messages one sweep set out to move, and the authority each one ran under, so its Undo names each without rereading the mailbox. */
 export class DeskMailSweepSets implements MailSweepSets {
   constructor(private readonly db: Database) {}
 
@@ -86,8 +88,8 @@ export class DeskMailSweepSets implements MailSweepSets {
       this.db.query("INSERT INTO desk_mail_sweep_sets (sweep_id, adapter_id, connection_id, account, target, rule, digest, count, created_at, undone_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)")
         .run(parsed.sweepId, parsed.adapterId, parsed.connectionId, parsed.account, parsed.target, JSON.stringify(parsed.rule), parsed.digest, parsed.count, now);
       for (const [position, item] of parsed.items.entries()) {
-        this.db.query("INSERT INTO desk_mail_sweep_set_mails (sweep_id, position, message_id, subject, operation_id) VALUES (?, ?, ?, ?, ?)")
-          .run(parsed.sweepId, position, item.messageId, item.subject, item.operationId);
+        this.db.query("INSERT INTO desk_mail_sweep_set_mails (sweep_id, position, message_id, subject, operation_id, authority_grant_id) VALUES (?, ?, ?, ?, ?, ?)")
+          .run(parsed.sweepId, position, item.messageId, item.subject, item.operationId, item.authorityGrantId);
       }
     })();
     const stored = this.find(parsed.sweepId);
@@ -98,12 +100,12 @@ export class DeskMailSweepSets implements MailSweepSets {
   find(sweepId: string): MailSweepSet | null {
     const row = this.db.query<SetRow, [string]>("SELECT sweep_id, adapter_id, connection_id, account, target, rule, digest, count, created_at, undone_at FROM desk_mail_sweep_sets WHERE sweep_id = ?").get(sweepId);
     if (!row) return null;
-    const items = this.db.query<ItemRow, [string]>("SELECT message_id, subject, operation_id FROM desk_mail_sweep_set_mails WHERE sweep_id = ? ORDER BY position").all(row.sweep_id);
+    const items = this.db.query<ItemRow, [string]>("SELECT message_id, subject, operation_id, authority_grant_id FROM desk_mail_sweep_set_mails WHERE sweep_id = ? ORDER BY position").all(row.sweep_id);
     return {
       sweepId: row.sweep_id, adapterId: row.adapter_id, connectionId: row.connection_id, account: row.account,
       target: MailSweepTargetSchema.parse(row.target), rule: MailSweepRuleSchema.parse(JSON.parse(row.rule)),
       digest: row.digest, count: row.count, createdAt: row.created_at, undoneAt: row.undone_at,
-      items: items.map(item => ({ messageId: item.message_id, subject: item.subject, operationId: item.operation_id })),
+      items: items.map(item => ({ messageId: item.message_id, subject: item.subject, operationId: item.operation_id, authorityGrantId: item.authority_grant_id })),
     };
   }
 

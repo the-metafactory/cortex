@@ -7,7 +7,6 @@ export interface MailSweepGrantInput {
   connectionId: string;
   target: MailSweepTarget;
   rule: MailSweepRule;
-  authorityGrantId: string | null;
 }
 
 export interface MailSweepGrants {
@@ -24,13 +23,12 @@ interface GrantRow {
   connection_id: string;
   target: string;
   rule: string;
-  authority_grant_id: string | null;
   status: string;
   created_at: number;
   revoked_at: number | null;
 }
 
-const COLUMNS = "grant_id, adapter_id, connection_id, target, rule, authority_grant_id, status, created_at, revoked_at";
+const COLUMNS = "grant_id, adapter_id, connection_id, target, rule, status, created_at, revoked_at";
 
 const toGrant = (row: GrantRow): MailSweepGrant => MailSweepGrantSchema.parse({
   grantId: row.grant_id,
@@ -38,13 +36,12 @@ const toGrant = (row: GrantRow): MailSweepGrant => MailSweepGrantSchema.parse({
   connectionId: row.connection_id,
   target: MailSweepTargetSchema.parse(row.target),
   rule: MailSweepRuleSchema.parse(JSON.parse(row.rule)),
-  authorityGrantId: row.authority_grant_id,
   status: row.status,
   createdAt: new Date(row.created_at).toISOString(),
   revokedAt: row.revoked_at === null ? null : new Date(row.revoked_at).toISOString(),
 });
 
-/** The one-click sweep permissions a connection holds: each names its target and the exact selection rule it covers. */
+/** The one-click sweep permissions a connection holds: each names its target and the exact selection rule it covers. A run mints one exact authority grant per message from it. */
 export class DeskMailSweepGrants implements MailSweepGrants {
   constructor(private readonly db: Database, private readonly newId: () => string = randomUUID) {}
 
@@ -55,8 +52,8 @@ export class DeskMailSweepGrants implements MailSweepGrants {
     this.db.transaction(() => {
       this.db.query("UPDATE desk_mail_sweep_grants SET status = 'revoked', revoked_at = ? WHERE connection_id = ? AND target = ? AND status = 'active'")
         .run(now, input.connectionId, target);
-      this.db.query(`INSERT INTO desk_mail_sweep_grants (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, 'active', ?, NULL)`)
-        .run(grantId, input.adapterId, input.connectionId, target, JSON.stringify(rule), input.authorityGrantId, now);
+      this.db.query(`INSERT INTO desk_mail_sweep_grants (${COLUMNS}) VALUES (?, ?, ?, ?, ?, 'active', ?, NULL)`)
+        .run(grantId, input.adapterId, input.connectionId, target, JSON.stringify(rule), now);
     })();
     const stored = this.find(grantId);
     if (!stored) throw new Error("The sweep permission was not stored.");
@@ -85,5 +82,5 @@ export class DeskMailSweepGrants implements MailSweepGrants {
   }
 }
 
-export const sweepGrantCovers = (grant: MailSweepGrant | null, target: MailSweepTarget, rule: MailSweepRule): grant is MailSweepGrant & { authorityGrantId: string } =>
-  grant !== null && grant.status === "active" && grant.authorityGrantId !== null && grant.target === target && sameSweepRule(grant.rule, rule);
+export const sweepGrantCovers = (grant: MailSweepGrant | null, target: MailSweepTarget, rule: MailSweepRule): grant is MailSweepGrant =>
+  grant !== null && grant.status === "active" && grant.target === target && sameSweepRule(grant.rule, rule);

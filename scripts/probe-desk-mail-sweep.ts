@@ -29,7 +29,9 @@ try {
   assert.deepEqual(run.receipt.items.map(item => item.state), ["done", "done", "done"]);
   assert.equal(run.receipt.message, "Archived 3 mails from boss@example.org.");
   assert.equal(rig.folders.get("m1"), "Archive");
-  assert.equal(rig.grants.list()[0]?.authorityGrantId, rig.authorityGrants[0]?.id);
+  assert.deepEqual(rig.authorityGrants.map(grant => grant.selection?.target.canonicalId), ["m1", "m2", "m3"]);
+  assert.equal(await rig.authority.findGrant("mail.move"), null);
+  assert.equal((await rig.moves.press({ action: "move", messageId: "m9", target: "archive", provenance: SWEEP_PROVENANCE })).kind, "needs-grant");
 
   const grown = await rig.host.run({ preview, mail: [...mail, sweepMail("m4")], provenance: SWEEP_PROVENANCE, choice: "always" });
   assert.equal(grown.kind, "stale");
@@ -56,7 +58,7 @@ try {
     assert.equal(retried.receipt.undone, true);
   }
   assert.equal(rig.folders.get("m2"), "INBOX");
-  console.log("Mail sweep probe passed: a preview names the rule and count, the set asks for and runs under its own rule-scoped permission, a changed set is refused with a fresh preview, and Undo restores all but the message that moved since.");
+  console.log("Mail sweep probe passed: a preview names the rule and count, the set asks for and runs under its own rule-scoped permission that answers no other move, a changed set is refused with a fresh preview, and Undo restores all but the message that moved since.");
 } finally {
   await rig.close();
 }

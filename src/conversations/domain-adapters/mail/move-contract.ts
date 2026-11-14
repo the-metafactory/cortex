@@ -23,7 +23,7 @@ export type MailAction = (typeof MAIL_ACTIONS)[number];
 
 export const mailActionForTarget = (target: MailTarget): MailAction => (target === "trash" ? "trash" : "move");
 
-/** The connection capabilities a standing permission must name to run these actions and their Undo. */
+/** The connection capabilities a standing permission must name to cover these actions and their Undo. */
 export const mailActionCapabilityIds = (actions: readonly MailAction[]): string[] =>
   [...new Set([...actions.map(action => MAIL_ACTION_CAPABILITY[action]), MAIL_RESTORE_CAPABILITY])];
 

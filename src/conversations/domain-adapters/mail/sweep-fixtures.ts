@@ -3,7 +3,7 @@ import type { DispatchRequest } from "../operations/types";
 import type { OperationJournalStore } from "../operations/journal";
 import type { FixtureGrant } from "./host-fixtures";
 import { LOOP_ACCOUNT, LOOP_ADAPTER, LOOP_CONNECTION, LOOP_PROVENANCE, openMailLoopRig } from "./loop-fixtures";
-import type { MailMoveHost } from "./move-host";
+import type { MailMoveAuthority, MailMoveHost } from "./move-host";
 import type { MailSweepRule, SweepMail } from "./sweep-contract";
 import { DeskMailSweepGrants } from "./sweep-grant-store";
 import { MailSweepHost } from "./sweep-host";
@@ -35,7 +35,10 @@ export interface MailSweepRig {
   readonly calls: DispatchRequest[];
   readonly authorityGrants: FixtureGrant[];
   readonly grants: DeskMailSweepGrants;
+  readonly authority: MailMoveAuthority;
   seed(ids: readonly string[], folder?: string): void;
+  hold(ids: readonly string[]): void;
+  settle(messageId: string): Promise<void>;
   advance(ms: number): void;
   close(): Promise<void>;
 }
@@ -63,7 +66,10 @@ export async function openMailSweepRig(): Promise<MailSweepRig> {
     calls: loop.calls,
     authorityGrants: loop.authorityGrants,
     grants,
+    authority: loop.authority,
     seed: (ids, folder) => { loop.seed(ids, folder); },
+    hold: ids => { loop.hold(ids); },
+    settle: messageId => loop.settle(messageId),
     advance: ms => { loop.advance(ms); },
     close: () => loop.close(),
   };

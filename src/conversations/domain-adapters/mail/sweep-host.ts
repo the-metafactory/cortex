@@ -3,10 +3,10 @@ import { summarizeBatch } from "../operations/batches";
 import type { OperationJournalStore } from "../operations/journal";
 import type { OperationState, Provenance } from "../operations/types";
 import type { BoundaryError } from "../types";
-import { mailActionForTarget } from "./move-contract";
-import { GRANT_OPTIONS, type GrantChoice, type MailMoveHost, type MailMoveReceipt, type ReceiptState } from "./move-host";
+import { mailAccountRef, mailActionForTarget, mailMessageRef } from "./move-contract";
+import { GRANT_OPTIONS, type GrantChoice, type MailGrantSelection, type MailMoveHost, type MailMoveReceipt, type ReceiptState } from "./move-host";
 import type { MailMoveAuthority } from "./move-host";
-import { MailSweepRuleSchema, MailSweepTargetSchema, sweepCapabilityIds, sweepDigest, sweepMailCount, sweepMembers, sweepPreviewMember, sweepPromptQuestion, sweepRulePhrase, type MailSweepPreview, type MailSweepRule, type MailSweepTarget, type SweepMail } from "./sweep-contract";
+import { MailSweepRuleSchema, MailSweepTargetSchema, sweepCapabilityIds, sweepDigest, sweepMailCount, sweepMembers, sweepPreviewMember, sweepPromptQuestion, sweepRulePhrase, type MailSweepPreview, type MailSweepPreviewMember, type MailSweepRule, type MailSweepTarget, type SweepMail } from "./sweep-contract";
 import { sweepGrantCovers, type MailSweepGrants } from "./sweep-grant-store";
 import type { MailSweepGrant } from "./sweep-contract";
 import type { MailSweepSet, MailSweepSets } from "./sweep-set-store";
@@ -99,6 +99,13 @@ const UNDO_WHY: Record<Extract<MailMoveReceipt["undo"], { kind: "unavailable" }>
 };
 const whyMoved = (item: MailSweepReceiptItem): string =>
   item.conflict || item.undo.kind === "available" ? item.message.replace(/\.$/, "") : UNDO_WHY[item.undo.reason];
+const unresolved = (item: MailSweepReceiptItem): boolean => item.state === "pending" || item.state === "uncertain";
+
+type MailSweepPermission =
+  | { kind: "needs-grant"; prompt: MailSweepPrompt }
+  | { kind: "denied"; reason: BoundaryError }
+  | { kind: "standing"; issued: MailSweepGrant | null }
+  | { kind: "once" };
 
 /** Runs one previewed sweep of a Mail connection's listed mail under a permission that names the action and the rule. */
 export class MailSweepHost {
@@ -134,13 +141,11 @@ export class MailSweepHost {
     };
   }
 
-  async grant(input: { rule: MailSweepRule; target: MailSweepTarget }): Promise<MailSweepGrant | null> {
+  grant(input: { rule: MailSweepRule; target: MailSweepTarget }): MailSweepGrant | null {
     const target = MailSweepTargetSchema.parse(input.target);
     const rule = MailSweepRuleSchema.parse(input.rule);
     if (!this.available(target)) return null;
-    const authorityGrantId = await this.options.authority.grant(sweepCapabilityIds(target));
-    if (!authorityGrantId) return null;
-    return this.options.grants.issue({ adapterId: this.options.adapterId, connectionId: this.options.connectionId, target, rule, authorityGrantId }, this.now());
+    return this.options.grants.issue({ adapterId: this.options.adapterId, connectionId: this.options.connectionId, target, rule }, this.now());
   }
 
   async run(input: MailSweepRun): Promise<MailSweepOutcome> {
@@ -151,8 +156,13 @@ export class MailSweepHost {
     const fresh = this.preview({ rule: preview.rule, target: preview.target, mail: input.mail });
     if (fresh.digest !== preview.digest) return { kind: "stale", preview: fresh };
     if (fresh.count === 0) return { kind: "refused", reason: reason("mail.sweep_empty", "The rule matches no unread mail on this connection.") };
-    const authorityGrantId = await this.permission(fresh, input.choice);
-    if ("kind" in authorityGrantId) return authorityGrantId;
+    const permission = this.permission(fresh, input.choice);
+    if (permission.kind === "needs-grant" || permission.kind === "denied") return permission;
+    const authorised = permission.kind === "standing" ? await this.authorize(fresh.members, fresh.target) : new Map<string, string>();
+    if (!authorised) {
+      if (permission.kind === "standing" && permission.issued) this.options.grants.revoke(permission.issued.grantId, this.now());
+      return { kind: "denied", reason: reason("authority_denied", "The Cortex runtime does not allow a standing permission for this connection.") };
+    }
     const sweepId = this.newId();
     const set = this.options.sets.register({
       sweepId,
@@ -163,9 +173,9 @@ export class MailSweepHost {
       rule: fresh.rule,
       digest: fresh.digest,
       count: fresh.count,
-      items: fresh.members.map((member, position) => ({ messageId: member.messageId, subject: member.subject, operationId: `mail-sweep:${sweepId}:${position}` })),
+      items: fresh.members.map((member, position) => ({ messageId: member.messageId, subject: member.subject, operationId: `mail-sweep:${sweepId}:${position}`, authorityGrantId: authorised.get(member.messageId) ?? null })),
     }, this.now());
-    const refusal = await this.moveAll(set, fresh.members, input.provenance, authorityGrantId.grantId);
+    const refusal = await this.moveAll(set, fresh.members, input.provenance, authorised);
     const receipt = await this.derive(set);
     if (refusal && receipt.items.every(item => item.state === "unattempted")) {
       this.options.sets.discard(sweepId);
@@ -194,35 +204,48 @@ export class MailSweepHost {
       for (const item of set.items) {
         const receipt = await this.options.moves.receipt(item.operationId);
         if (!receipt || receipt.action === "restore" || receipt.state !== "done" || receipt.undone) continue;
-        await this.options.moves.undo(item.operationId, provenance);
+        await this.options.moves.undo(item.operationId, provenance, item.authorityGrantId);
       }
       const current = this.options.sets.find(sweepId) ?? set;
       const receipt = await this.derive(current);
-      if (!receipt.items.some(item => item.state === "done" && !item.undone)) this.options.sets.markUndone(sweepId, this.now());
+      const settled = receipt.items.every(item => !unresolved(item)) && receipt.items.every(item => item.state !== "done" || item.undone);
+      if (settled) this.options.sets.markUndone(sweepId, this.now());
       return { kind: "receipt", receipt: await this.derive(this.options.sets.find(sweepId) ?? current) };
     } finally {
       this.undoing.delete(sweepId);
     }
   }
 
-  private async permission(preview: MailSweepPreview, choice: GrantChoice | undefined): Promise<{ grantId: string | null } | { kind: "needs-grant"; prompt: MailSweepPrompt } | { kind: "denied"; reason: BoundaryError }> {
+  private permission(preview: MailSweepPreview, choice: GrantChoice | undefined): MailSweepPermission {
     const active = this.options.grants.active(this.options.connectionId, preview.target);
-    if (sweepGrantCovers(active, preview.target, preview.rule)) return { grantId: active.authorityGrantId };
+    if (sweepGrantCovers(active, preview.target, preview.rule)) return { kind: "standing", issued: null };
     if (choice === undefined) {
       return { kind: "needs-grant", prompt: { connectionId: this.options.connectionId, target: preview.target, rule: preview.rule, phrase: preview.phrase, count: preview.count, capabilities: sweepCapabilityIds(preview.target), question: sweepPromptQuestion(preview.target, preview.phrase, preview.count), options: GRANT_OPTIONS } };
     }
     if (choice === "always") {
-      const issued = await this.grant({ rule: preview.rule, target: preview.target });
-      if (!issued?.authorityGrantId) return { kind: "denied", reason: reason("authority_denied", "The Cortex runtime does not allow a standing permission for this connection.") };
-      return { grantId: issued.authorityGrantId };
+      const issued = this.grant({ rule: preview.rule, target: preview.target });
+      return issued ? { kind: "standing", issued } : { kind: "denied", reason: reason("authority_denied", "The Cortex runtime does not allow a standing permission for this connection.") };
     }
-    return { grantId: null };
+    return { kind: "once" };
   }
 
-  private async moveAll(set: MailSweepSet, members: MailSweepPreview["members"], provenance: Provenance, grantId: string | null): Promise<BoundaryError | null> {
+  private async authorize(members: readonly MailSweepPreviewMember[], target: MailSweepTarget): Promise<Map<string, string> | null> {
+    const { adapterId, connectionId, account } = this.options;
+    const selection = (messageId: string): MailGrantSelection => ({ destinations: [mailAccountRef(adapterId, connectionId, account)], target: mailMessageRef(adapterId, connectionId, messageId) });
+    const grants = new Map<string, string>();
+    for (const member of members) {
+      const grantId = await this.options.authority.grant(sweepCapabilityIds(target), selection(member.messageId));
+      if (!grantId) return null;
+      grants.set(member.messageId, grantId);
+    }
+    return grants;
+  }
+
+  private async moveAll(set: MailSweepSet, members: MailSweepPreview["members"], provenance: Provenance, grants: Map<string, string>): Promise<BoundaryError | null> {
     for (const [position, member] of members.entries()) {
       const item = set.items[position];
       if (!item) break;
+      const grantId = grants.get(member.messageId) ?? null;
       const outcome = set.target === "trash"
         ? await this.options.moves.move({ action: "trash", messageId: member.messageId, provenance, grantId, operationId: item.operationId })
         : await this.options.moves.move({ action: "move", messageId: member.messageId, target: set.target, provenance, grantId, operationId: item.operationId });
@@ -250,22 +273,20 @@ export class MailSweepHost {
     const states: ("unattempted" | OperationState)[] = [];
     let restoreAttempted = false;
     for (const item of set.items) {
-      const stored = await this.options.journal.read(item.operationId);
-      states.push(stored?.journal.state ?? "unattempted");
-      const receipt = await this.options.moves.receipt(item.operationId);
-      const restores = receipt ? await this.options.moves.restores(item.operationId) : [];
-      restoreAttempted = restoreAttempted || restores.length > 0;
-      const latest = restores.at(-1);
+      const inspected = await this.options.moves.inspect(item.operationId);
+      states.push(inspected.state ?? "unattempted");
+      restoreAttempted = restoreAttempted || inspected.restores.length > 0;
+      const latest = inspected.restores.at(-1);
       const conflict = latest?.state === "conflict" ? latest : undefined;
       items.push({
         messageId: item.messageId,
         subject: item.subject,
         operationId: item.operationId,
-        state: receipt?.state ?? (stored ? "uncertain" : "unattempted"),
-        message: conflict?.message ?? receipt?.message ?? "",
-        undone: receipt?.undone ?? false,
+        state: inspected.receipt?.state ?? (inspected.state ? "uncertain" : "unattempted"),
+        message: conflict?.message ?? inspected.receipt?.message ?? "",
+        undone: inspected.receipt?.undone ?? false,
         conflict: conflict !== undefined,
-        undo: receipt?.undo ?? { kind: "unavailable", reason: "not-done" },
+        undo: inspected.receipt?.undo ?? { kind: "unavailable", reason: "not-done" },
       });
     }
     const restored = items.filter(item => item.undone).length;
@@ -298,7 +319,7 @@ export class MailSweepHost {
   }
 
   private undoMessage(items: readonly MailSweepReceiptItem[], restored: number): string {
-    const outstanding = items.filter(item => item.state === "done" && !item.undone);
+    const outstanding = items.filter(item => (item.state === "done" && !item.undone) || unresolved(item));
     if (outstanding.length === 0) return `Moved ${sweepMailCount(restored)} back to INBOX.`;
     const still = outstanding.map(item => `${quoted(item.subject)} (${whyMoved(item)})`).join("; ");
     return `Moved ${restored} of ${restored + outstanding.length} back to INBOX. Still moved: ${still}. Undo again to retry.`;

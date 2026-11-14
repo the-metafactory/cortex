@@ -22,6 +22,11 @@ const runOf = async (rig: MailSweepRig, mail: readonly SweepMail[], preview = pr
   rig.host.run({ preview, mail, provenance: SWEEP_PROVENANCE, ...(choice ? { choice } : {}) });
 const sweptOf = async (rig: MailSweepRig, mail: readonly SweepMail[], target: MailSweepTarget = "archive"): Promise<MailSweepReceipt> =>
   receiptOf(await runOf(rig, mail, previewOf(rig, mail, senderRule(), target), "always"));
+const undoneOf = async (rig: MailSweepRig, sweepId: string): Promise<MailSweepReceipt> => {
+  const outcome = await rig.host.undo(sweepId, SWEEP_PROVENANCE);
+  if (outcome.kind !== "receipt") throw new Error(`Expected an Undo receipt, got ${outcome.kind}.`);
+  return outcome.receipt;
+};
 
 describe("a one-click Mail sweep preview", () => {
   test("names the rule and the exact count before anything runs", async () => {
@@ -70,18 +75,31 @@ describe("a sweep permission", () => {
     expect(rig.grants.list()).toEqual([]);
   });
 
-  test("names the action and the rule, runs the set under one standing permission, and reads back", async () => {
+  test("names the action and the rule, runs the set under one permission per message, and reads back", async () => {
     const rig = await open();
     rig.seed(["m1", "m2"]);
     const receipt = await sweptOf(rig, listed(["m1", "m2"]));
     expect(receipt).toMatchObject({ count: 2, summary: "succeeded", restored: 0, conflicts: 0, undone: false, message: "Archived 2 mails from boss@example.org." });
     expect(receipt.items.map(item => [item.messageId, item.state, item.undo.kind])).toEqual([["m1", "done", "available"], ["m2", "done", "available"]]);
     expect([rig.folders.get("m1"), rig.folders.get("m2")]).toEqual(["Archive", "Archive"]);
-    expect(rig.authorityGrants.map(grant => grant.capabilities)).toEqual([["mail.move", "mail.restore"]]);
-    expect(rig.grants.list()).toMatchObject([{ target: "archive", rule: senderRule(), status: "active", authorityGrantId: rig.authorityGrants[0]?.id }]);
+    expect(rig.authorityGrants.map(grant => grant.capabilities)).toEqual([["mail.move", "mail.restore"], ["mail.move", "mail.restore"]]);
+    expect(rig.authorityGrants.map(grant => grant.selection?.target.canonicalId)).toEqual(["m1", "m2"]);
+    expect(rig.grants.list()).toMatchObject([{ target: "archive", rule: senderRule(), status: "active" }]);
     expect(rig.calls.map(call => call.snapshot.capabilityId)).toEqual(["mail.move", "mail.move"]);
     expect(await rig.host.receipt(receipt.sweepId)).toEqual(receipt);
     expect(await rig.host.receipts()).toEqual([receipt]);
+  });
+
+  test("a sweep permission never answers a single move's standing grant lookup", async () => {
+    const rig = await open();
+    rig.seed(["m1", "m2", "m3"]);
+    await sweptOf(rig, listed(["m1", "m2"]));
+    expect(await rig.authority.findGrant("mail.move")).toBeNull();
+    expect(await rig.authority.findGrant("mail.restore")).toBeNull();
+    const press = await rig.moves.press({ action: "move", messageId: "m3", target: "archive", provenance: SWEEP_PROVENANCE });
+    expect(press.kind).toBe("needs-grant");
+    expect(rig.folders.get("m3")).toBe("INBOX");
+    expect(rig.calls.map(call => (call.snapshot.input as { message: { canonicalId: string } }).message.canonicalId)).toEqual(["m1", "m2"]);
   });
 
   test("a permission for one selection rule asks again for another rule", async () => {
@@ -147,14 +165,13 @@ describe("Undo of a sweep", () => {
     rig.seed(["m1", "m2", "m3"]);
     const receipt = await sweptOf(rig, listed(["m1", "m2", "m3"]));
     rig.folders.set("m2", "Junk");
-    const undone = await rig.host.undo(receipt.sweepId, SWEEP_PROVENANCE);
-    if (undone.kind !== "receipt") throw new Error(`Expected an Undo receipt, got ${undone.kind}.`);
-    expect(undone.receipt).toMatchObject({ restored: 2, conflicts: 1, undone: false, count: 3 });
-    expect(undone.receipt.items.map(item => [item.messageId, item.undone, item.conflict])).toEqual([["m1", true, false], ["m2", false, true], ["m3", true, false]]);
+    const undone = await undoneOf(rig, receipt.sweepId);
+    expect(undone).toMatchObject({ restored: 2, conflicts: 1, undone: false, count: 3 });
+    expect(undone.items.map(item => [item.messageId, item.undone, item.conflict])).toEqual([["m1", true, false], ["m2", false, true], ["m3", true, false]]);
     expect([rig.folders.get("m1"), rig.folders.get("m2"), rig.folders.get("m3")]).toEqual(["INBOX", "Junk", "INBOX"]);
-    expect(undone.receipt.items[1]?.message).toContain("Junk");
-    expect(undone.receipt.message).toContain("Moved 2 of 3 back to INBOX");
-    expect(undone.receipt.message).toContain("Undo again to retry");
+    expect(undone.items[1]?.message).toContain("Junk");
+    expect(undone.message).toContain("Moved 2 of 3 back to INBOX");
+    expect(undone.message).toContain("Undo again to retry");
     expect((await rig.host.receipt(receipt.sweepId))?.conflicts).toBe(1);
   });
 
@@ -165,11 +182,27 @@ describe("Undo of a sweep", () => {
     rig.folders.set("m2", "Junk");
     await rig.host.undo(receipt.sweepId, SWEEP_PROVENANCE);
     rig.folders.set("m2", "Archive");
-    const retried = await rig.host.undo(receipt.sweepId, SWEEP_PROVENANCE);
-    if (retried.kind !== "receipt") throw new Error(`Expected an Undo receipt, got ${retried.kind}.`);
-    expect(retried.receipt).toMatchObject({ restored: 2, conflicts: 0, undone: true });
+    const retried = await undoneOf(rig, receipt.sweepId);
+    expect(retried).toMatchObject({ restored: 2, conflicts: 0, undone: true });
     expect(rig.folders.get("m2")).toBe("INBOX");
     expect(await rig.host.undo(receipt.sweepId, SWEEP_PROVENANCE)).toMatchObject({ kind: "unavailable", reason: { code: "mail.undo_unavailable" } });
+  });
+
+  test("stays open while a move is unresolved, then restores that message when it settles", async () => {
+    const rig = await open();
+    rig.seed(["m1", "m2"]);
+    rig.hold(["m2"]);
+    const receipt = await sweptOf(rig, listed(["m1", "m2"]));
+    expect(receipt.items.map(item => [item.messageId, item.state])).toEqual([["m1", "done"], ["m2", "pending"]]);
+    const first = await undoneOf(rig, receipt.sweepId);
+    expect(first).toMatchObject({ restored: 1, undone: false });
+    expect(first.message).toContain("the move did not finish");
+    expect(rig.folders.get("m1")).toBe("INBOX");
+    await rig.settle("m2");
+    expect(rig.folders.get("m2")).toBe("Archive");
+    const retried = await undoneOf(rig, receipt.sweepId);
+    expect(retried).toMatchObject({ restored: 2, conflicts: 0, undone: true });
+    expect(rig.folders.get("m2")).toBe("INBOX");
   });
 
   test("an unknown sweep has no Undo", async () => {

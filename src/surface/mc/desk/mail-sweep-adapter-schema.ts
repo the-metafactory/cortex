@@ -5,7 +5,6 @@ export const MAIL_SWEEP_ADAPTER_SQL = [
     connection_id TEXT NOT NULL,
     target TEXT NOT NULL,
     rule TEXT NOT NULL,
-    authority_grant_id TEXT,
     status TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     revoked_at INTEGER
@@ -30,6 +29,7 @@ export const MAIL_SWEEP_ADAPTER_SQL = [
     message_id TEXT NOT NULL,
     subject TEXT NOT NULL,
     operation_id TEXT NOT NULL,
+    authority_grant_id TEXT,
     PRIMARY KEY (sweep_id, position)
   )`,
 ];

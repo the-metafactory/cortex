@@ -17,6 +17,7 @@ export const MailLoopSelectionSchema = z.discriminatedUnion("kind", [MailRuleSel
 export type MailLoopSelection = z.infer<typeof MailLoopSelectionSchema>;
 
 export const MailLoopGrantSchema = MailStandingGrantBaseSchema.extend({
+  authorityGrantId: z.string().min(1).nullable(),
   loop: z.enum(MAIL_LOOP_KINDS),
   actions: z.array(z.enum(MAIL_LOOP_ACTIONS)).min(1).max(MAIL_LOOP_ACTIONS.length),
   selection: MailLoopSelectionSchema,
