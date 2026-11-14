@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { listGrants } from "./autonomy";
 import type { MailClassification } from "./classify";
 import type { EventFacts } from "./event-follow";
-import { attachMail, AUTO_LINK_DONE, autoLinkDoneKey, meetingTarget, offDeskIds, quoted, type LinkReceipt } from "./links";
+import { attachMail, meetingTarget, offDeskIds, recordAutoLinkDone, type LinkReceipt } from "./links";
 import type { ListedMail } from "./mail-actions";
 
 export const AUTO_LINK_GRANT = "mail.link-meeting" as const;
@@ -36,9 +36,7 @@ export function autoLinkMeeting(ctx: AutoLinkContext, mail: ListedMail, c: MailC
   return db.transaction((): LinkReceipt | null => {
     const linked = attachMail(db, mail, target, { id, requestId: `auto:${mail.id}`, origin: "auto", now });
     if (!linked.ok || linked.link.id !== id) return null;
-    db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING").run(
-      autoLinkDoneKey(id), AUTO_LINK_DONE, id, `Linked ${quoted(linked.link.from.title)} to ${quoted(target.title)}`, "It stays in your mailbox and shows with the meeting.", now, now,
-    );
+    recordAutoLinkDone(db, linked.link, now);
     return linked.link;
   })();
 }

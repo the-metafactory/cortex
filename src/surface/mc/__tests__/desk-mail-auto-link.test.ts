@@ -85,6 +85,13 @@ describe("the mail.link-meeting grant", () => {
     });
   });
 
+  it("is not offered for an endpoint classifier, which never suggests an action", async () => {
+    const endpoint: DeskOptions = { ...DESK, mailClassifier: { baseUrl: "https://llm.example/v1", model: "chat-fast", timeoutSeconds: 30, maxPerPass: 10 } };
+    const sourceCache = new SourceCache(async ([cmd]) => JSON.stringify(cmd === "cal" ? { events: [MEETING] } : { items: [mail("m1")] }));
+    const view = await composeDesk(db, endpoint, undefined, { now: NOW, sourceCache });
+    expect(view.autonomy.types.map((t) => t.action)).not.toContain("mail.link-meeting");
+  });
+
   it("links nothing while it is off", async () => {
     const s = deskWithClassifier([mail("m1")]);
     s.answers.set("m1", LINK_MEETING);

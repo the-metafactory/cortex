@@ -278,7 +278,14 @@ export async function undoAttach(db: Database, id: string, deps: UndoAttachDeps)
 
 /** The Done for you action of one auto-link under the `mail.link-meeting` grant; it becomes `mail.link.undone` once the link is undone. */
 export const AUTO_LINK_DONE = "mail.link";
-export const autoLinkDoneKey = (linkId: string): string => `mail-link:${linkId}`;
+const autoLinkDoneKey = (linkId: string): string => `mail-link:${linkId}`;
+
+/** Writes the one Done for you entry of an auto-link, keyed by the link, with the link id as its Undo. */
+export function recordAutoLinkDone(db: Database, link: LinkReceipt, now: number): void {
+  db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING").run(
+    autoLinkDoneKey(link.id), AUTO_LINK_DONE, link.id, `Linked ${quoted(link.from.title)} to ${quoted(link.to.title)}`, "It stays in your mailbox and shows with the meeting.", now, now,
+  );
+}
 
 function markAutoLinkUndone(db: Database, linkId: string, message: string, now: number): void {
   db.query("UPDATE desk_done SET action = ?, message = ?, updated_at = ? WHERE attempt_key = ? AND action = ?").run(`${AUTO_LINK_DONE}.undone`, message, now, autoLinkDoneKey(linkId), AUTO_LINK_DONE);

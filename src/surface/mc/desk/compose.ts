@@ -52,7 +52,7 @@ import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS,
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry, type PromotableAction } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
 import { listReasons, readFeedback, readSwitches } from "./interrupt-switches";
-import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type ClassifierMail, type MailClassification, type MailClassifier, type ModelConfig } from "./classify";
+import { classifierStatus, isCommand, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type ClassifierMail, type MailClassification, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
 import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
 import { readRoutines } from "./routines";
@@ -180,6 +180,7 @@ export interface ComposeDeps {
 }
 
 const localRouteCovers = (config: NonNullable<DeskOptions["mailClassifier"]>): boolean => routeOf(config.local ?? config) === "local";
+const suggestsActions = (config: DeskOptions["mailClassifier"]): boolean => config !== undefined && (isCommand(config) || (config.local !== undefined && isCommand(config.local)));
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
 
@@ -410,7 +411,7 @@ export async function composeDesk(
     voice: voiceView(desk.voice),
     chime: rules.chime,
     notifications: rules.notifications,
-    autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: Boolean(desk.mailClassifier) }),
+    autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier) }),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),
     mailHidden: hiddenMail(db),
