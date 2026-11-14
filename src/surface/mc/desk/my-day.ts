@@ -4,7 +4,7 @@ import { sourceIdentity, todo } from "./source-task";
 export { sourceIdentity } from "./source-task";
 import { balanceParents } from "./balance-parent";
 import { planSource, unplanSource } from "./source-plan";
-import { studioLinks, studioOwned, type StudioProjection } from "./studio-outline";
+import { studioLinks, studioOwned, studioProjectLinks, type StudioProjectLink, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
 import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-day";
@@ -33,7 +33,7 @@ export interface MyDayView {
   };
   studioStatus: "synced" | "unavailable" | "disabled";
   studioTasks: { id: string; slug: string }[];
-  studioProjects: { id: string; slug: string }[];
+  studioProjects: StudioProjectLink[];
   revision: number;
   configuredCaps: { cap: number; topN: number };
   capsOverridden: boolean;
@@ -72,7 +72,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
     },
     studioStatus: !desk.studio ? "disabled" : studio ? "synced" : "unavailable",
     studioTasks: studioLinks(meta),
-    studioProjects: meta.studio.map(project => ({ id: project.projectId, slug: project.slug })),
+    studioProjects: studioProjectLinks(meta, desk.studio ? studio : undefined),
     configuredCaps: { cap: desk.myDay?.cap ?? 5, topN: desk.topN }, capsOverridden: meta.caps !== null,
     revision: meta.revision, inbox: meta.inbox,
     date, phase: day ? day.closed ? "closed" : "started" : "proposed", cap: state.settings.todayCap, topN: meta.caps?.topN ?? desk.topN,

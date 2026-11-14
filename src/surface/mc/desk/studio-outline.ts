@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { findNode, type AppState, type OutlineNode } from "../../../balance";
 import type { MyDayMeta } from "./my-day-schema";
 import { responseCoverage, lastResponseCoverage } from "./studio/response";
-import type { StudioThread } from "./studio/format";
+import type { StudioThread, ThreadState } from "./studio/format";
 
 export interface StudioProjection {
   namespace: string;
@@ -51,16 +51,17 @@ function completion(state: AppState, entry: ProjectionEntry, thread: StudioThrea
     entry.response = time;
   }
 }
+function uniquelyIdentifiedThreads(input: StudioProjection): { source: string; thread: StudioThread }[] {
+  const counts = new Map<string, number>();
+  for (const thread of input.threads) if (thread.id) counts.set(thread.id, (counts.get(thread.id) ?? 0) + 1);
+  return input.threads.flatMap(thread => thread.id && counts.get(thread.id) !== 1 ? [] : [{ source: thread.id ? `id:${thread.id}` : `path:${thread.path}`, thread }]);
+}
 export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioProjection): void {
   for (const entry of meta.studio) {
     const project = findNode(state.outline, entry.projectId);
     if (project) project.done = true;
   }
-  const counts = new Map<string, number>();
-  for (const thread of input.threads) if (thread.id) counts.set(thread.id, (counts.get(thread.id) ?? 0) + 1);
-  for (const thread of input.threads) {
-    if (thread.id && counts.get(thread.id) !== 1) continue;
-    const source = thread.id ? `id:${thread.id}` : `path:${thread.path}`;
+  for (const { source, thread } of uniquelyIdentifiedThreads(input)) {
     const latestResponse = lastResponseCoverage(thread);
     let entry = meta.studio.find(s => s.namespace === input.namespace && s.source === source);
     if (!entry) {
@@ -99,6 +100,16 @@ export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioPro
     }
     current.done = current.children.length === 0;
   }
+}
+/** A Studio thread's outline row with its thread's state; `state` and `openNotes` are null when the Studio is off or this request could not read it. */
+export interface StudioProjectLink { id: string; slug: string; state: ThreadState | null; openNotes: number | null }
+export function studioProjectLinks(meta: MyDayMeta, input?: StudioProjection): StudioProjectLink[] {
+  if (!input) return meta.studio.map(entry => ({ id: entry.projectId, slug: entry.slug, state: null, openNotes: null }));
+  const threads = new Map(uniquelyIdentifiedThreads(input).map(({ source, thread }) => [source, thread]));
+  return meta.studio.flatMap(entry => {
+    const thread = entry.namespace === input.namespace ? threads.get(entry.source) : undefined;
+    return thread ? [{ id: entry.projectId, slug: entry.slug, state: thread.state, openNotes: thread.notes.filter(note => note.status === "open").length }] : [];
+  });
 }
 export function studioLinks(meta: MyDayMeta): { id: string; slug: string }[] {
   return meta.studio.flatMap(s => s.pending ? [{ id: s.pending.id, slug: s.slug }] : []);
