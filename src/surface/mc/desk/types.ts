@@ -45,6 +45,11 @@ export interface DeskLink {
   url: string;
 }
 
+export interface DeskMention {
+  text: string;
+  url: string;
+}
+
 export interface DeskEvidence {
   kind: "mail" | "event" | "note";
   title: string;
@@ -97,6 +102,7 @@ export interface DeskItem {
   urgency: DeskUrgency;
   title: string;
   why: string;
+  mentions?: DeskMention[];
   score: number;
   actions: DeskAction[];
   more?: DeskAction[];
