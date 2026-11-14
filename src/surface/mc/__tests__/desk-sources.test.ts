@@ -49,6 +49,26 @@ describe("the source contract", () => {
     expect(parsed.dropped).toBe(2);
   });
 
+  it("reads an event's organizer and attendees in lowercase, and drops an address that does not parse without dropping the event or the list", () => {
+    const parsed = parseSourceOutput(JSON.stringify({
+      events: [
+        { id: "a", start: at("13:00"), title: "Venue walkthrough", organizer: { name: "Grace", address: " Grace@Example.org " }, attendees: [{ address: "Bob@Example.org" }, { address: "not an address" }, "ada@example.org"] },
+        { id: "b", start: at("14:00"), title: "Bad organizer", organizer: { address: "nobody" } },
+        { id: "c", start: at("15:00"), title: "Bad attendees", attendees: [{ address: "nobody" }] },
+        { id: "d", start: at("16:00"), title: "No people", organizer: null, attendees: [] },
+        { id: "e", start: at("17:00"), title: "Attendees as text", attendees: "bob@example.org" },
+      ],
+    }));
+    expect(parsed.events.map((e) => ({ id: e.id, organizer: e.organizer, attendees: e.attendees }))).toEqual([
+      { id: "a", organizer: { name: "Grace", address: "grace@example.org" }, attendees: [{ address: "bob@example.org" }] },
+      { id: "b", organizer: null, attendees: undefined },
+      { id: "c", organizer: undefined, attendees: [] },
+      { id: "d", organizer: undefined, attendees: undefined },
+      { id: "e", organizer: undefined, attendees: [] },
+    ]);
+    expect(parsed.dropped).toBe(0);
+  });
+
   it("runs a source once per interval, shares a run between requests, and keeps the last reading on failure", async () => {
     let calls = 0;
     let fail = false;

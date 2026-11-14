@@ -13,20 +13,6 @@ export const SAFE_LINK = /^(https?:|message:)/i;
 const safeLink = z.string().refine((u) => SAFE_LINK.test(u), "must start with http:, https: or message:");
 const isoDate = z.string().refine((s) => Number.isFinite(Date.parse(s)), "must be an ISO 8601 date and time");
 
-export const SourceEventSchema = z.object({
-  id: z.string().min(1),
-  start: isoDate,
-  end: isoDate.optional(),
-  allDay: z.boolean().optional(),
-  title: z.string().min(1),
-  calendar: z.string().trim().min(1).max(200).optional(),
-  calendarId: z.string().trim().min(1).max(500).optional(),
-  location: z.string().optional(),
-  online: z.boolean().optional(),
-  url: safeLink.optional(),
-  availability: EventAvailabilitySchema.optional(),
-});
-
 export const AUTH_VERDICTS = ["pass", "fail", "softfail", "neutral", "none", "temperror", "permerror", "policy"] as const;
 
 function printable(v: string): string {
@@ -141,6 +127,48 @@ export const SourceMailSchema = z.object({
 const MailAddressSchema = z.object({
   name: z.string().transform(printable).pipe(z.string().max(200)).optional().catch(undefined),
   address: z.string().trim().toLowerCase().pipe(z.string().min(3).max(320).regex(/^[^\s<>@,;]+@[^\s<>@,;]+$/)),
+});
+
+const MAX_EVENT_ATTENDEES = 500;
+
+type MailAddress = z.infer<typeof MailAddressSchema>;
+const absent = (v: unknown): boolean => v === undefined || v === null;
+
+function readAddress(v: unknown): MailAddress | null {
+  const p = MailAddressSchema.safeParse(v);
+  return p.success ? p.data : null;
+}
+
+const readOrganizer = (v: unknown): MailAddress | null | undefined => (absent(v) ? undefined : readAddress(v));
+
+function readAttendees(v: unknown): MailAddress[] | undefined {
+  if (absent(v) || (Array.isArray(v) && v.length === 0)) return undefined;
+  if (!Array.isArray(v)) return [];
+  return v
+    .map(readAddress)
+    .filter((a): a is MailAddress => a !== null)
+    .slice(0, MAX_EVENT_ATTENDEES);
+}
+
+/**
+ * A calendar event. `organizer` and `attendees` are the meeting's people, read by the `mail.link-meeting` auto-link. Entries whose
+ * address does not parse are dropped, but the list still counts as given: an unreadable organizer becomes null, and an attendee
+ * value that is not an array, or a nonempty one with no readable entry, becomes empty, so the auto-link refuses every sender rather than none.
+ */
+export const SourceEventSchema = z.object({
+  id: z.string().min(1),
+  start: isoDate,
+  end: isoDate.optional(),
+  allDay: z.boolean().optional(),
+  title: z.string().min(1),
+  calendar: z.string().trim().min(1).max(200).optional(),
+  calendarId: z.string().trim().min(1).max(500).optional(),
+  location: z.string().optional(),
+  online: z.boolean().optional(),
+  url: safeLink.optional(),
+  availability: EventAvailabilitySchema.optional(),
+  organizer: z.unknown().transform(readOrganizer).optional(),
+  attendees: z.unknown().transform(readAttendees).optional(),
 });
 
 const MAX_RECIPIENTS = 20;
