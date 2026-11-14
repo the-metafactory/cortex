@@ -131,7 +131,7 @@ async function probeCloudReader(env: ProbeEnv, binding: ReadBinding, egress: "lo
       const denied = result.status === "denied" && result.groups.length === 0 && !result.noMatch && result.continuation === undefined && released === 0 && called === 0;
       return denied
         ? conformant(id, "cloud-reader", "a local Mail connection was denied to a cloud reader with no group or count, and the package was not called")
-        : refused(id, "cloud-reader", "cloud_reader_admitted", `A cloud reader of a local Mail connection got ${result.status} with ${String(result.groups.length)} group(s), ${String(released)} release(s) and ${String(called)} package call(s).`);
+        : refused(id, "cloud-reader", "cloud_reader_admitted", `A cloud reader of a local Mail connection got ${result.status} with ${String(result.groups.length)} group(s), ${result.noMatch ? "a no-match signal" : "no match signal"}, ${result.continuation === undefined ? "no" : "a"} continuation, ${String(released)} release(s) and ${String(called)} package call(s).`);
     }
     return result.status === "ok" && released > 0
       ? conformant(id, "cloud-reader", `a cloud Mail connection was released to a cloud reader (${String(released)} release(s))`, released)
