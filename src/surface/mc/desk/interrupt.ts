@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { clock } from "./time";
 import type { DeskAction, DeskEvent, DeskInterrupt, DeskInterruptReason, DeskItem, InterruptFeedback, MeetingHold } from "./types";
+import { currentGap, type CalendarAvailability } from "./calendar-availability";
 import type { DESK_TRANSPORTS } from "../../../common/types/config";
 import { reasonOn, type InterruptSwitches } from "./interrupt-switches";
 import { listedEntry } from "./vips";
@@ -129,6 +130,7 @@ function mailReasons(item: DeskItem, context: InterruptContext, now: number): De
 function firingReasons(item: DeskItem, rules: InterruptRules, context: InterruptContext, now: number, freshFrom: number | undefined): DeskInterruptReason[] {
   const fresh = freshFrom !== undefined && now - freshFrom <= rules.maxAgeMinutes * MINUTE;
   if (item.kind === "meeting") return [{ code: "meeting.soon" }];
+  if (item.kind === "adapter") return item.interruptRequested === true && item.freshness === "fresh" ? [{ code: "mail.ranked" }] : [];
   if (!fresh) return [];
   if (item.kind === "reminder") return [{ code: "reminder.due" }];
   if (item.kind === "mail") return mailReasons(item, context, now);
@@ -169,6 +171,20 @@ function holdFor(item: DeskItem, rules: InterruptRules, today: readonly DeskEven
   const chain = runningMeeting(today, item.since);
   if (!chain || (item.eventKey !== undefined && chain.keys.has(item.eventKey))) return null;
   return { eventKey: chain.eventKey, title: chain.title, until: chain.until };
+}
+
+export function heldDuringMeeting(items: DeskItem[], availability: CalendarAvailability | undefined, now: number): DeskItem[] {
+  if (availability === undefined || currentGap(availability, now).kind !== "busy") return items;
+  return items.filter((item) => item.kind !== "adapter");
+}
+
+export function quietAdapterInterrupts(items: DeskItem[], availability: CalendarAvailability | undefined, now: number): DeskItem[] {
+  if (availability === undefined || currentGap(availability, now).kind !== "busy") return items;
+  return items.map((item) => {
+    if (item.kind !== "adapter" || item.interrupt === undefined) return item;
+    const { interrupt: _held, ...quiet } = item;
+    return quiet;
+  });
 }
 
 function failure(sent: Delivery | undefined, now: number): string | null {

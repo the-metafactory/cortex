@@ -3,7 +3,7 @@ import { composeDesk, type DeskRuntime, type DeskVigilSource } from "./compose";
 import { rangerActionsReady } from "./actions";
 import { runCapabilityInstalls } from "./routine-install";
 import { runAutonomy } from "./autonomy";
-import { pushInterrupts, startInterruptLoop, type DeskTransport, type InterruptLoop } from "./interrupt";
+import { heldDuringMeeting, pushInterrupts, startInterruptLoop, type DeskTransport, type InterruptLoop } from "./interrupt";
 
 export function startDeskPushes(
   db: Database,
@@ -20,10 +20,11 @@ export function startDeskPushes(
       ...(runtime.mailClassifier ? { mailClassifier: runtime.mailClassifier } : {}),
       ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}),
       ...(runtime.recentWrites ? { recentWrites: runtime.recentWrites } : {}),
+      ...(runtime.adapterAttention ? { adapterAttention: runtime.adapterAttention } : {}),
       waitingTasks: runtime.waitingTasks,
       ...(runtime.rulingExplain ? { rulingExplain: runtime.rulingExplain } : {}),
     });
-    await pushInterrupts(db, view.items, rules.transport, transport(), view.generatedAt);
+    await pushInterrupts(db, heldDuringMeeting(view.items, view.calendarAvailability, view.generatedAt), rules.transport, transport(), view.generatedAt);
   });
 }
 

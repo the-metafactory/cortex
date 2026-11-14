@@ -34,8 +34,15 @@ const link = z.url({ protocol: /^https?$/ }).refine(value => {
   return !url.username && !url.password && redactToolText(value) === value;
 }).nullable();
 const area = ObjectReferenceSchema.nullable();
+const MAX_ADAPTER_RANK = 999;
+const adapterRank = z.int().min(0).max(MAX_ADAPTER_RANK).nullable();
+const interruptRequest = z.boolean().nullable();
 const MAPPING_PROBLEM = "An adapter attention mapping could not be displayed safely.";
 const INCOMPLETE_OBSERVATIONS = "Adapter observations are incomplete. Some items may be missing.";
+
+function rankWithin(base: Pick<DeskItem, "urgency" | "score">, rank: number | null): Pick<DeskItem, "urgency" | "score"> {
+  return rank === null ? base : { urgency: base.urgency, score: base.score - rank / (MAX_ADAPTER_RANK + 1) };
+}
 
 function hostRank(due: string | null, now: number): Pick<DeskItem, "urgency" | "score"> {
   const day = due === null ? null : due.length === 10 ? due : localDay(Date.parse(due));
@@ -64,6 +71,9 @@ function mappedItem(row: ObservationView, binding: ReadBinding, now: number, own
   const due = dueDate.safeParse(binding.display.due ? readPointer(value, binding.display.due) : null);
   const destination = area.safeParse(binding.display.area ? readPointer(value, binding.display.area) : null);
   const url = link.safeParse(binding.display.url ? readPointer(value, binding.display.url) : null);
+  const ownRank = adapterRank.safeParse(binding.attention.rank ? (readPointer(value, binding.attention.rank) ?? null) : null);
+  const wantsInterrupt = interruptRequest.safeParse(binding.attention.interrupt ? (readPointer(value, binding.attention.interrupt) ?? null) : null);
+  if (!ownRank.success || !wantsInterrupt.success) return { kind: "invalid" };
   if (!title.success || !why.success || !rowBadge.success || !markedOwner.success || !due.success || !destination.success || !url.success) return { kind: "invalid" };
   if (markedOwner.data !== null && !ownerKinds?.has(markedOwner.data)) return { kind: "invalid" };
   const key = `adapter:${canonicalWire(row.ref)}`;
@@ -77,7 +87,7 @@ function mappedItem(row: ObservationView, binding: ReadBinding, now: number, own
       ...(destination.data ? { destination: destination.data } : {}),
       ...(rowBadge.data === null ? {} : { badge: rowBadge.data }),
       ...(due.data === null ? {} : { dueAt: due.data }),
-      ...hostRank(due.data, now), actions: rowCapabilityActions(binding, markedOwner.data),
+      ...rankWithin(hostRank(due.data, now), ownRank.data), ...(wantsInterrupt.data === true ? { interruptRequested: true } : {}), actions: rowCapabilityActions(binding, markedOwner.data),
       freshness: status, readOnly: true,
       detail: {
         summary: why.data,

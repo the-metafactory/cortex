@@ -20,7 +20,7 @@ export const ReadBindingSchema = z.object({
   textPointer: pointer.optional(),
   destinationType: identifier.optional(),
   display: z.object({ title: pointer, summary: pointer.optional(), status: pointer.optional(), due: pointer.optional(), area: pointer.optional(), kind: pointer.optional(), parent: pointer.optional(), url: pointer.optional() }).strict(),
-  attention: z.object({ pointer, badge: pointer.optional(), owner: pointer.optional() }).strict().optional(),
+  attention: z.object({ pointer, badge: pointer.optional(), owner: pointer.optional(), rank: pointer.optional(), interrupt: pointer.optional() }).strict().optional(),
   capabilities: z.array(RowCapabilitySchema).min(1).max(8).optional(),
   observation: ObservationPolicySchema.optional(),
   query: z.object({
