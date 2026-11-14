@@ -151,7 +151,7 @@ describe("an open question in the command bar", () => {
     const runParser = async (_argv: string[], stdin: string): Promise<string> => { kinds = (JSON.parse(stdin) as { kinds: unknown }).kinds; return JSON.stringify({ kind: "none", reason: "The Desk cannot handle a brainstorming request." }); };
     const res = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM, area: "work" }), { ...withParser, options: { ...DESK, ask: { ...ASK, parser: ["parse"] }, areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [] }] } }, { now: () => NOW, runParser, conversations: talks });
     expect(res.status).toBe(200);
-    expect(await proposalOf(res)).toEqual({ kind: "conversation", label: "Conversation with Ivy", fields: { text: BRAINSTORM, area: "work" }, via: "parser" });
+    expect(await proposalOf(res)).toEqual({ kind: "conversation", label: "Conversation", fields: { text: BRAINSTORM, area: "work" }, via: "parser" });
     expect(kinds).toContain("conversation");
   });
 
@@ -164,7 +164,7 @@ describe("an open question in the command bar", () => {
 
   it("offers the conversation as an alternative on a capture-kind card, and a rules reminder stays a reminder", async () => {
     const goal = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), withParser, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "goal", fields: { wording: "Find a better name" } }), conversations: talks });
-    expect(await proposalOf(goal)).toMatchObject({ kind: "goal", alternative: { kind: "conversation", label: "Conversation with Ivy", fields: { text: BRAINSTORM } } });
+    expect(await proposalOf(goal)).toMatchObject({ kind: "goal", alternative: { kind: "conversation", label: "Conversation", fields: { text: BRAINSTORM } } });
     const reminder = await handleDeskAsk(post("/api/desk/ask", { text: "remind me to call Ada tomorrow at 9" }), runtime, { now: () => NOW, conversations: talks });
     expect(await proposalOf(reminder)).toMatchObject({ kind: "reminder", via: "rules", fields: { text: "Call Ada", due: new Date(local("2026-10-31T09:00:00")).toISOString() } });
   });
@@ -172,7 +172,9 @@ describe("an open question in the command bar", () => {
   it("says conversations are not set up, with no card and no alternative, when the stack has none", async () => {
     const refused = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), withParser, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "conversation", fields: {} }) });
     expect(refused.status).toBe(422);
-    expect(await refused.json()).toEqual({ ok: false, error: "Conversations with Ivy are not set up on this stack, so I cannot start one." });
+    expect(await refused.json()).toEqual({ ok: false, error: "Conversations with Assistant are not set up on this stack, so I cannot start one." });
+    const named = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), { ...withParser, options: { ...DESK, ask: { ...ASK, parser: ["parse"] }, assistantName: "Mira" } }, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "conversation", fields: {} }) });
+    expect(await named.json()).toEqual({ ok: false, error: "Conversations with Mira are not set up on this stack, so I cannot start one." });
     const note = await handleDeskAsk(post("/api/desk/ask", { text: "note buy milk" }), runtime, { now: () => NOW, conversations: () => false });
     expect(await proposalOf(note)).not.toHaveProperty("alternative");
   });

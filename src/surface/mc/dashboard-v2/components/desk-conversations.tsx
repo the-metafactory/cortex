@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { failureText as failure, readOverview, sourceLabel, statusLabel, type OverviewRow } from "../lib/conversations";
 import { ConversationWorkspace } from "./desk-conversation";
 import "./desk-conversation.css";
+import { useAssistantName } from "../lib/assistant-name";
 
 const SEARCH_MS = 300;
 const UNANSWERED = "Mission Control did not answer.";
@@ -56,12 +57,13 @@ export function useOverview(shelf: Shelf, query: string, revision: number) {
 const day = (iso: string): string => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
 export function OverviewRowView({ row, selected, searching, onOpen }: { row: OverviewRow; selected: boolean; searching: boolean; onOpen: (id: string) => void }) {
+  const name = useAssistantName();
   const { conversation, linked, latest, match } = row;
   const line = searching && match ? match : latest;
   return <li>
     <button type="button" className={`dcv-row${selected ? " active" : ""}`} aria-current={selected ? "true" : undefined} onClick={() => onOpen(conversation.id)}>
       <strong>{conversation.pinned && <span className="dcv-pin">Pinned · </span>}{conversation.title}</strong>
-      <span className="dcv-excerpt">{line ? `${line.who === "principal" ? "You" : "Ivy"}: ${line.text}` : "No messages yet"}</span>
+      <span className="dcv-excerpt">{line ? `${line.who === "principal" ? "You" : name}: ${line.text}` : "No messages yet"}</span>
       {linked.length > 0 && <small>{linked.map(l => `${sourceLabel(l)}: ${l.title ?? "unavailable"}`).join(" · ")}</small>}
       <small>{statusLabel(conversation.activity.status)} · {day(conversation.activity.lastAt)}{conversation.policy === "local" ? " · Local only" : ""}</small>
     </button>

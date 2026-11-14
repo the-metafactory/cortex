@@ -96,7 +96,7 @@ describe("weekly mirror over authoritative evidence", () => {
     const files = { threads: [file("original", "active"), file("replacement", "parked")], inbox: [], proposals: [] };
     const options = { dir: "/fixture", maxActive: 1 };
     const view = buildStudioView(files, options, desk.areas);
-    const plan = planAct({ files, view, now: new Date(NOW) }, { act: "unpark", thread: "replacement", park: "original" });
+    const plan = planAct({ files, view, now: new Date(NOW), assistantName: "Assistant" }, { act: "unpark", thread: "replacement", park: "original" });
     if ("error" in plan) throw new Error(plan.error);
     const saved = { ...files, threads: files.threads.map(f => plan.writes.find(w => w.path === f.path) ?? f) };
     const studio = buildStudioView(saved, options, desk.areas);

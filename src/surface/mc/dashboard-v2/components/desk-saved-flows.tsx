@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FlowRoutine, SavedFlow, SavedFlowDefinition } from "../../../../conversations/saved-flow-contract";
 import { flowReadError, loadSavedFlowDefinition, makeRoutineFromFlow, newRoutineStart, type RoutineStart, type ShownFlowsState } from "../lib/desk-flows";
 import { formatRelativeTime } from "../lib/agents-display";
+import { useAssistantName } from "../lib/assistant-name";
 
 export type FlowDefinitionState = { status: "closed" | "loading" } | { status: "ready"; definition: SavedFlowDefinition } | { status: "error"; error: string };
 
@@ -41,6 +42,7 @@ function SavedFlowEntry({ flow, now, routine, onConversation }: { flow: SavedFlo
 }
 
 export function DeskSavedFlows({ state, now = Date.now(), onConversation = () => undefined }: { state: ShownFlowsState; now?: number; onConversation?: (id: string) => void }) {
+  const name = useAssistantName();
   if (state.status === "error") return <p role="alert">{state.error}</p>;
-  return <section aria-label="Saved flows"><h2>Saved flows</h2>{state.flows.length === 0 ? <p>No saved flows yet. Ask Ivy to make a flow in a conversation.</p> : <ul className="saved-flow-list">{state.flows.map((flow) => <SavedFlowEntry key={`${flow.name}:${flow.sha256}:${flow.savedAt}`} flow={flow} now={now} onConversation={onConversation} {...(state.status === "ready" && state.routine ? { routine: state.routine } : {})} />)}</ul>}</section>;
+  return <section aria-label="Saved flows"><h2>Saved flows</h2>{state.flows.length === 0 ? <p>No saved flows yet. Ask {name} to make a flow in a conversation.</p> : <ul className="saved-flow-list">{state.flows.map((flow) => <SavedFlowEntry key={`${flow.name}:${flow.sha256}:${flow.savedAt}`} flow={flow} now={now} onConversation={onConversation} {...(state.status === "ready" && state.routine ? { routine: state.routine } : {})} />)}</ul>}</section>;
 }

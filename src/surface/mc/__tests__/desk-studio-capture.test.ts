@@ -28,7 +28,7 @@ const rid = (): string => `capture-request-${++sequence}`;
 const request = (body: unknown): Request => new Request("http://localhost/api/desk", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const git = (...args: string[]): string => gitIn(dir, ...args);
 const matching: CaptureModel = async () => ({ thread: "studio", reason: "This develops the Studio question." });
-const file = (model: CaptureModel = matching, requestId = rid()) => fileStudioCapture({ options, areas: AREAS, db, requestId, text: "Let the board show empty places.", now: NOW, model });
+const file = (model: CaptureModel = matching, requestId = rid()) => fileStudioCapture({ options, areas: AREAS, assistantName: "Assistant", db, requestId, text: "Let the board show empty places.", now: NOW, model });
 const capture = (): string => readDone(db, NOW.getTime())[0]?.itemKey ?? "";
 
 beforeEach(() => {
@@ -89,9 +89,9 @@ describe("Studio capture filing", () => {
   it("Undo removes only its material and preserves a later response in a new commit", async () => {
     await file();
     const id = capture();
-    await runStudioAct({ options, areas: AREAS, requestId: rid(), act: { act: "respond", thread: "studio", text: "A later response." }, now: NOW });
+    await runStudioAct({ options, areas: AREAS, assistantName: "Assistant", requestId: rid(), act: { act: "respond", thread: "studio", text: "A later response." }, now: NOW });
     const before = git("rev-list", "--count", "HEAD");
-    const undone = await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW });
+    const undone = await undoStudioCapture({ options, areas: AREAS, assistantName: "Assistant", db, requestId: rid(), id, now: NOW });
     expect(undone.ok).toBe(true);
     const text = readFileSync(join(dir, "threads/studio.md"), "utf8");
     expect(text).not.toContain(`- capture: [${id}]`);
@@ -104,8 +104,8 @@ describe("Studio capture filing", () => {
   it("Undo removes an inbox capture and refuses an already moved capture", async () => {
     await file(async () => ({ thread: null, reason: "Unrelated." }));
     const id = capture();
-    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(true);
-    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
+    expect((await undoStudioCapture({ options, areas: AREAS, assistantName: "Assistant", db, requestId: rid(), id, now: NOW })).ok).toBe(true);
+    expect((await undoStudioCapture({ options, areas: AREAS, assistantName: "Assistant", db, requestId: rid(), id, now: NOW })).ok).toBe(false);
   });
 
   it("refuses Undo after an inbox capture was edited and committed", async () => {
@@ -115,7 +115,7 @@ describe("Studio capture filing", () => {
     writeFileSync(path, `${readFileSync(path, "utf8")}A later addition.\n`);
     git("commit", "-am", "edit inbox capture");
     const before = git("rev-parse", "HEAD");
-    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
+    expect((await undoStudioCapture({ options, areas: AREAS, assistantName: "Assistant", db, requestId: rid(), id, now: NOW })).ok).toBe(false);
     expect(readFileSync(path, "utf8")).toContain("A later addition.");
     expect(git("rev-parse", "HEAD")).toBe(before);
   });
@@ -127,13 +127,13 @@ describe("Studio capture filing", () => {
     const original = readFileSync(path, "utf8");
     writeFileSync(path, original.replace("Let the board show empty places.", "An edited capture."));
     git("commit", "-am", "edit capture material");
-    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
+    expect((await undoStudioCapture({ options, areas: AREAS, assistantName: "Assistant", db, requestId: rid(), id, now: NOW })).ok).toBe(false);
     const material = original.split("\n").find((l) => l.includes(`- capture: [${id}]`)) ?? "";
     writeFileSync(path, original.split("\n").filter((l) => l !== material).join("\n"));
     writeFileSync(join(dir, "threads/other.md"), `${thread()}\n## Material\n\n${material}\n`);
     git("add", "-A");
     git("commit", "-m", "move material to another thread");
-    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
+    expect((await undoStudioCapture({ options, areas: AREAS, assistantName: "Assistant", db, requestId: rid(), id, now: NOW })).ok).toBe(false);
     expect(readFileSync(join(dir, "threads/other.md"), "utf8")).toContain(material);
   });
 

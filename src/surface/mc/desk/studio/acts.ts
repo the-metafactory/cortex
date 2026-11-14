@@ -59,6 +59,7 @@ export interface ActContext {
   files: StudioFiles;
   view: StudioView;
   now: Date;
+  assistantName: string;
 }
 
 const refuse = (status: number, error: string, extra: Partial<ActRefusal> = {}): ActRefusal => ({ status, error, ...extra });
@@ -115,8 +116,8 @@ function plan(writes: (StudioFile | ActRefusal)[], subject: string, message: str
 function respond(ctx: Ctx, act: Extract<StudioAct, { act: "respond" }>, { thread, text }: Found): ActPlan | ActRefusal {
   const latest = latestNote(thread.notes);
   const entry = [`### ${localTime(ctx.now)}`, ...(latest ? [`re: ${latest.at}`] : []), "", ...safeBody(act.text)];
-  const out = chain(text, (t) => appendEntry(t, "responses", "Responses", entry), (t) => appendLog(t, ctx.today, logged(ctx, "Answered Ivy")));
-  return plan([edited(thread.path, out)], `Answer Ivy on ${thread.slug}`, `Your answer is in ${quoted(thread.question)}.`);
+  const out = chain(text, (t) => appendEntry(t, "responses", "Responses", entry), (t) => appendLog(t, ctx.today, logged(ctx, `Answered ${ctx.assistantName}`)));
+  return plan([edited(thread.path, out)], `Answer ${ctx.assistantName} on ${thread.slug}`, `Your answer is in ${quoted(thread.question)}.`);
 }
 
 const GHOST_NAME: Record<IvyNote["kind"], string> = { stand: "stand", idea: "idea", relation: "relation", note: "note" };
@@ -129,15 +130,15 @@ function relationName(note: IvyNote): string {
 function keepOrDismiss(ctx: Ctx, act: Extract<StudioAct, { act: "keep" | "dismiss" }>, { thread, text }: Found): ActPlan | ActRefusal {
   const note = thread.notes.find((n) => n.at === act.note);
   if (!note) return refuse(404, `${quoted(thread.question)} has no note from ${act.note}.`);
-  if (note.kind === "note") return refuse(409, "Only Ivy's proposed stands, ideas and relations can be kept or dismissed.");
+  if (note.kind === "note") return refuse(409, `Only ${ctx.assistantName}'s proposed stands, ideas and relations can be kept or dismissed.`);
   if (note.status !== "open") return refuse(409, `This ${GHOST_NAME[note.kind]} is already ${note.status}.`);
   const keep = act.act === "keep";
   const verb = keep ? "Kept" : "Dismissed";
-  const what = `Ivy's ${GHOST_NAME[note.kind]}${note.kind === "relation" ? relationName(note) : ""}`;
+  const what = `${ctx.assistantName}'s ${GHOST_NAME[note.kind]}${note.kind === "relation" ? relationName(note) : ""}`;
   const steps: ((t: string) => string | null)[] = [(t) => setNoteStatus(t, note.at, keep ? "kept" : "dismissed")];
   if (keep && note.kind === "stand") steps.push((t) => setSection(t, "stand", "Where I stand", note.text));
   steps.push((t) => appendLog(t, ctx.today, `${verb} ${what}`));
-  const message = keep && note.kind === "stand" ? "Ivy's stand is now yours." : `${verb} ${what}.`;
+  const message = keep && note.kind === "stand" ? `${ctx.assistantName}'s stand is now yours.` : `${verb} ${what}.`;
   return plan([edited(thread.path, chain(text, ...steps))], `${keep ? "Keep" : "Dismiss"} ${what} on ${thread.slug}`, message);
 }
 
@@ -179,9 +180,9 @@ function unpark(ctx: Ctx, act: Extract<StudioAct, { act: "unpark" }>, { thread, 
 }
 
 function think(ctx: Ctx, act: Extract<StudioAct, { act: "think" }>, { thread, text }: Found): ActPlan | ActRefusal {
-  if (thread.thinkTonight === act.on) return refuse(409, act.on ? "This thread is already on Ivy's list for tonight." : "This thread is not on Ivy's list for tonight.");
-  const out = chain(text, (t) => setFront(t, "thinkTonight", act.on), (t) => appendLog(t, ctx.today, act.on ? "Asked Ivy to think tonight" : "Took it off Ivy's list for tonight"));
-  return plan([edited(thread.path, out)], `Think tonight ${act.on ? "on" : "off"} for ${thread.slug}`, act.on ? "Ivy thinks about it tonight." : "Ivy leaves it alone tonight.");
+  if (thread.thinkTonight === act.on) return refuse(409, act.on ? `This thread is already on ${ctx.assistantName}'s list for tonight.` : `This thread is not on ${ctx.assistantName}'s list for tonight.`);
+  const out = chain(text, (t) => setFront(t, "thinkTonight", act.on), (t) => appendLog(t, ctx.today, act.on ? `Asked ${ctx.assistantName} to think tonight` : `Took it off ${ctx.assistantName}'s list for tonight`));
+  return plan([edited(thread.path, out)], `Think tonight ${act.on ? "on" : "off"} for ${thread.slug}`, act.on ? `${ctx.assistantName} thinks about it tonight.` : `${ctx.assistantName} leaves it alone tonight.`);
 }
 
 function rename(ctx: Ctx, act: Extract<StudioAct, { act: "rename" }>, { thread, text }: Found): ActPlan | ActRefusal {
@@ -241,9 +242,9 @@ interface OpenSource {
   log: string;
 }
 
-function fromProposal(p: StudioProposalView, area: string): OpenSource {
+function fromProposal(p: StudioProposalView, area: string, name: string): OpenSource {
   const areas = p.areas.includes(area) ? [area, ...p.areas.filter((a) => a !== area)] : [area];
-  return { path: p.path, type: p.type, areas, question: p.question, material: [], log: `Opened from Ivy's proposal ${p.id}` };
+  return { path: p.path, type: p.type, areas, question: p.question, material: [], log: `Opened from ${name}'s proposal ${p.id}` };
 }
 
 const OPEN_IN_MAIL = /\s*Open in Mail: <([^>\s]+)>/;
@@ -273,15 +274,15 @@ function yesSection(ctx: Ctx, answers: Record<string, string> | undefined): { li
 
 type OpenAct = Extract<StudioAct, { act: "open" }>;
 
-function fromConversation(act: Extract<OpenAct, { from: "conversation" }>): OpenSource {
-  return { path: "", type: "question", areas: [act.area], question: oneLine(act.question), material: [`Ivy conversation: ${act.link}`], log: `Opened from Ivy conversation ${act.link}` };
+function fromConversation(act: Extract<OpenAct, { from: "conversation" }>, name: string): OpenSource {
+  return { path: "", type: "question", areas: [act.area], question: oneLine(act.question), material: [`Ivy conversation: ${act.link}`], log: `Opened from a conversation with ${name}: ${act.link}` };
 }
 
 function openSource(ctx: Ctx, act: OpenAct): OpenSource | ActRefusal {
-  if (act.from === "conversation") return fromConversation(act);
+  if (act.from === "conversation") return fromConversation(act, ctx.assistantName);
   const proposal = act.from === "proposal" ? ctx.view.proposals.find((p) => p.id === act.id) : undefined;
   const capture = act.from === "capture" ? ctx.view.inbox.find((c) => c.id === act.id) : undefined;
-  const src = proposal ? fromProposal(proposal, act.area) : capture ? fromCapture(capture, ctx.today) : null;
+  const src = proposal ? fromProposal(proposal, act.area, ctx.assistantName) : capture ? fromCapture(capture, ctx.today) : null;
   return src ?? refuse(404, `No readable ${act.from} is called ${act.id}.`);
 }
 
@@ -314,7 +315,7 @@ function open(ctx: Ctx, act: OpenAct): ActPlan | ActRefusal {
     "",
   ].join("\n");
   const path = `threads/${name}.md`;
-  const from = act.from === "conversation" ? "an Ivy conversation" : `${act.from} ${act.id}`;
+  const from = act.from === "conversation" ? `a conversation with ${ctx.assistantName}` : `${act.from} ${act.id}`;
   return plan([{ path, text: body }, ...parked.writes], `Open ${name} from ${from}${parked.subject}`, `Opened ${quoted(src.question)}${parked.message}.`, src.path ? [src.path] : []);
 }
 

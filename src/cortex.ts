@@ -4932,6 +4932,7 @@ export async function startCortex(
         conversationStatus = await openConversationHost({
           dir: conversationDir,
           stack: derivedStack.stack,
+          assistantName: config.mc.desk.assistantName,
           label: process.env.XPC_SERVICE_NAME ?? "",
           expectedLabel: `ai.meta-factory.cortex.${derivedStack.stack}`,
           lanes: { ...(conversationConfig?.local ? { local: conversationConfig.local } : {}), ...(conversationConfig?.cloud ? { cloud: conversationConfig.cloud } : {}) },
@@ -4998,6 +4999,7 @@ export async function startCortex(
           routineScope: { principal: principalId, stack: derivedStack.stack },
           enabled: config.mc.desk.enabled,
           displayName: config.mc.desk.displayName,
+          assistantName: config.mc.desk.assistantName,
           topN: config.mc.desk.topN,
           myDay: config.mc.desk.myDay,
           mirror: config.mc.desk.mirror,

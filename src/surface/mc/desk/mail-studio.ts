@@ -42,6 +42,7 @@ export interface MailForStudio {
 export interface MailStudioDeps {
   localSources: LocalSources;
   options: StudioOptions;
+  assistantName: string;
   areas: readonly StudioArea[];
   db: Database;
   now?: Date;
@@ -141,7 +142,7 @@ export async function addMailToStudio(item: MailForStudio, input: AddMailInput, 
   if (refused) return refused;
   const now = deps.now ?? new Date();
   const features = mailFeatures(deps.db, item.mail);
-  const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, now }, (ctx) => planMail(ctx, item, input, id, contentFrom(deps.localSources, [item.mail.sourceId]).local));
+  const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, assistantName: deps.assistantName, now }, (ctx) => planMail(ctx, item, input, id, contentFrom(deps.localSources, [item.mail.sourceId]).local));
   if (!result.ok) return result;
   const at = now.getTime();
   if (input.thread !== null) linkStudioMail(deps.db, item.mail, threadTarget(result.studio, input.thread), { id, requestId: id, now: at, ...(input.ruleRun ? { origin: "rule" as const, ruleRun: input.ruleRun } : { origin: "desk" as const }) });

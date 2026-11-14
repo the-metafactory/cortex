@@ -12,7 +12,7 @@ import { seedStudioRepo } from "./__fixtures__/studio-git";
 import { chatClassifier, classifierRunner, classifierStatus, commandClassifier, MailClassifier, modelJson, readClassifications, type ClassifierRequest, type CommandConfig, type CommandRunner } from "../desk/classify";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import { chatFlagRunner, DigestFlagger, readDigestFlags } from "../desk/mail-digest";
-import { handMailToIvy, piHandoffOwner, WORK_MAIL_NO_HANDOFF } from "../desk/mail-handoff";
+import { handMailToIvy, piHandoffOwner, workMailNoHandoff } from "../desk/mail-handoff";
 import { EMBEDDER_LOCAL_NOTE, MailSimilarity } from "../desk/mail-similar";
 import { proposeMailThread, WORK_MAIL_NO_THREAD, type MailForStudio } from "../desk/mail-studio";
 import type { SweepGroup, SweepMember } from "../desk/mail-sweep";
@@ -198,7 +198,7 @@ describe("a fake codex is never spawned for work mail", () => {
   });
 
   it("in a Studio session on a local thread", async () => {
-    await expect(sessionModel({ ...codexModel(), maxPerPass: 1 }, { question: SECRET, stand: "", subject: "", context: "", exchange: [] }, sessionContent({ policy: "local" }))).rejects.toThrow(CloudRouteRefused);
+    await expect(sessionModel({ ...codexModel(), maxPerPass: 1 }, { question: SECRET, stand: "", subject: "", context: "", exchange: [] }, sessionContent({ policy: "local" }), "Assistant")).rejects.toThrow(CloudRouteRefused);
     expect(spawned()).toBe(false);
   });
 });
@@ -206,19 +206,19 @@ describe("a fake codex is never spawned for work mail", () => {
 describe("mail hand-off and Studio", () => {
   const item = (sourceId: string, area: string | null): MailForStudio => ({ mail: { ...mail("w1"), sourceId }, area, summary: null });
 
-  it("refuses to hand work mail to Ivy and files no task", async () => {
+  it("refuses to hand work mail to the assistant and files no task", async () => {
     let writes = 0;
     const result = await handMailToIvy(item("work-mail", "office"), { requestId: "req-000000000001", instruction: null, suspicious: false }, {
       localSources: boundary, db, writers: { task: ["task-writer"] }, maps: [{ ref: "owner/repo#1", label: "Tasks" }], lanes: { cloud: { provider: "p", model: "m" } },
-      run: async () => { writes += 1; return { code: 0, stdout: "{}", stderr: "" }; }, now: NOW, timeoutMs: 1000,
+      run: async () => { writes += 1; return { code: 0, stdout: "{}", stderr: "" }; }, now: NOW, timeoutMs: 1000, assistantName: "Assistant",
     });
-    expect(result).toEqual({ ok: false, status: 409, error: WORK_MAIL_NO_HANDOFF });
+    expect(result).toEqual({ ok: false, status: 409, error: workMailNoHandoff("Assistant") });
     expect(writes).toBe(0);
   });
 
   it("refuses a stored cloud hand-off of work mail before the turn runs", async () => {
     let turns = 0;
-    const owner = piHandoffOwner(async () => { turns += 1; return { text: "{}", session: "s", resumed: false }; }, { cloud: { provider: "p", model: "m" } }, boundary);
+    const owner = piHandoffOwner(async () => { turns += 1; return { text: "{}", session: "s", resumed: false }; }, { cloud: { provider: "p", model: "m" } }, "Assistant", boundary);
     await expect(owner({ sourceId: "work-mail", id: "h", route: "cloud", from: "a", subject: SECRET, receivedAt: "", summary: null, text: SECRET, url: null, instruction: null, task: "t" })).rejects.toThrow(CloudRouteRefused);
     expect(turns).toBe(0);
   });
@@ -226,7 +226,7 @@ describe("mail hand-off and Studio", () => {
   it("tells work mail it has nowhere to go when only cloud threads are active, without asking a model", async () => {
     let asked = 0;
     const proposed = await proposeMailThread(item("work-mail", "office"), {
-      localSources: boundary, options: { dir: seedStudioRepo("desk-source-guard-studio-", { garden: "---\ntype: question\nareas: [home]\nstate: active\nopened: 2026-10-31\n---\n\n## Question\n\nWhat grows?\n\n## Where I stand\n\nStill deciding.\n" }), maxActive: 5, filer: { ...codexModel(), maxPerPass: 1 } }, areas: AREAS, db,
+      localSources: boundary, assistantName: "Assistant", options: { dir: seedStudioRepo("desk-source-guard-studio-", { garden: "---\ntype: question\nareas: [home]\nstate: active\nopened: 2026-10-31\n---\n\n## Question\n\nWhat grows?\n\n## Where I stand\n\nStill deciding.\n" }), maxActive: 5, filer: { ...codexModel(), maxPerPass: 1 } }, areas: AREAS, db,
       model: () => { asked += 1; return Promise.resolve({ thread: null, match: false, reason: "no" }); },
     });
     expect(proposed).toMatchObject({ thread: null, threads: [], reason: WORK_MAIL_NO_THREAD });

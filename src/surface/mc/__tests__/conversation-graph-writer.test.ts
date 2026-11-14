@@ -146,7 +146,7 @@ describe.each(CASES)("$type writer for conversation proposals", c => {
     const [file = ""] = r.soma.files;
     expect(r.soma.calls).toEqual([c.argv(file, marker)]);
     expect(existsSync(file)).toBe(false);
-    expect(r.soma.nodes.get(marker)?.body).toBe(`${c.fields.body ?? ""}\n\nFiled from Ivy conversation ${r.id}, operation ${operationIdOf(first.body.proposal)}.\n\n${marker}`);
+    expect(r.soma.nodes.get(marker)?.body).toBe(`${c.fields.body ?? ""}\n\nFiled from conversation ${r.id}, operation ${operationIdOf(first.body.proposal)}.\n\n${marker}`);
     const again = await r.confirm(view);
     expect([again.status, again.body.proposal.operation?.canonicalId]).toEqual([200, "jcfischer/desk#7"]);
     expect(adds(r.soma.calls)).toHaveLength(1);

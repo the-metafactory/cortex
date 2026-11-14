@@ -100,9 +100,9 @@ function toolLine(data: Record<string, unknown>): string {
 
 function continuationLine(data: Record<string, unknown>): string {
   if (data.mode === "native-resume") return "Resumed the same engine after a restart.";
-  if (data.reason === "engine-changed") return "Ivy's working context was rebuilt from this conversation's record, because earlier turns came from another engine.";
-  if (data.reason === "tool-policy") return "Ivy rebuilt this turn from the conversation record to check current tool permissions.";
-  if (data.reason === "session-missing") return "Ivy's earlier pi session was not found, so the working context was rebuilt from this conversation's record.";
+  if (data.reason === "engine-changed") return "The working context was rebuilt from this conversation's record, because earlier turns came from another engine.";
+  if (data.reason === "tool-policy") return "This turn was rebuilt from the conversation record to check current tool permissions.";
+  if (data.reason === "session-missing") return "The earlier pi session was not found, so the working context was rebuilt from this conversation's record.";
   return `Continued with reconstructed context on the ${routeLabel(text(data.to))} model.`;
 }
 
@@ -147,15 +147,15 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
   if (entry.kind === CONTINUATION_KIND) return [{ kind: "activity", text: continuationLine(data) }];
   if (entry.kind === TOOL_STARTED_KIND) return [{ kind: "activity", text: `Using ${text(data.tool) || "a tool"}…` }];
   if (entry.kind === TOOL_ACTIVITY_KIND) return [{ kind: "activity", text: toolLine(data) }];
-  if (entry.role === "assistant" && entry.error) return [{ kind: "failure", text: `Ivy could not answer${entry.model ? ` on ${entry.model}` : ""}: ${entry.error}` }];
+  if (entry.role === "assistant" && entry.error) return [{ kind: "failure", text: `No answer${entry.model ? ` on ${entry.model}` : ""}: ${entry.error}` }];
   if (entry.role === "user" && entry.text) return [{ kind: "message", who: "you", text: entry.text }];
   if (entry.role === "assistant" && entry.text) return [{ kind: "message", who: "ivy", text: entry.text, ...(entry.model ? { note: entry.model } : {}) }];
   return [];
 }
 
 export function pendingLabel(submission: SubmissionView): string {
-  if (submission.status === "queued") return "Queued · waits for Ivy's current turn";
-  if (submission.status === "placed") return "Ivy is working on this";
+  if (submission.status === "queued") return "Queued · waits for the current turn";
+  if (submission.status === "placed") return "Working on this";
   return submission.status === "done" ? "Answered" : `Not answered: ${submission.reason ?? "unknown reason"}`;
 }
 
@@ -168,7 +168,7 @@ export function sourceLabel(source: Pick<ObjectRef, "owner">): string {
 }
 
 export function statusLabel(status: ConversationMeta["activity"]["status"]): string {
-  if (status === "working") return "Ivy is working";
+  if (status === "working") return "Working";
   return status === "waiting" ? "Waiting for you" : "Ready to continue";
 }
 

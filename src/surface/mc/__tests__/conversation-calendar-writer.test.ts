@@ -24,7 +24,7 @@ describe("calendar writer for conversation proposals", () => {
     const operationId = reply.body.proposal.operation?.operationId ?? "";
     expect(r.calls).toEqual([{ argv: WRITER, stdin: { kind: "calendar", requestId: studioRequestId(operationId), fields: {
       title: PROBE.title, start: "2027-01-06T02:00:00.000Z", end: "2027-01-06T02:15:00.000Z",
-      notes: `Safe to delete.\n\nFrom Ivy conversation ${r.id}, operation ${operationId}.`,
+      notes: `Safe to delete.\n\nFrom conversation ${r.id}, operation ${operationId}.`,
     } } }]);
     expect(await r.confirm(view)).toMatchObject({ status: 200, body: { proposal: { operation: { canonicalId: "EVENT-1:ABC" } } } });
     expect(r.calls).toHaveLength(1);

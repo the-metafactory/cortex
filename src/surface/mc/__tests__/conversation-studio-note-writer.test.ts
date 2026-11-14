@@ -6,7 +6,7 @@ import { failureOf, studioConversationRig } from "./studio-conversation-rig";
 const rig = studioConversationRig("conversation-studio-note-", "studio-note", { alpha: "active", gamma: "parked", omega: "closed" });
 const AREAS = [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "local" as const }];
 let acts = 0;
-const act = (dir: string, studioAct: StudioAct) => runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, requestId: `studio-act-${++acts}-xyz`, act: studioAct });
+const act = (dir: string, studioAct: StudioAct) => runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, assistantName: "Assistant", requestId: `studio-act-${++acts}-xyz`, act: studioAct });
 
 describe("Studio note writer", () => {
   test("adds an open stand as Ivy's proposal, leaves Where I stand alone, and Keep in Studio makes it the stand", async () => {
@@ -20,14 +20,14 @@ describe("Studio note writer", () => {
       const note = t.notes[0];
       expect(note).toMatchObject({ trigger: "Ivy conversation", model: "local", kind: "stand", status: "open", text: "Run the workshop in spring." });
       expect(note?.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-      expect(t.log.at(-1)?.text).toBe(`Added Ivy's stand from Ivy conversation ?desk=conversation&conversation=${r.id}`);
-      expect(r.repo.git("log", "-n", "1", "--format=%s")).toContain("Add Ivy's stand to alpha from an Ivy conversation");
+      expect(t.log.at(-1)?.text).toBe(`Added Assistant's stand from conversation ?desk=conversation&conversation=${r.id}`);
+      expect(r.repo.git("log", "-n", "1", "--format=%s")).toContain("Add Assistant's stand to alpha from a conversation");
 
       await r.confirmedAgain(view, operation);
       expect(r.parsed("alpha").notes).toHaveLength(1);
 
       const kept = await act(r.repo.dir, { act: "keep", thread: "alpha", note: note?.at ?? "" });
-      expect(kept).toMatchObject({ ok: true, message: "Ivy's stand is now yours." });
+      expect(kept).toMatchObject({ ok: true, message: "Assistant's stand is now yours." });
       const after = r.parsed("alpha");
       expect(after.stand).toBe("Run the workshop in spring.");
       expect(after.notes[0]?.status).toBe("kept");

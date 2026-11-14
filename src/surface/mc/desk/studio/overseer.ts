@@ -61,9 +61,9 @@ export function recurringThemes(captures: readonly StudioCapture[], areas: Studi
   return out;
 }
 
-export function studioBriefing(threads: readonly StudioThread[], now: number): string | null {
+export function studioBriefing(threads: readonly StudioThread[], now: number, name: string): string | null {
   const start = new Date(now);
   start.setUTCHours(0, 0, 0, 0);
   const names = threads.filter(thread => thread.notes.some(note => !note.sample && Date.parse(note.at) >= start.getTime() && Date.parse(note.at) <= now)).map(thread => thread.question.replace(/\s+/g, " ").trim().replace(/[.!?]+$/, ""));
-  return names.length ? `Studio: Ivy thought about ${names.join("; ")}.` : null;
+  return names.length ? `Studio: ${name} thought about ${names.join("; ")}.` : null;
 }

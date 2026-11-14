@@ -4,6 +4,7 @@ import { proposalTime, type AskKind, type AskMap, type DeskProposal } from "../.
 import { clock } from "../../desk/time";
 import type { CapabilityBuildResult, CapabilityRefusal, StepSovereignty } from "../../desk/routine-capability-contract";
 import { buildCapabilities } from "../lib/desk-ask";
+import { useAssistantName } from "../lib/assistant-name";
 
 type FieldType = "text" | "long" | "time" | "map";
 
@@ -113,6 +114,7 @@ function MissingCapabilities({ refusal, busy }: { refusal: CapabilityRefusal; bu
 }
 
 function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange, onAlternative }: ProposalCardProps) {
+  const name = useAssistantName();
   const [fields, setFields] = useState<Record<string, unknown>>(proposal.fields);
   useEffect(() => onFieldsChange(fields), [fields]);
   const unwritable = proposal.unwritable === true;
@@ -181,7 +183,7 @@ function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCa
           <div className="desk-acts">
             <button type="button" className="desk-btn pri" disabled={blocked || busy} aria-busy={busy} onClick={() => onConfirm(fields)}>{busy ? working : talk ? "Start the conversation" : "Confirm"}</button>
             {!unwritable && <button type="button" className="desk-btn" disabled={busy} onClick={() => setEditing((e) => !e)}>{editing ? "Done editing" : "Edit"}</button>}
-            {proposal.alternative && onAlternative && <button type="button" className="desk-btn" disabled={busy} onClick={onAlternative}>Talk it over with Ivy instead</button>}
+            {proposal.alternative && onAlternative && <button type="button" className="desk-btn" disabled={busy} onClick={onAlternative}>Talk it over with {name} instead</button>}
             <button type="button" className="desk-btn ghost" disabled={busy} onClick={onCancel}>Cancel</button>
           </div>
         </article>

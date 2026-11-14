@@ -13,6 +13,7 @@ import { planExchangeEnd, sessionSubject } from "../desk/studio/session";
 import { SessionEndSchema, StudioSessionSchema, type SessionEnd, type StudioSession } from "../desk/studio/session-schema";
 import { buildStudioView, effectivePolicy } from "../desk/studio/view";
 import { runStudioTransaction } from "../desk/studio/writer";
+import { assistantNameOf } from "../desk/assistant-name";
 
 export interface StudioConversationDeps {
   db: Database;
@@ -191,8 +192,8 @@ async function outcomeOnce(host: ConversationHost, deps: StudioConversationDeps,
   try {
     const turns = await host.exchange(id);
     const { policy } = await host.meta(id);
-    const result = await runStudioTransaction({ options: options.studio, areas: options.areas, requestId: studioRequestId(operation.operationId), ...(deps.now ? { now: deps.now() } : {}), ...(deps.git ? { git: deps.git } : {}) },
-      ctx => planExchangeEnd(ctx, { ...exchange, policy, turns }, body.outcome, `Record Ivy conversation ${id}`));
+    const result = await runStudioTransaction({ options: options.studio, areas: options.areas, assistantName: assistantNameOf(options), requestId: studioRequestId(operation.operationId), ...(deps.now ? { now: deps.now() } : {}), ...(deps.git ? { git: deps.git } : {}) },
+      ctx => planExchangeEnd(ctx, { ...exchange, policy, turns }, body.outcome, `Record conversation ${id}`));
     if (!result.ok) {
       const to = result.status >= 500 ? "uncertain" : "failed";
       return await host.transition(operation.operationId, to, { note: result.error });

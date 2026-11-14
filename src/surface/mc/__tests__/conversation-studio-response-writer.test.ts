@@ -14,7 +14,7 @@ describe("Studio response writer", () => {
       const operation = r.created(reply);
       const t = r.parsed("alpha");
       expect(t.responses.map(x => x.text)).toEqual(["Lead with the Studio."]);
-      expect(t.log.at(-1)?.text).toBe(`Answered Ivy from Ivy conversation ?desk=conversation&conversation=${r.id}`);
+      expect(t.log.at(-1)?.text).toBe(`Answered Assistant from conversation ?desk=conversation&conversation=${r.id}`);
       await r.confirmedAgain(view, operation);
       expect(r.parsed("alpha").responses).toHaveLength(1);
     } finally { r.repo.clean(); }

@@ -278,7 +278,7 @@ for (const disposition of ["accept", "dismiss"] as const) test(`handled captures
  await add(["one","two","three"]);
  const first=await runOverseer(r.config);const id=first.proposals[0];if(!id)throw new Error("Missing proposal");
  if(disposition==="accept"){
-  const result=await runStudioAct({options:{dir:r.dir,maxActive:5},areas:[{id:"lab",label:"Lab",color:"blue",policy:"local"}],requestId:crypto.randomUUID(),act:{act:"open",from:"proposal",id,area:"lab"}});
+  const result=await runStudioAct({options:{dir:r.dir,maxActive:5},areas:[{id:"lab",label:"Lab",color:"blue",policy:"local"}],assistantName:"Assistant",requestId:crypto.randomUUID(),act:{act:"open",from:"proposal",id,area:"lab"}});
   expect(result.ok).toBe(true);if(!result.ok)throw new Error(result.error);
   expect(result.studio.problems).toEqual([]);
   expect(result.studio.active.some(thread=>thread.log.some(entry=>entry.text.includes(id)))).toBe(true);

@@ -5,6 +5,7 @@ import type { ThreadOutcome } from "../../desk/studio/format";
 import { YES_ANSWERS } from "../../desk/studio/labels";
 import type { StudioView } from "../../desk/studio/view";
 import type { StudioActs } from "../hooks/use-studio-act";
+import { useAssistantName } from "../lib/assistant-name";
 
 export type OpenRequest =
   | { kind: "open"; from: "proposal" | "capture"; id: string; question: string; area: string | null; reason: string | null }
@@ -75,6 +76,7 @@ export function YesFilter({ studio, answers, onAnswer, parking }: { studio: Stud
 }
 
 export function OpenSheet({ request, studio, acts, onDone }: { request: OpenRequest; studio: StudioView; acts: StudioActs; onDone: () => void }) {
+  const name = useAssistantName();
   const initial = request.kind === "open" ? (request.area ?? studio.areas[0]?.id ?? "") : "";
   const [area, setArea] = useState(initial);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -100,7 +102,7 @@ export function OpenSheet({ request, studio, acts, onDone }: { request: OpenRequ
         <p className="sub">{request.question}</p>
         {request.kind === "open" && (
           <div className="dst-placed">
-            <span className="iv">Ivy:</span>
+            <span className="iv">{name}:</span>
             <div>
               {area ? `Placed under ${areaLabel(studio.areas, area)}` : "Choose an area"}
               {moved ? ", where you moved it." : request.reason ? `: ${request.reason}` : "."}
@@ -167,15 +169,16 @@ export function CloseForm({ slug, acts, today, onCancel }: { slug: string; acts:
 }
 
 export function RespondBox({ slug, label, acts }: { slug: string; label: string; acts: StudioActs }) {
+  const name = useAssistantName();
   const [text, setText] = useState("");
   const send = async (): Promise<void> => {
     const out = await acts.send({ act: "respond", thread: slug, text });
     if (out.ok) setText("");
   };
   return (
-    <form className="dst-respond" aria-label="Respond to Ivy" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+    <form className="dst-respond" aria-label={`Respond to ${name}`} onSubmit={(e) => { e.preventDefault(); void send(); }}>
       <b>{label}</b>
-      <textarea rows={2} value={text} aria-label="Your answer to Ivy's latest note" placeholder="Your answer to Ivy's latest note" onChange={(e) => setText(e.target.value)} />
+      <textarea rows={2} value={text} aria-label={`Your answer to ${name}'s latest note`} placeholder={`Your answer to ${name}'s latest note`} onChange={(e) => setText(e.target.value)} />
       <button type="submit" className="desk-btn pri" disabled={text.trim() === "" || acts.pending} aria-busy={acts.pending}>Send my response</button>
     </form>
   );

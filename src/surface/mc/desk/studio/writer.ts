@@ -34,6 +34,7 @@ export interface StudioWriteInput {
   options: StudioOptions;
   areas: readonly StudioArea[];
   requestId: string;
+  assistantName: string;
   act: StudioAct;
   now?: Date;
   git?: GitRunner;
@@ -104,7 +105,7 @@ export async function runStudioTransaction(input: Omit<StudioWriteInput, "act">,
 
     const base = await git(["rev-parse", "--verify", "HEAD"], dir);
     const { files, view } = await readView(input);
-    const plan = await makePlan({ files, view, now: input.now ?? new Date() });
+    const plan = await makePlan({ files, view, now: input.now ?? new Date(), assistantName: input.assistantName });
     if (isRefusal(plan)) return fail(plan.status, plan.error, plan.needsPark ? { needsPark: true } : {});
     for (const w of plan.writes) {
       const parsed = w.path.startsWith("inbox/") ? parseCaptureFile(w.path, w.text) : parseThreadFile(w.path, w.text);

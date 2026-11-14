@@ -34,6 +34,7 @@ const item = (n: number, over: Partial<DeskItem> = {}): DeskItem => ({
 const view: DeskViewModel = {
   generatedAt: NOW,
   displayName: "Ada",
+  assistantName: "Assistant",
   topN: 3,
   areas: [{ id: "work", label: "Work", color: "#2563eb" }],
   items: [1, 2, 3, 4, 5].map((n) => item(n)),
@@ -139,8 +140,8 @@ describe("the Desk top bar", () => {
     expect(right).toBeGreaterThan(left);
     expect(row).toBeGreaterThan(right);
     expect(top.slice(left, right)).toContain('aria-label="View"');
-    expect(top.slice(left, right)).not.toContain('aria-label="Ask Ivy"');
-    expect(top.slice(row)).toContain('aria-label="Ask Ivy"');
+    expect(top.slice(left, right)).not.toContain('aria-label="Ask Assistant"');
+    expect(top.slice(row)).toContain('aria-label="Ask Assistant"');
     const tabs = [...top.slice(right, row).matchAll(/role="tab" aria-selected="(true|false)">(?:<span[^>]*><\/span>)?([^<]+)</g)].map((m) => [m[2], m[1]]);
     expect(tabs).toEqual([["All", "true"], ["SWITCH", "false"], ["MetaFactory", "false"], ["Personal", "false"]]);
     expect(top.slice(right, row)).toContain(">Settings</button>");
@@ -158,7 +159,7 @@ describe("the Desk top bar", () => {
     const wake = { ...DeskWakeSchema.parse({ enabled: true, assistantName: "Ivy" }) };
     const withWake = renderToStaticMarkup(<DeskBody view={{ ...view, voice: { enabled: true, input: "elevenlabs", output: "browser", wake } }} error={null} onOpenMissionControl={() => {}} />);
     const form = /<form class="desk-ask">([\s\S]*?)<\/form>/.exec(withWake)?.[1] ?? "";
-    expect(form.indexOf('role="switch"')).toBeGreaterThan(form.indexOf('aria-label="Ask Ivy"'));
+    expect(form.indexOf('role="switch"')).toBeGreaterThan(form.indexOf('aria-label="Ask Assistant"'));
     expect(form).toContain('aria-label="Wake for Ivy"');
     expect(withWake).toMatch(/<\/form><p class="desk-wake-status" role="status" aria-live="polite"><\/p>/);
     expect(withWake).not.toContain("Enable wake");
@@ -315,18 +316,18 @@ describe("the command bar", () => {
 
   it("proposes a conversation with the typed text and one Start button, and offers it as an alternative on other cards", () => {
     const said = "can we think of a better name for this product?";
-    const talk = card({ kind: "conversation", label: "Conversation with Ivy", fields: { text: said } });
-    expect(talk).toContain("Conversation with Ivy");
+    const talk = card({ kind: "conversation", label: "Conversation", fields: { text: said } });
+    expect(talk).toContain("Conversation");
     expect(talk).toContain(said);
     expect(talk).toMatch(/<button[^>]*>Start the conversation<\/button>/);
-    expect(talk).not.toContain("Talk it over with Ivy instead");
-    const alternative = { kind: "conversation" as const, label: "Conversation with Ivy", fields: { text: said } };
+    expect(talk).not.toContain("Talk it over with Assistant instead");
+    const alternative = { kind: "conversation" as const, label: "Conversation", fields: { text: said } };
     const goal = (onAlternative?: () => void) => renderToStaticMarkup(
       <ProposalCard proposal={{ kind: "goal", label: "Goal draft", fields: { wording: "Find a better name" }, via: "parser", alternative }} said={said} maps={[]} now={NOW} busy={false}
         onConfirm={() => {}} onCancel={() => {}} onGoto={() => {}} onFieldsChange={() => {}} {...(onAlternative ? { onAlternative } : {})} />,
     );
-    expect(goal(() => {})).toContain(">Talk it over with Ivy instead</button>");
-    expect(goal()).not.toContain("Talk it over with Ivy instead");
+    expect(goal(() => {})).toContain(">Talk it over with Assistant instead</button>");
+    expect(goal()).not.toContain("Talk it over with Assistant instead");
   });
 
   it("shows notes under Keep in mind", () => {

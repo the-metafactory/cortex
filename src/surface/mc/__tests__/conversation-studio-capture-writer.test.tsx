@@ -42,7 +42,7 @@ describe("Studio capture writer", () => {
       const id = captureId(studioRequestId(operation.operationId));
       const thread = text(r.repo.dir, "threads/alpha.md");
       expect(thread).toContain(`${captureMarker(id)}Ivy probe thought`);
-      expect(thread).toContain(`Filed capture ${id} from Ivy conversation ?desk=conversation&conversation=${r.id}`);
+      expect(thread).toContain(`Filed capture ${id} from conversation ?desk=conversation&conversation=${r.id}`);
 
       await r.confirmedAgain(view, operation);
       expect(f.asked).toHaveLength(1);
@@ -89,7 +89,7 @@ describe("Studio capture writer", () => {
     try {
       const view = await r.propose({ text: "Late thought" });
       expect(view.proposal.fields.thread).toBe("alpha");
-      expect(await runStudioAct({ options: { dir: r.repo.dir, maxActive: 5 }, areas: AREAS, requestId: "studio-act-park-alpha", act: { act: "park", thread: "alpha" } })).toMatchObject({ ok: true });
+      expect(await runStudioAct({ options: { dir: r.repo.dir, maxActive: 5 }, areas: AREAS, assistantName: "Assistant", requestId: "studio-act-park-alpha", act: { act: "park", thread: "alpha" } })).toMatchObject({ ok: true });
       const before = r.commits();
       const reply = await r.confirm(view);
       expect(reply.status).toBe(409);

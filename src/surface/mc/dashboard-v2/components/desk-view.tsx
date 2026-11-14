@@ -51,6 +51,7 @@ import { MailStudioBox, newStudioPick, studioBody, withProposal, type StudioPick
 import { HandoffStatus, handoffBody, handoffKeyFor, MailHandoffBox, newHandoffAsk, type HandoffAsk } from "./desk-mail-handoff";
 import { MailSnoozeBox, newSnoozeAsk, snoozeMeetings, type SnoozeAsk } from "./desk-mail-snooze";
 import type { SnoozeChoice } from "../../desk/mail-snooze-schema";
+import { AssistantNameContext } from "../lib/assistant-name";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -81,10 +82,10 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
       </div>
     );
   }
-  return <>
+  return <AssistantNameContext.Provider value={view.assistantName}>
     {routineLocation && <div hidden={!routines}><DeskRoutineEditor active={Boolean(routines)} location={routineLocation} onLocation={setRoutines} view={view.routines} onChanged={reload} onConversation={(id) => { setRoutines(null); window.history.pushState(null, "", `${window.location.pathname}${deskSearch("", { mode: "conversation", thread: null, conversation: id })}`); window.dispatchEvent(new PopStateEvent("popstate")); }} onBack={() => { setRoutines(null); reload(); }} /></div>}
     {!routines && (settings ? <DeskSettings view={view} group={settings} onGroup={setSettings} onBack={() => { setSettings(null); reload(); }} /> : <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => { setSettings("calendars"); }} onOpenRoutines={() => { setRoutines(visitedRoutines ?? defaultRoutinesLocation()); }} onChanged={reload} />)}
-  </>;
+  </AssistantNameContext.Provider>;
 }
 
 export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => undefined, onOpenRoutines, onChanged = () => undefined }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onOpenRoutines?: () => void; onChanged?: () => void } & DeskViewProps) {
@@ -310,7 +311,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (proposal.p.kind === "conversation") {
       const talk = FIELD_SCHEMAS.conversation.safeParse(fields);
       if (talk.success) await startTalk(proposal.requestId, talk.data, proposal.said);
-      else setNote("Type what you want to talk over with Ivy first.");
+      else setNote(`Type what you want to talk over with ${view.assistantName} first.`);
       return;
     }
     setCreating(true);
@@ -642,7 +643,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const confirmHandoff = (item: DeskItem, ask: HandoffAsk): void => {
-    const hand: DeskAction = { id: "mail.ivy", label: "Hand to Ivy", role: "secondary", wired: true };
+    const hand: DeskAction = { id: "mail.ivy", label: `Hand to ${view.assistantName}`, role: "secondary", wired: true };
     void send(item, hand, {
       keepVisible: true,
       request: async () => {
@@ -832,11 +833,11 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 void ask();
               }}
             >
-              <span className="desk-ask-lead">Ivy,</span>
+              <span className="desk-ask-lead">{view.assistantName},</span>
               <input
                 ref={askInput}
                 className="desk-input"
-                aria-label="Ask Ivy"
+                aria-label={`Ask ${view.assistantName}`}
                 placeholder="capture…, remind me…, note…, ask an agent to…, schedule…"
                 value={askText}
                 disabled={asking}

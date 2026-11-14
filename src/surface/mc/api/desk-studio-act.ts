@@ -6,6 +6,7 @@ import { buildStudioView } from "../desk/studio/view";
 import { enqueueSparring, withThinking } from "../desk/studio/thinking";
 import type { DeskRuntime } from "../desk/compose";
 import { StudioActSchema } from "../desk/studio/acts";
+import { assistantNameOf } from "../desk/assistant-name";
 import type { GitRunner } from "../desk/studio/git";
 import { runStudioAct, STUDIO_REQUEST_ID, type StudioWriteLock } from "../desk/studio/writer";
 
@@ -34,7 +35,7 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
   if (parsed.data.act === "spar") {
     const { files, problems } = await readStudioFiles(desk.studio.dir);
     const studio = buildStudioView(files, desk.studio, desk.areas, problems);
-    const result = await enqueueSparring({ studio, dir: desk.studio.dir, cli: desk.rangerCli, act: parsed.data, requestId: body.requestId, ...(deps.run ? { run: deps.run } : {}) });
+    const result = await enqueueSparring({ studio, dir: desk.studio.dir, cli: desk.rangerCli, act: parsed.data, requestId: body.requestId, assistantName: assistantNameOf(desk), ...(deps.run ? { run: deps.run } : {}) });
     if (!result.ok) return fail(result.status, result.error);
     return answer(200, { ...result, studio: await withThinking(studio, desk.studio.dir, desk.rangerCli, deps.run) });
   }
@@ -45,6 +46,7 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
   }
   const result = await runStudioAct({
     options: desk.studio,
+    assistantName: assistantNameOf(desk),
     areas: desk.areas,
     requestId: body.requestId,
     act: parsed.data,

@@ -6,6 +6,7 @@ import type { DeskVoice } from "../../desk/voice";
 import { useDeskVoice } from "../hooks/use-desk-voice";
 import { MicButton } from "./desk-voice";
 import "./desk-studio-session.css";
+import { useAssistantName } from "../lib/assistant-name";
 
 const PATH = "/api/desk/studio/session";
 const ACTIVE = "desk.studio.session";
@@ -161,6 +162,7 @@ export function useStudioSession(onSaved?: () => void) {
 export type StudioSessionControls = ReturnType<typeof useStudioSession>;
 
 export function StudioSessionPanel({ controls: c, voice, location, onContinue }: { controls: StudioSessionControls; voice: DeskVoice; location: string; onContinue?: (sessionId: string) => void }) {
+  const name = useAssistantName();
   const input = useRef<HTMLTextAreaElement>(null);
   const previousLocation = useRef(location);
   useEffect(() => {
@@ -180,7 +182,7 @@ export function StudioSessionPanel({ controls: c, voice, location, onContinue }:
   </aside> : null;
   const session = c.session;
   const ghost = session.scope.kind === "ghost";
-  if (c.remaining) return <aside className="dst-session" role="dialog" aria-label={ghost ? "Discuss with Ivy" : "Talk it through with Ivy"}>
+  if (c.remaining) return <aside className="dst-session" role="dialog" aria-label={ghost ? `Discuss with ${name}` : `Talk it through with ${name}`}>
     <header><h2>Your message is still here</h2></header>
     <p>The exchange was already saved. This remaining message has not been saved. Save it to the thread or copy it before closing.</p>
     <label>Your remaining message<textarea ref={input} aria-label="Your remaining message" readOnly value={c.draft} /></label>
@@ -191,10 +193,10 @@ export function StudioSessionPanel({ controls: c, voice, location, onContinue }:
     </div>
   </aside>;
   const ending = c.chosen ?? (session.phase.kind !== "open" ? session.phase.outcome : null);
-  return <aside className="dst-session" role="dialog" aria-label={ghost ? "Discuss with Ivy" : "Talk it through with Ivy"}>
+  return <aside className="dst-session" role="dialog" aria-label={ghost ? `Discuss with ${name}` : `Talk it through with ${name}`}>
     <header><h2>{ghost ? "Discuss" : "Talk it through"}</h2><button type="button" className="desk-btn ghost" onClick={() => void c.end(ending ?? { kind: "leave" })}>Close and save note</button></header>
-    <p>{session.original}</p><p className="dst-session-policy">{session.policy === "local" ? "Local model" : "Thread's allowed model"} · Ivy can only read this context and propose changes.</p>
-    <div className="dst-session-exchange" aria-live="polite">{session.turns.map(t => <div key={t.id}><p><b>You:</b> {t.text}</p><p><b>Ivy:</b> {t.answer?.reply ?? "Your text is saved. No answer received yet."}</p></div>)}</div>
+    <p>{session.original}</p><p className="dst-session-policy">{session.policy === "local" ? "Local model" : "Thread's allowed model"} · {name} can only read this context and propose changes.</p>
+    <div className="dst-session-exchange" aria-live="polite">{session.turns.map(t => <div key={t.id}><p><b>You:</b> {t.text}</p><p><b>{name}:</b> {t.answer?.reply ?? "Your text is saved. No answer received yet."}</p></div>)}</div>
     <form onSubmit={e => { e.preventDefault(); void c.send(); }}>
       <label>Your message<textarea aria-label="Your message" readOnly={Boolean(c.chosen) || session.phase.kind !== "open"} ref={input} value={c.draft} maxLength={4000} onChange={e => c.setDraft(e.target.value)} /></label>
       <div className="dst-acts">{mic.available && <MicButton phase={mic.state.phase} onStart={mic.start} onStop={mic.stop} />}<button className="desk-btn pri" disabled={c.pending || (!c.draft.trim() && !c.retrying && !session.turns.some(t => !t.answer))}>{c.retrying || session.turns.some(t => !t.answer) ? "Retry saved turn" : "Send"}</button></div>

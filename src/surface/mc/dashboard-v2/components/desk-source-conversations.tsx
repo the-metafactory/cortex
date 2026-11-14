@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { failureText as failure, importSession, readSource, startConversation, type ObjectRef, type SourceConversations } from "../lib/conversations";
 import "./desk-conversation.css";
+import { useAssistantName } from "../lib/assistant-name";
 
 export function SourceConversationList({ data, pending, onResume, onImport, onNew, newLabel }: {
   data: SourceConversations;
@@ -10,12 +11,13 @@ export function SourceConversationList({ data, pending, onResume, onImport, onNe
   onNew?: () => void;
   newLabel: string;
 }) {
+  const name = useAssistantName();
   const gone = data.source.state === "unavailable";
   return <section className="dcv-src" aria-label="Conversations about this">
-    <h4>Conversations with Ivy</h4>
+    <h4>Conversations with {name}</h4>
     {gone && <p className="dcv-quiet">This source is unavailable. Its conversations stay below.</p>}
     <ul>
-      {data.conversations.map(c => <li key={c.id}><button type="button" className="desk-btn ghost" onClick={() => onResume(c.id)}>Resume · {c.title}{c.state === "archived" ? " (archived)" : ""} · {c.activity.status === "working" ? "Ivy is working" : c.activity.status === "waiting" ? "waiting for you" : "ready"}</button></li>)}
+      {data.conversations.map(c => <li key={c.id}><button type="button" className="desk-btn ghost" onClick={() => onResume(c.id)}>Resume · {c.title}{c.state === "archived" ? " (archived)" : ""} · {c.activity.status === "working" ? `${name} is working` : c.activity.status === "waiting" ? "waiting for you" : "ready"}</button></li>)}
       {data.sessions.map(s => <li key={s.id}>{s.phase === "ending"
         ? <span className="dcv-quiet">Earlier exchange “{s.subject}” is still being saved by the Studio; it opens here afterwards.</span>
         : <button type="button" className="desk-btn ghost" disabled={pending} onClick={() => onImport(s.id)}>Open earlier exchange · {s.subject} ({s.turns} turn{s.turns === 1 ? "" : "s"}{s.phase === "ended" ? ", saved" : ""})</button>}</li>)}

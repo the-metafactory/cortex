@@ -35,8 +35,8 @@ test("today's real note suppresses automatic selection and contributes one brief
   if (!thread) throw new Error("missing fixture");
   thread.notes.push({ at: "2026-11-01T00:30:00Z", trigger: "Asked to think tonight", model: "local / pi", kind: "note", status: "open", sample: false, text: "Try this." });
   expect(select(studio)).toEqual([]);
-  expect(studioBriefing(studio.active, now)).toBe("Studio: Ivy thought about How shall we plan the design meeting.");
-  expect(studioBriefing(studio.active, now + 86_400_000)).toBeNull();
+  expect(studioBriefing(studio.active, now, "Mira")).toBe("Studio: Mira thought about How shall we plan the design meeting.");
+  expect(studioBriefing(studio.active, now + 86_400_000, "Mira")).toBeNull();
 });
 
 test("three recurring captures yield a readable proposal with reason and target area", () => {

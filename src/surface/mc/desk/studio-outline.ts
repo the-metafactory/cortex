@@ -29,7 +29,7 @@ function responseTask(project: OutlineNode, entry: ProjectionEntry, thread: Stud
   entry.pending ??= { id: `studio-response:${crypto.randomUUID()}`, at };
   let task = findNode(project, entry.pending.id);
   if (!task) {
-    task = { id: entry.pending.id, title: `Respond to Ivy on ${thread.question}`, weight: 50, ordering: "parallel", children: [], effort: 1 };
+    task = { id: entry.pending.id, title: `Respond to the note on ${thread.question}`, weight: 50, ordering: "parallel", children: [], effort: 1 };
     project.children.push(task);
   }
   return task;
@@ -89,7 +89,7 @@ export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioPro
     if (first) {
       if (entry.pending) move(state.outline, entry.pending.id, current);
       const task = responseTask(current, entry, thread, Date.parse(first.at));
-      task.title = `Respond to Ivy on ${thread.question}`;
+      task.title = `Respond to the note on ${thread.question}`;
       task.done = false;
       delete task.completedAt;
     } else if (entry.pending) {
