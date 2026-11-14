@@ -22,7 +22,7 @@ export function Sparring({ page, acts }: { page: ThreadPage; acts?: StudioActs }
   const thinking = page.thinking;
   const budget = thinking.kind === "ready" ? thinking.budget : "open";
   const blocked = thinking.kind === "unavailable" ? thinking.reason : BLOCKED[budget](page.policy);
-  const modes = [...MODES, ...page.personas.map(name => ({ mode: `persona:${name}`, label: `What would ${name} say?` }))];
+  const modes = [...MODES, ...page.personas.map(({ name }) => ({ mode: `persona:${name}`, label: `What would ${name} say?` }))];
   return (
     <section className="dst-sparring" aria-label="Think with Ivy">
       <h4 className="dst-h">Think with Ivy <span className="n">lands as a note</span></h4>
