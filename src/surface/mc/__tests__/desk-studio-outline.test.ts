@@ -328,7 +328,7 @@ test("Desk composition derives the outline and briefing from one readable Studio
     const view = await composeDesk(db, repo.options, undefined, { now });
     expect(view.studioBriefing).toContain("Which sketch");
     expect(view.myDay?.studioStatus).toBe("synced");
-    expect(view.myDay?.items.map(i => i.task.title)).toEqual(["Respond to Ivy on Which sketch?"]);
+    expect(view.myDay?.items.map(i => i.task.title)).toEqual(["Respond to the note on Which sketch?"]);
   } finally { db.close(); }
 });
 

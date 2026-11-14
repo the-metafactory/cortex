@@ -192,7 +192,7 @@ async function outcomeOnce(host: ConversationHost, deps: StudioConversationDeps,
     const turns = await host.exchange(id);
     const { policy } = await host.meta(id);
     const result = await runStudioTransaction({ options: options.studio, areas: options.areas, requestId: studioRequestId(operation.operationId), ...(deps.now ? { now: deps.now() } : {}), ...(deps.git ? { git: deps.git } : {}) },
-      ctx => planExchangeEnd(ctx, { ...exchange, policy, turns }, body.outcome, `Record Ivy conversation ${id}`));
+      ctx => planExchangeEnd(ctx, { ...exchange, policy, turns }, body.outcome, `Record conversation ${id}`));
     if (!result.ok) {
       const to = result.status >= 500 ? "uncertain" : "failed";
       return await host.transition(operation.operationId, to, { note: result.error });

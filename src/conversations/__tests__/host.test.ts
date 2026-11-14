@@ -111,7 +111,7 @@ describe("conversation host", () => {
     const retry = await host.submit(conversation.id, input("in-1", "hello"));
     expect(retry).toEqual({ duplicate: true, submission: settled });
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.request.instructions).toContain("You are Ivy");
+    expect(calls[0]?.request.instructions).toContain("You are Assistant");
     expect((await host.meta(conversation.id)).activity.status).toBe("waiting");
   });
 

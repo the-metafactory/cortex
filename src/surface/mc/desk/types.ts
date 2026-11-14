@@ -23,6 +23,7 @@ export interface StudioOptions {
   maxActive: number;
   yesFilter?: string[];
   personas?: string[];
+  assistantName?: string;
 }
 
 export interface DeskArea {
@@ -214,6 +215,7 @@ export interface DeskView {
   calendars?: DeskCalendar[];
   generatedAt: number;
   displayName: string | null;
+  assistantName: string;
   topN: number;
   areas: DeskArea[];
   items: DeskItem[];

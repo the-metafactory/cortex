@@ -11,6 +11,7 @@ import { CreationPanel } from "./desk-conversation-create";
 import { DeskMakePanel } from "./desk-draft-editor";
 import { EMPTY_TRANSCRIPT, transcriptReducer } from "../lib/conversation-stream";
 import "./desk-conversation.css";
+import { useAssistantName } from "../lib/assistant-name";
 
 const BUSY_MS = 2_000;
 const IDLE_MS = 15_000;
@@ -187,9 +188,10 @@ function StudioOutcome({ id, studio, onSaved }: { id: string; studio: NonNullabl
 }
 
 export function ConversationWorkspace({ id, onLeave, onOrganized }: { id: string; onLeave: () => void; onOrganized?: () => void }) {
+  const name = useAssistantName();
   const c = useConversation(id);
   const leave = (): void => { void c.flush(true); onLeave(); };
-  if (!c.detail) return <section className="dcv" aria-label="Ivy conversation"><header className="dcv-head"><button type="button" className="desk-btn ghost" onClick={leave}>Leave</button></header><p role={c.error ? "alert" : "status"}>{c.error ?? "Opening the conversation…"}</p></section>;
+  if (!c.detail) return <section className="dcv" aria-label={`Conversation with ${name}`}><header className="dcv-head"><button type="button" className="desk-btn ghost" onClick={leave}>Leave</button></header><p role={c.error ? "alert" : "status"}>{c.error ?? "Opening the conversation…"}</p></section>;
   return <WorkspaceView detail={c.detail} entries={c.entries} liveText={c.liveText} generation={c.generation} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onRetry={text => void c.retry(text)} onLeave={leave} onSaved={() => void c.reload()}
     organizing={c.organizing} onOrganize={change => { void c.organize(change).then(done => { if (done) onOrganized?.(); }); }} />;
 }
@@ -268,6 +270,7 @@ const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
 });
 
 export function WorkspaceView(c: WorkspaceProps) {
+  const name = useAssistantName();
   const stream = useRef<HTMLDivElement>(null);
   const count = c.entries.length;
   useEffect(() => { stream.current?.scrollTo({ top: stream.current.scrollHeight }); }, [count, c.liveText]);
@@ -275,7 +278,7 @@ export function WorkspaceView(c: WorkspaceProps) {
   const views = visibleEntries(c.entries, c.busy ? c.generation ?? null : null).flatMap(entry => entryViews(entry).map((view, i) => ({ key: `${entry.id}-${i}`, view })));
   const archived = conversation.state === "archived";
   const said = c.entries.filter(entry => entry.role === "user" && entry.text).at(-1);
-  return <section className="dcv" aria-label={`Ivy conversation: ${conversation.title}`}>
+  return <section className="dcv" aria-label={`Conversation with ${name}: ${conversation.title}`}>
     <header className="dcv-head">
       <div className="dcv-title"><h2>{conversation.title}</h2>
         <div className="dcv-acts">
@@ -300,23 +303,23 @@ export function WorkspaceView(c: WorkspaceProps) {
     </aside>
     <div className="dcv-stream" ref={stream} aria-live="polite">
       {views.map(({ key, view }, i) => {
-        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : "Ivy"}{view.note ? ` · ${view.note}` : ""}</small>{view.who === "ivy" ? <IvyAnswer text={view.text} /> : <p>{view.text}</p>}</article>;
+        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : name}{view.note ? ` · ${view.note}` : ""}</small>{view.who === "ivy" ? <IvyAnswer text={view.text} /> : <p>{view.text}</p>}</article>;
         if (view.kind === "activity") return <p key={key} className="dcv-activity">{view.text}</p>;
         const retry = i === views.length - 1 && !archived && !c.busy && said?.text;
         return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.
           {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => { c.onRetry(said.text ?? ""); }}>Retry</button>}</p>;
       })}
-      {c.liveText && <article className="dcv-msg ivy" aria-label="Ivy is answering"><small>Ivy · answering…</small><IvyAnswer text={c.liveText} /></article>}
-      {c.busy && <div className="dcv-waiting" role="status" aria-label="Ivy is working"><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div>}
+      {c.liveText && <article className="dcv-msg ivy" aria-label={`${name} is answering`}><small>{name} · answering…</small><IvyAnswer text={c.liveText} /></article>}
+      {c.busy && <div className="dcv-waiting" role="status" aria-label={`${name} is working`}><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div>}
       {views.length === 0 && !c.liveText && !c.busy && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
     </div>
     <form className="dcv-composer" onSubmit={e => { e.preventDefault(); if (!archived) c.onSend("queue"); }}>
-      <label>Message Ivy<textarea aria-label="Message Ivy" value={c.draft} disabled={!c.ready || archived} maxLength={20_000} onChange={e => { c.onDraft(e.target.value); }} placeholder="Continue the thought…" /></label>
+      <label>Message {name}<textarea aria-label={`Message ${name}`} value={c.draft} disabled={!c.ready || archived} maxLength={20_000} onChange={e => { c.onDraft(e.target.value); }} placeholder="Continue the thought…" /></label>
       <div className="dcv-acts">
         <button className="desk-btn pri" disabled={archived || c.sending || !c.draft.trim()}>{c.retrying ? "Send again" : c.busy ? "Queue message" : "Send"}</button>
         {c.busy && !archived && <button type="button" className="desk-btn" disabled={c.sending || !c.draft.trim()} onClick={() => { c.onSend("steer"); }}>Use this now</button>}
       </div>
-      <p className="dcv-quiet">{archived ? "This conversation is archived. Restore it to continue with the same history; opening it never resumes it." : c.busy ? "Ivy is working. Queue waits for the current turn; Use this now joins at Ivy's next safe point and never interrupts a running change." : "Your unsent draft is saved here. Leave keeps the conversation; nothing ends."}</p>
+      <p className="dcv-quiet">{archived ? "This conversation is archived. Restore it to continue with the same history; opening it never resumes it." : c.busy ? `${name} is working. Queue waits for the current turn; Use this now joins at ${name}'s next safe point and never interrupts a running change.` : "Your unsent draft is saved here. Leave keeps the conversation; nothing ends."}</p>
       {c.error && <p className="desk-unsent" role="alert">{c.error}</p>}
     </form>
     <CreationPanel id={conversation.id} archived={archived} revision={c.entries.at(-1)?.id ?? ""} seed={{ entryId: said?.id ?? null, text: said?.text ?? "" }} />

@@ -33,6 +33,7 @@ Mission Control serves `/` and `/index.html` from this directory with the Desk's
 |---|---|---|
 | `enabled` | `true` | Enables the Desk API and view. |
 | `displayName` | `""` | Name used in the greeting. |
+| `assistantName` | `Assistant` | The assistant's name: 1 to 60 characters on one line. `GET /api/desk` returns it as `assistantName`, and every Desk message, model prompt and the bundled Desk use it. |
 | `topN` | `5` | Integer from 1 to 10. Number of ranked items shown before the rest fold away. |
 | `ranger.url` | `""` | Ranger API base URL. Empty disables Ranger readings. |
 | `ranger.bin` | `""` | Ranger CLI executable for actions. Empty disables those actions. |
@@ -41,7 +42,7 @@ Mission Control serves `/` and `/index.html` from this directory with the Desk's
 | `areas` | `[]` | Area definitions described below. |
 | `sources` | `[]` | Calendar and mail commands described below. |
 | `studio` | absent | Optional Studio directory settings. |
-| `conversations` | absent | Model lanes and pi settings for Ivy conversations, described below. |
+| `conversations` | absent | Model lanes and pi settings for conversations, described below. |
 
 `ranger.bin`, `ranger.config`, and `soma.bin` accept a leading `~`. Rulings need both Ranger actions and `soma.bin`.
 
@@ -137,7 +138,7 @@ ElevenLabs input records while you hold the microphone control and transcribes w
 | Key under `voice.wake` | Default | Value and meaning |
 |---|---|---|
 | `enabled` | `false` | Makes the opt-in wake control available. Opening Desk does not activate the microphone. |
-| `assistantName` | `Assistant` | Configured assistant name. Set `phrase` separately. |
+| `assistantName` | `mc.desk.assistantName` | Name shown on the wake control. Without it, the Desk name is used. Set `phrase` separately. |
 | `phrase` | `Hey Assistant` | 2 to 60 English letters and spaces. |
 | `tokens` | absent | SentencePiece tokens provisioned from the matched BPE model. |
 | `tokenizerSha256` | absent | Matched BPE hash emitted by the provisioner. |
@@ -267,9 +268,9 @@ mc:
 
 The goal check must publish its reading through its own mechanism. Exit 0 only reports that the command ran successfully. See [Goal checks](commands.md#goal-checks).
 
-## Ivy conversations
+## Conversations with the assistant
 
-Ivy answers conversation turns through [pi](https://pi.dev) (`pi --mode json`). Without `conversations`, or without a lane for a conversation's policy, a turn is refused and nothing is sent. No other engine is used as a fallback.
+The assistant answers conversation turns through [pi](https://pi.dev) (`pi --mode json`). Without `conversations`, or without a lane for a conversation's policy, a turn is refused and nothing is sent. No other engine is used as a fallback.
 
 ```yaml
 mc:
@@ -301,7 +302,7 @@ mc:
 
 These rules decide which cloud model answers:
 
-- The first lane in the list is the default. New conversations, Studio conversations and Hand to Ivy use it.
+- The first lane in the list is the default. New conversations, Studio conversations and Hand to the assistant use it.
 - In the conversation view, **Cloud model** chooses another lane for that conversation. The choice applies from the next turn. The record shows that the context was reconstructed for the new model.
 - A local-only conversation ignores the choice and runs only on `local`.
 - If the chosen model fails, the turn shows the failure, names the model and offers **Retry**. Cortex never switches to another model or provider on its own.
@@ -333,13 +334,13 @@ Each read checks the owner's `authorize(principal, scope)` and the scope policy 
 
 Sending, inviting or changing data stays with the creation tools: `creation_propose` prepares an editable proposal (for example a `mail-draft`) and the principal confirms it. An action whose owner has no operation shows `unavailable` with its follow-up. No connector ships in-tree; each owner adapter is a separate build.
 
-### Hand a mail to Ivy
+### Hand a mail to the assistant
 
 <!-- glossary-ignore: run -->
 <!-- glossary-ignore: body -->
-The same lanes and pi settings run **Hand to Ivy** on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. Ivy then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on the default `cloud` lane, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
+The same lanes and pi settings run **Hand to** (the assistant's name) on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. Ivy then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on the default `cloud` lane, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
 
-While Ivy works, the mail card shows "With Ivy since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask Ivy again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
+While the assistant works, the mail card shows "With" and its name, "since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask Ivy again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
 
 ### Hand a task to an agent
 

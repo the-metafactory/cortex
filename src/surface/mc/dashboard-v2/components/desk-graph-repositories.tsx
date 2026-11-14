@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
 import { parseGitlabRef } from "../../desk/graph-repository-schema";
 import { loadGraphRepositories, saveGraphRepositories } from "../lib/desk-graph-repositories";
+import { useAssistantName } from "../lib/assistant-name";
 
 export const LISTING_FAILED_LINE = "The GitHub repositories could not be listed; check that gh is installed and signed in.";
 export const GITLAB_LISTING_FAILED_LINE = "The GitLab projects could not be listed; check that glab is installed and signed in.";
@@ -42,12 +43,13 @@ export function GraphRepositorySettings({ active }: { active: boolean }) {
 }
 
 function RepositoryList({ rows, busy, onChange }: { rows: GraphRepository[]; busy: boolean; onChange: (refs: readonly string[], enabled: boolean) => void }) {
+  const name = useAssistantName();
   return (
     <ul className="desk-set-list">
       {rows.map((r) => (
         <li key={r.ref}>
           <label className="desk-calendar-toggle">
-            <input type="checkbox" aria-label={`Allow Ivy to file to ${r.label}`} checked={r.enabled} disabled={busy} onChange={(e) => { onChange([r.ref], e.target.checked); }} />
+            <input type="checkbox" aria-label={`Allow ${name} to file to ${r.label}`} checked={r.enabled} disabled={busy} onChange={(e) => { onChange([r.ref], e.target.checked); }} />
             <span>{r.label}{r.listed === false && <small>not listed</small>}</span>
           </label>
         </li>
@@ -111,14 +113,15 @@ export function GraphRepositoryBody({ rows, listing, gitlab, error, busy, onChan
   busy: boolean;
   onChange: (refs: readonly string[], enabled: boolean) => void;
 }) {
+  const name = useAssistantName();
   const [query, setQuery] = useState("");
   const githubRows = (rows ?? []).filter((r) => r.forge !== "gitlab");
   const gitlabRows = (rows ?? []).filter((r) => r.forge === "gitlab");
   const groups = gitlabGroups(gitlab, gitlabRows);
   return (
-    <section className="desk-set-card" aria-label="Repositories Ivy may file to">
-      <h2>Repositories Ivy may file to</h2>
-      <p className="desk-set-sub">Tick the repositories where Ivy may file graph nodes and maps from a conversation. A ticked repository allows both.</p>
+    <section className="desk-set-card" aria-label={`Repositories ${name} may file to`}>
+      <h2>Repositories {name} may file to</h2>
+      <p className="desk-set-sub">Tick the repositories where {name} may file graph nodes and maps from a conversation. A ticked repository allows both.</p>
       {rows === null ? (
         <p className="desk-set-empty">{error ?? "Loading…"}</p>
       ) : (

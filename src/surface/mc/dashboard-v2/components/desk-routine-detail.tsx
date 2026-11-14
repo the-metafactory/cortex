@@ -1,5 +1,6 @@
 import { RoutineDetailSchema, parameterError, type RoutineDetail, type RoutinePatch, type RoutineStep } from "../../desk/routine-editor-contract";
 import { postJson } from "../lib/api";
+import { useAssistantName } from "../lib/assistant-name";
 const endpoint = "/api/desk/routine-editor";
 const message = (error: unknown): string => error instanceof Error ? error.message : "The routine owner did not answer.";
 const stepKey = (step: RoutineStep): string => JSON.stringify(step.path);
@@ -74,6 +75,7 @@ function ParameterEditor({ detail, step, onSave, busy, state, onState }: { detai
 }
 
 export function RoutineDetailPage({ detail, onUpdated, session, onSession }: { detail: RoutineDetail; onUpdated: (detail: RoutineDetail) => void; session: RoutineEditorSession; onSession: (change: (session: RoutineEditorSession) => RoutineEditorSession) => void }) {
+  const name = useAssistantName();
   const { text, proposal, busy, error, saved } = session;
   const selected = Math.max(0, detail.flow?.steps.findIndex((step) => stepKey(step) === session.selected) ?? 0);
   const setText = (text: string): void => { onSession((s) => ({ ...s, text })); };
@@ -106,7 +108,7 @@ export function RoutineDetailPage({ detail, onUpdated, session, onSession }: { d
     {error && <p role="alert">{error}</p>}{saved && <p role="status">Parameters saved and verified.</p>}
     {detail.flow && <><div className="desk-routine-flow"><FlowOutline nodes={routineStepTree(detail.flow.steps)} selected={selected} onSelect={(index) => { const chosen = detail.flow?.steps[index]; if (chosen) onSession((s) => ({ ...s, selected: stepKey(chosen) })); }} />
       {step && <ParameterEditor detail={detail} step={step} busy={busy} onSave={apply} state={session.parameters[stepKey(step)]} onState={(draft) => { onSession((s) => ({ ...s, parameters: { ...s.parameters, [stepKey(step)]: draft } })); }} />}</div>
-      {detail.writable && detail.flow.steps.some((entry) => entry.editable.length > 0) && <section className="desk-set-card" aria-label="AI routine editing"><h3>Ask Ivy to change this routine</h3><p>Ivy can propose changes to the parameters shown here. Nothing changes until you apply a proposal.</p>
+      {detail.writable && detail.flow.steps.some((entry) => entry.editable.length > 0) && <section className="desk-set-card" aria-label="AI routine editing"><h3>Ask {name} to change this routine</h3><p>{name} can propose changes to the parameters shown here. Nothing changes until you apply a proposal.</p>
         <form onSubmit={(event) => { event.preventDefault(); void ask(); }}><label htmlFor={`routine-edit-request-${detail.id}`}>Requested change</label><textarea id={`routine-edit-request-${detail.id}`} value={text} maxLength={2000} onChange={(event) => { setText(event.target.value); }} /><button className="desk-btn" type="submit" disabled={busy || !text.trim()}>{proposal ? "Revise proposal" : "Propose change"}</button></form>
         {proposal && <div><h4>Proposed changes</h4>{proposal.revision !== detail.revision && <p role="alert">The installed routine changed after this proposal. The original comparison is preserved. Ask for a new proposal before applying.</p>}{proposal.patches.length === 0 && <p>No supported parameter changes were proposed. Revise your request.</p>}<dl>{proposal.patches.map((patch) => {
           const entry = proposal.before.find((s) => JSON.stringify([...s.path, s.action]) === JSON.stringify(patch.path.slice(0, -1)));

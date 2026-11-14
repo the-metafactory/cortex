@@ -54,6 +54,7 @@ import { applyCorrections, readCorrections } from "./corrections";
 import { listReasons, readFeedback, readSwitches } from "./interrupt-switches";
 import { classifierStatus, isCommand, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type ClassifierMail, type MailClassification, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
+import { assistantNameOf } from "./assistant-name";
 import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
 import { readRoutines } from "./routines";
 import type { RoutineOptions, RoutineRunner } from "./routine-command";
@@ -119,6 +120,7 @@ export interface DeskOptions {
   flows?: FlowOptions;
   enabled: boolean;
   displayName: string;
+  assistantName?: string;
   topN: number;
   myDay?: { cap: number };
   mirror?: MirrorSchedule;
@@ -359,13 +361,13 @@ export async function composeDesk(
   sources.push(...adapters.sources);
   const corrected = applyCorrections(quietAdapterInterrupts([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set(deskCalendar.map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now), snoozeBack.get(mailIdOf(item.key)))),
+    ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set(deskCalendar.map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), assistantName: assistantNameOf(desk), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantNameOf(desk)), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
     ...meetingItems(deskCalendar, now, rules.meetingMinutes),
     ...ruleCards,
     ...dmarcCards,
     ...waitingCards,
-    ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
+    ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantNameOf(desk)),
     ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
   ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections);
@@ -386,9 +388,10 @@ export async function composeDesk(
     myDay,
     mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source), dmarc, mail: readMailMirror(db, mirrorWeek(now), { ...(desk.mailMirror ? { config: desk.mailMirror } : {}), offers: mirrorOffers(offerable, unsubscribe) }) }),
     calendars: [...calendars.values()],
-    studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now) : null,
+    studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now, assistantNameOf(desk)) : null,
     generatedAt: now,
     displayName: desk.displayName || null,
+    assistantName: assistantNameOf(desk),
     topN: myDay.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items: dayItems,
@@ -408,7 +411,7 @@ export async function composeDesk(
     ask: { kinds: [...writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)), ...(desk.routines ? ["routine"] : [])], maps: desk.ask?.taskMaps ?? [] },
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE]), ...activeCorrections.filter((c) => c.kind === "mail").map((c) => staleMailCorrection(c.source))],
     sources,
-    voice: voiceView(desk.voice),
+    voice: voiceView(desk.voice, assistantNameOf(desk)),
     chime: rules.chime,
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier) }),
@@ -472,7 +475,7 @@ function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubje
 
 const mailIdOf = (key: string): string => key.slice("mail:".length);
 
-/** "Hand to Ivy" needs the task writer and a task map to file on, the draft command for Approve, a model lane and the worker. */
+/** "Hand to the assistant" needs the task writer and a task map to file on, the draft command for Approve, a model lane and the worker. */
 export function handoffReady(desk: DeskOptions, worker: MailHandoffWorker | undefined): boolean {
   const lanes = desk.mailHandoff?.lanes;
   return Boolean(worker && (lanes?.local ?? lanes?.cloud) && desk.ask?.writers.task?.length && desk.ask.taskMaps.length > 0 && desk.mailActions?.draft?.length);

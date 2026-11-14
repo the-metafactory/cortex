@@ -42,7 +42,7 @@ describe("Studio capture writer", () => {
       const id = captureId(studioRequestId(operation.operationId));
       const thread = text(r.repo.dir, "threads/alpha.md");
       expect(thread).toContain(`${captureMarker(id)}Ivy probe thought`);
-      expect(thread).toContain(`Filed capture ${id} from Ivy conversation ?desk=conversation&conversation=${r.id}`);
+      expect(thread).toContain(`Filed capture ${id} from conversation ?desk=conversation&conversation=${r.id}`);
 
       await r.confirmedAgain(view, operation);
       expect(f.asked).toHaveLength(1);

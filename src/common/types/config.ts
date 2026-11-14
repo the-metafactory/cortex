@@ -1,4 +1,5 @@
 import { HOST_NAME_RE } from "../host-name";
+import { DEFAULT_ASSISTANT_NAME } from "./assistant-name";
 import { UiSchema } from "../config/ui-directory";
 import { DEFAULT_RESULT_BASE_URL } from "../result-base-url";
 import { ParserPermissionsSchema } from "./desk-parser";
@@ -562,6 +563,7 @@ export const DeskSchema = z.object({
   mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
+  assistantName: z.string().trim().min(1).max(60).regex(/^[^\r\n]+$/).default(DEFAULT_ASSISTANT_NAME),
   topN: z.number().int().min(1).max(10).default(5),
   myDay: z.object({ cap: z.number().int().min(1).max(7).default(5) }).optional(),
   ranger: z

@@ -58,7 +58,7 @@ const FIXTURE: StudioView = {
 const cards = (board: ReturnType<typeof buildBoard>): BoardCard[] => board.places.filter((p): p is BoardCard => p.kind === "thread");
 
 describe("the Studio board view-model", () => {
-  const board = buildBoard(FIXTURE, CLOCK);
+  const board = buildBoard(FIXTURE, CLOCK, "Ivy");
 
   it("lays the active threads into their places and shows the empty place as free", () => {
     expect(board.places.map((p) => (p.kind === "thread" ? p.thread.slug : `free ${p.place}`))).toEqual(["netops", "field-notes", "desk-open", "weekly-post", "free 5"]);
@@ -104,7 +104,7 @@ describe("the Studio board view-model", () => {
 
   it("draws no line when every place is taken or the named thread is not on the board", () => {
     const full: StudioView = { ...FIXTURE, active: [...FIXTURE.active, thread("fifth", { place: 5 })], inbox: [capture("parked-target", { thread: "workshops", reason: "r" }), capture("new", { place: "new", reason: "r" })] };
-    const b = buildBoard(full, CLOCK);
+    const b = buildBoard(full, CLOCK, "Ivy");
     expect(b.places.every((p) => p.kind === "thread")).toBe(true);
     expect(b.inbox.map((c) => c.target)).toEqual([null, null]);
     expect(b.inbox.map((c) => c.sentence)).toEqual(["Ivy would file it into a thread that is not on the board.", "Every place is taken, so opening it would park a thread."]);
@@ -112,16 +112,16 @@ describe("the Studio board view-model", () => {
 
   it("summarises the threads Ivy wrote in since the last look, and the places in use", () => {
     expect(board.summary).toBe("In the last day, I thought about 3 threads: “What about desk-open”, “What about weekly-post” and “What about workshops”. 4 of 5 places are in use, and I wait on you in 3 of them.");
-    const evening = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-30T22:00:00+01:00") });
+    const evening = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-30T22:00:00+01:00") }, "Ivy");
     expect(evening.summary.startsWith("Overnight I thought about 3 threads:")).toBe(true);
-    const morning = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-30T10:00:00+01:00") });
+    const morning = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-30T10:00:00+01:00") }, "Ivy");
     expect(morning.summary.startsWith("Since you last looked, I thought about 3 threads:")).toBe(true);
-    const later = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-31T04:30:00+01:00") });
+    const later = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-31T04:30:00+01:00") }, "Ivy");
     expect(later.summary).toBe("Since you last looked, I thought about 1 thread: “What about workshops”. 4 of 5 places are in use, and I wait on you in 3 of them.");
   });
 
   it("omits the thought sentence when Ivy wrote nothing new", () => {
-    const quiet = buildBoard(FIXTURE, { ...CLOCK, lastLook: NOW });
+    const quiet = buildBoard(FIXTURE, { ...CLOCK, lastLook: NOW }, "Ivy");
     expect(quiet.summary).toBe("4 of 5 places are in use, and I wait on you in 3 of them.");
     expect(quiet.thoughtAbout).toEqual([]);
   });
@@ -132,7 +132,7 @@ describe("the Studio board view-model", () => {
   });
 
   it("keeps over-cap threads, parked threads, the journal and problems reachable", () => {
-    const over = buildBoard({ ...FIXTURE, active: [...FIXTURE.active, thread("extra", { overCap: true })] }, CLOCK);
+    const over = buildBoard({ ...FIXTURE, active: [...FIXTURE.active, thread("extra", { overCap: true })] }, CLOCK, "Ivy");
     expect(over.overCap.map((t) => t.slug)).toEqual(["extra"]);
     expect(board.parked.map((t) => t.slug)).toEqual(["workshops"]);
     expect(board.closed.map((t) => t.slug)).toEqual(["old"]);

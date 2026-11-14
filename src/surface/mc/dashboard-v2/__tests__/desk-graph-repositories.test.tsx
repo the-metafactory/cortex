@@ -30,13 +30,13 @@ describe("the repositories panel", () => {
     const none = { rows: [], note: null, onAdd: () => Promise.resolve(true), onRemove: noop };
     const html = renderToStaticMarkup(<SettingsBody group="graph-repositories" vips={none} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />);
     expect(html).toContain('aria-selected="true" aria-controls="settings-panel-graph-repositories" tabindex="0"');
-    expect(html).toContain("<h2>Repositories Ivy may file to</h2>");
+    expect(html).toContain("<h2>Repositories Assistant may file to</h2>");
   });
 
   it("shows one checkbox per repository, ticked as stored", () => {
     const html = body([repo("acme/api", false), repo("jcfischer/desk", true)]);
-    expect(html).toMatch(/aria-label="Allow Ivy to file to acme\/api"(?![^>]*checked)/);
-    expect(html).toMatch(/aria-label="Allow Ivy to file to jcfischer\/desk"[^>]*checked/);
+    expect(html).toMatch(/aria-label="Allow Assistant to file to acme\/api"(?![^>]*checked)/);
+    expect(html).toMatch(/aria-label="Allow Assistant to file to jcfischer\/desk"[^>]*checked/);
     expect(html).not.toContain("not listed");
     expect(html).not.toContain(LISTING_FAILED_LINE);
   });
@@ -44,14 +44,14 @@ describe("the repositories panel", () => {
   it("marks a ticked repository the listing no longer returns, and keeps its checkbox", () => {
     const html = body([repo("gone/repo", true, { listed: false })]);
     expect(html).toContain("gone/repo<small>not listed</small>");
-    expect(html).toMatch(/aria-label="Allow Ivy to file to gone\/repo"[^>]*checked/);
+    expect(html).toMatch(/aria-label="Allow Assistant to file to gone\/repo"[^>]*checked/);
   });
 
   it("says in one sentence that the repositories could not be listed, and still shows the ticked ones", () => {
     const html = body([repo("jcfischer/desk", true)], { ok: false, reason: "gh: not logged in" });
     expect(html).toContain(LISTING_FAILED_LINE);
     expect(LISTING_FAILED_LINE.match(/\./g)).toHaveLength(1);
-    expect(html).toMatch(/aria-label="Allow Ivy to file to jcfischer\/desk"[^>]*checked/);
+    expect(html).toMatch(/aria-label="Allow Assistant to file to jcfischer\/desk"[^>]*checked/);
     expect(html).not.toContain("No repositories found");
   });
 
@@ -67,9 +67,9 @@ describe("the GitLab section", () => {
   it("lists the GitLab projects in their own section below the GitHub section", () => {
     const html = body([project("claw/crisis-simulator", true), repo("jcfischer/desk", false)]);
     expect(html.indexOf('aria-label="GitHub repositories"')).toBeLessThan(html.indexOf('aria-label="GitLab projects"'));
-    expect(section(html, "GitHub repositories")).toContain("Allow Ivy to file to jcfischer/desk");
+    expect(section(html, "GitHub repositories")).toContain("Allow Assistant to file to jcfischer/desk");
     expect(section(html, "GitHub repositories")).not.toContain("claw/crisis-simulator");
-    expect(section(html, "GitLab projects")).toMatch(/aria-label="Allow Ivy to file to claw\/crisis-simulator"[^>]*checked/);
+    expect(section(html, "GitLab projects")).toMatch(/aria-label="Allow Assistant to file to claw\/crisis-simulator"[^>]*checked/);
   });
 
   it("says in one sentence that the projects could not be listed, and leaves the GitHub section unaffected", () => {
@@ -78,22 +78,22 @@ describe("the GitLab section", () => {
     expect(GITLAB_LISTING_FAILED_LINE.match(/\./g)).toHaveLength(1);
     expect(section(html, "GitHub repositories")).not.toContain(GITLAB_LISTING_FAILED_LINE);
     expect(section(html, "GitHub repositories")).not.toContain(LISTING_FAILED_LINE);
-    expect(section(html, "GitHub repositories")).toMatch(/aria-label="Allow Ivy to file to jcfischer\/desk"[^>]*checked/);
+    expect(section(html, "GitHub repositories")).toMatch(/aria-label="Allow Assistant to file to jcfischer\/desk"[^>]*checked/);
   });
 
   it("shows one group per logged-in host, headed by the host name, and says in one sentence that a failing host could not be listed", () => {
     const gitlab: GitlabListing = { ok: true, hosts: [{ host: "a.example.org", ok: true }, { host: "b.example.org", ok: true }, { host: "c.example.org", ok: false, reason: "502" }] };
     const html = body([project("g/p", true, {}, "a.example.org"), project("team/tool", false, {}, "b.example.org"), project("g/ticked", true, {}, "c.example.org"), repo("jcfischer/desk", true)], { ok: true }, null, gitlab);
     expect(hostSection(html, "a.example.org")).toContain("<h4>a.example.org</h4>");
-    expect(hostSection(html, "a.example.org")).toMatch(/aria-label="Allow Ivy to file to g\/p"[^>]*checked/);
+    expect(hostSection(html, "a.example.org")).toMatch(/aria-label="Allow Assistant to file to g\/p"[^>]*checked/);
     expect(hostSection(html, "a.example.org")).not.toContain("team/tool");
-    expect(hostSection(html, "b.example.org")).toMatch(/aria-label="Allow Ivy to file to team\/tool"(?![^>]*checked)/);
+    expect(hostSection(html, "b.example.org")).toMatch(/aria-label="Allow Assistant to file to team\/tool"(?![^>]*checked)/);
     expect(hostSection(html, "c.example.org")).toContain(gitlabHostFailedLine("c.example.org"));
     expect(gitlabHostFailedLine("c.example.org").replaceAll("c.example.org", "").match(/\./g)).toHaveLength(1);
-    expect(hostSection(html, "c.example.org")).toMatch(/aria-label="Allow Ivy to file to g\/ticked"[^>]*checked/);
+    expect(hostSection(html, "c.example.org")).toMatch(/aria-label="Allow Assistant to file to g\/ticked"[^>]*checked/);
     for (const host of ["a.example.org", "b.example.org"]) expect(hostSection(html, host)).not.toContain("could not be listed");
     expect(html).not.toContain(GITLAB_LISTING_FAILED_LINE);
-    expect(section(html, "GitHub repositories")).toMatch(/aria-label="Allow Ivy to file to jcfischer\/desk"[^>]*checked/);
+    expect(section(html, "GitHub repositories")).toMatch(/aria-label="Allow Assistant to file to jcfischer\/desk"[^>]*checked/);
     expect(section(html, "GitHub repositories")).not.toContain("could not be listed");
   });
 

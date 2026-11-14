@@ -149,10 +149,18 @@ describe("Studio writer acts", () => {
     expect(Date.parse(t.responses[0]?.at ?? "")).toBe(NOW.getTime());
     expect(t.responses[0]).toMatchObject({ re: "2026-10-31T03:30:00+01:00", text: "Lead with the Studio.\n\\## not a heading" });
     expect(waitsOnYou(t)).toBe(false);
-    expect(t.log.at(-1)).toEqual({ at: "2026-10-31", text: "Answered Ivy" });
-    expect(commits()[0]).toBe("Studio: Answer Ivy on alpha");
+    expect(t.log.at(-1)).toEqual({ at: "2026-10-31", text: "Answered Assistant" });
+    expect(commits()[0]).toBe("Studio: Answer Assistant on alpha");
     expect(git("log", "-1", "--format=%b")).toContain(`Desk-Request: request-${ids}-xyz`);
     expect(git("status", "--porcelain")).toBe("");
+  });
+
+  it("names the configured assistant in the act's message, log line and commit", async () => {
+    seed();
+    const r = await runStudioAct({ options: { dir, maxActive: 5, assistantName: "Mira" }, areas: AREAS, requestId: rid(), act: { act: "think", thread: "alpha", on: true }, now: NOW, lock: new StudioWriteLock() });
+    expect(r).toMatchObject({ ok: true, message: "Mira thinks about it tonight." });
+    expect(parsed("alpha").log.at(-1)?.text).toBe("Asked Mira to think tonight");
+    expect(read("threads/alpha.md")).not.toContain("Asked Ivy");
   });
 
   it("keeps a proposed stand as the stand and dismisses an idea", async () => {
@@ -162,8 +170,8 @@ describe("Studio writer acts", () => {
     const t = parsed("alpha");
     expect(t.stand).toBe("The Studio is the product.");
     expect(t.notes.map((n) => n.status)).toEqual(["open", "kept", "dismissed", "open"]);
-    expect(t.log.map((l) => l.text)).toEqual(["Opened", "Kept Ivy's stand", "Dismissed Ivy's idea"]);
-    expect(commits().slice(0, 2)).toEqual(["Studio: Dismiss Ivy's idea on alpha", "Studio: Keep Ivy's stand on alpha"]);
+    expect(t.log.map((l) => l.text)).toEqual(["Opened", "Kept Assistant's stand", "Dismissed Assistant's idea"]);
+    expect(commits().slice(0, 2)).toEqual(["Studio: Dismiss Assistant's idea on alpha", "Studio: Keep Assistant's stand on alpha"]);
   });
 
   it("keeps a proposed relation and shows it in Relates to", async () => {
@@ -174,7 +182,7 @@ describe("Studio writer acts", () => {
     const page = buildThreadPage(r.studio, "alpha");
     expect(page?.proposedRelations).toEqual([]);
     expect(page?.relations.threads.map((x) => x.open)).toContain("beta");
-    expect(parsed("alpha").log.at(-1)?.text).toBe("Kept Ivy's relation to thread: beta");
+    expect(parsed("alpha").log.at(-1)?.text).toBe("Kept Assistant's relation to thread: beta");
   });
 
   it("lists a kept thread relation once when the threads also share a source", async () => {
@@ -187,7 +195,7 @@ describe("Studio writer acts", () => {
     if (!r.ok) throw new Error(r.error);
     const threads = buildThreadPage(r.studio, "alpha")?.relations.threads ?? [];
     expect(threads.map((x) => x.open)).toEqual(["beta"]);
-    expect(threads[0]?.why).toBe("Shares a source: Shared brief. Ivy proposed it and you kept it.");
+    expect(threads[0]?.why).toBe("Shares a source: Shared brief. It was proposed in a note and you kept it.");
   });
 
   it("refuses to keep a plain note or a note twice", async () => {
@@ -208,7 +216,7 @@ describe("Studio writer acts", () => {
     expect(parsed("gamma").thinkTonight).toBe(true);
     expect((await run({ act: "think", thread: "gamma", on: false })).ok).toBe(true);
     expect(parsed("gamma").thinkTonight).toBe(false);
-    expect(parsed("gamma").log.map((l) => l.text)).toEqual(["Opened", "Brought back", "Asked Ivy to think tonight", "Took it off Ivy's list for tonight"]);
+    expect(parsed("gamma").log.map((l) => l.text)).toEqual(["Opened", "Brought back", "Asked Assistant to think tonight", "Took it off Assistant's list for tonight"]);
     expect(commits()).toHaveLength(5);
   });
 
@@ -257,7 +265,7 @@ describe("Studio writer acts", () => {
     expect(r.ok).toBe(true);
     const t = parsed("what-runs-locally");
     expect(t).toMatchObject({ state: "active", areas: ["work", "lab"], question: "What runs locally?", opened: "2026-10-31" });
-    expect(t.log[0]?.text).toBe("Opened from Ivy's proposal runs-locally. Yes-filter: 1 yes");
+    expect(t.log[0]?.text).toBe("Opened from Assistant's proposal runs-locally. Yes-filter: 1 yes");
     expect(read("threads/what-runs-locally.md")).toContain("## Yes-filter\n\n- Is this mine to do? yes\n- What will I stop doing for it? The Friday review\n");
     expect(read("threads/what-runs-locally.md")).not.toContain("Not a filter question");
     expect(existsSync(join(dir, "proposals/runs-locally.md"))).toBe(false);
@@ -416,7 +424,7 @@ describe("POST /api/desk/studio/act", () => {
     expect(body.studio.parked.map((t) => t.slug)).toContain("alpha");
   });
 
-  it("opens a thread from an Ivy conversation with its own question and removes nothing", async () => {
+  it("opens a thread from a conversation with Assistant with its own question and removes nothing", async () => {
     seed();
     const link = "?desk=conversation&conversation=c-1";
     const refused = await handleDeskStudioAct(post({ act: "open", from: "conversation", question: "Who owns it?", area: "lab", link: "a\nb", requestId: rid() }), runtime(true));
@@ -426,8 +434,8 @@ describe("POST /api/desk/studio/act", () => {
     const t = parsed("who-owns-the-spring-workshop");
     expect(t).toMatchObject({ state: "active", type: "question", areas: ["lab"] });
     expect(t.material.map((m) => m.label)).toEqual([`Ivy conversation: ${link}`]);
-    expect(t.log[0]?.text).toBe(`Opened from Ivy conversation ${link}`);
-    expect(commits()[0]).toBe("Studio: Open who-owns-the-spring-workshop from an Ivy conversation");
+    expect(t.log[0]?.text).toBe(`Opened from a conversation with Assistant: ${link}`);
+    expect(commits()[0]).toBe("Studio: Open who-owns-the-spring-workshop from a conversation with Assistant");
     expect(existsSync(join(dir, "inbox/lecture.md"))).toBe(true);
     expect(existsSync(join(dir, "proposals/runs-locally.md"))).toBe(true);
   });

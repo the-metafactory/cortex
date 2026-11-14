@@ -8,6 +8,7 @@ import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView } from "../desk/studio/view";
 import { runStudioAct, runStudioTransaction } from "../desk/studio/writer";
 import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionContent, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
+import { assistantNameOf } from "../desk/assistant-name";
 
 const queues = new WeakMap<Database, Map<string, Promise<void>>>();
 const answer = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -65,7 +66,7 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     }
     if (!session) return fail(404, "That session was not found in this Studio.");
     if (request.action === "start" || request.action === "read") return answer(200, { ok: true, session });
-    if (session.phase.kind === "open" && await deps.imported?.(session.id)) return fail(409, "This exchange continues as an Ivy conversation. Open it from its Studio thread.", session);
+    if (session.phase.kind === "open" && await deps.imported?.(session.id)) return fail(409, `This exchange continues as a conversation with ${assistantNameOf(desk)}. Open it from its Studio thread.`, session);
     if (request.action === "save-message") {
       if (session.phase.kind !== "ended") return fail(409, "Save the exchange before adding a remaining message.", session);
       const hash = createHash("sha256").update(JSON.stringify([session.id, session.thread, request.text])).digest("hex").slice(0, 56);
@@ -110,11 +111,11 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     save(db, dir, session);
     if (!endpoint) return fail(503, session.policy === "local" ? "The local model is not configured. Your text is saved; no cloud fallback was used." : "A Studio model is not configured. Your text is saved.", session);
     try {
-      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, sessionPrompt(session, thread), sessionContent(thread)));
+      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, sessionPrompt(session, thread), sessionContent(thread), assistantNameOf(desk)));
       save(db, dir, session);
       return answer(200, { ok: true, session });
     } catch {
-      return fail(502, "Ivy could not answer. Your text is saved. Retry the same turn, or close and save the exchange.", session);
+      return fail(502, `${assistantNameOf(desk)} could not answer. Your text is saved. Retry the same turn, or close and save the exchange.`, session);
     }
   } finally {
     release(undefined);

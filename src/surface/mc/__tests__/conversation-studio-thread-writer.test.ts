@@ -13,12 +13,12 @@ describe("Studio thread writer", () => {
       const operation = r.created(reply);
       const message = r.repo.git("log", "-n", "1", "--format=%B");
       expect(message).toContain(`Desk-Request: ${studioRequestId(operation.operationId)}`);
-      expect(message).toContain("Open should-the-lab-run-a-spring-workshop from an Ivy conversation");
+      expect(message).toContain("Open should-the-lab-run-a-spring-workshop from a conversation with Assistant");
       const link = `?desk=conversation&conversation=${r.id}`;
       const t = r.parsed("should-the-lab-run-a-spring-workshop");
       expect(t).toMatchObject({ state: "active", type: "question", areas: ["lab"], question: "Should the lab run a spring workshop?" });
       expect(t.material.map(m => m.label)).toEqual([`Ivy conversation: ${link}`]);
-      expect(t.log.map(l => l.text)).toEqual([`Opened from Ivy conversation ${link}`]);
+      expect(t.log.map(l => l.text)).toEqual([`Opened from a conversation with Assistant: ${link}`]);
 
       await r.confirmedAgain(view, operation);
       expect(r.threads()).toEqual([...SEEDED, "should-the-lab-run-a-spring-workshop.md"]);

@@ -60,7 +60,7 @@ describe("pi turns in the conversation record", () => {
     expect(failed?.error).toBe("pi was not found at /nowhere/pi. No other engine is used.");
     const detail = await host.detail(conversation.id);
     const html = renderToStaticMarkup(<WorkspaceView detail={{ ...detail, studio: null }} entries={entries} draft="" ready busy={false} sending={false} retrying={false} error={null} onDraft={() => undefined} onSend={() => undefined} onRetry={() => undefined} onLeave={() => undefined} onSaved={() => undefined} organizing={false} onOrganize={() => undefined} />);
-    expect(html).toContain("Ivy could not answer on test/cloud-model: pi was not found at /nowhere/pi.");
+    expect(html).toContain("No answer on test/cloud-model: pi was not found at /nowhere/pi.");
     expect(html).toContain(">Retry</button>");
   });
 
@@ -84,6 +84,6 @@ describe("pi turns in the conversation record", () => {
     expect(seen[2]?.history.map(t => t.content)).toEqual(["one", "answer 1", "two", "answer 2"]);
     const continuation = (await host.entries(conversation.id, 100, undefined)).entries.find(e => e.kind === "cortex.continuation");
     expect(continuation?.data).toMatchObject({ mode: "reconstructed", reason: "tool-policy", to: "cloud" });
-    expect(entryViews(continuation ?? { id: "", kind: "" })[0]?.text).toBe("Ivy rebuilt this turn from the conversation record to check current tool permissions.");
+    expect(entryViews(continuation ?? { id: "", kind: "" })[0]?.text).toBe("This turn was rebuilt from the conversation record to check current tool permissions.");
   });
 });

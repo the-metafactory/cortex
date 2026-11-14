@@ -15,6 +15,7 @@ import { buildRoutineCard, actOnRoutine } from "../desk/routines";
 import { routineRequest } from "../desk/routine-schedule";
 import type { RoutineRunner } from "../desk/routine-command";
 import type { RoutineCapabilities } from "../desk/routine-providers";
+import { assistantNameOf } from "../desk/assistant-name";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
@@ -33,7 +34,7 @@ export interface DeskAskDeps {
   conversations?: () => boolean;
 }
 
-const NO_CONVERSATIONS = "Conversations with Ivy are not set up on this stack, so I cannot start one.";
+const noConversations = (name: string): string => `Conversations with ${name} are not set up on this stack, so I cannot start one.`;
 
 const parserFrom = (run: WriterRunner): ParserRunner => async (argv, stdin, timeoutMs) => {
   const result = await run(argv, stdin, timeoutMs);
@@ -80,7 +81,7 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   result ??= parseByRules(text, { now, maps });
   const selected = "routing" in result ? result.routing : undefined;
   if (result.kind === "none" && selected?.kind !== "unavailable" && talks) result = { kind: "conversation", fields: {} };
-  if (result.kind === "conversation" && !talks) return fail(422, NO_CONVERSATIONS);
+  if (result.kind === "conversation" && !talks) return fail(422, noConversations(assistantNameOf(desk)));
   if (result.kind === "conversation") result = { ...result, fields: conversationFields(text, body.area) };
   if (result.kind === "none") return Response.json({ ok: false, error: selected?.kind === "unavailable" ? parserRoutingNotice(selected) : selected ? `${parserRoutingNotice(selected)} ${result.reason}` : result.reason, ...(selected ? { routing: selected } : {}) }, { status: selected?.kind === "unavailable" ? 503 : 422, headers: noStore });
   const proposal = toProposal(result.kind, result.fields, writable, via);

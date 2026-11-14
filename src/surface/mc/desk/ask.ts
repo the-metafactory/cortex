@@ -50,7 +50,7 @@ export const KIND_LABEL: Record<AskKind, string> = {
   task: "Agent task",
   goal: "Goal draft",
   calendar: "Calendar entry",
-  conversation: "Conversation with Ivy",
+  conversation: "Conversation",
 };
 
 export const notSetUp = (kind: AskKind): string => `${KIND_PLURAL[kind]} are not set up on this stack.`;
@@ -63,7 +63,7 @@ const KIND_PLURAL: Record<AskKind, string> = {
   task: "Agent tasks",
   goal: "Goal drafts",
   calendar: "Calendar entries",
-  conversation: "Conversations with Ivy",
+  conversation: "Conversations",
 };
 
 export function taskMapAllowed(card: AskCard, maps: readonly AskMap[]): boolean {

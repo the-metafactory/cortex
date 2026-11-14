@@ -35,7 +35,7 @@ export function studioFailed(sentence: string): CreateResult {
   return { state: "failed", error: SAYS_NOTHING.test(text) ? text : `${text.replace(/[.\s]+$/, "")}. ${NOTHING}` };
 }
 
-export const conversationVia = (request: CreateRequest): string => `from Ivy conversation ${request.provenance.link}`;
+export const conversationVia = (request: CreateRequest): string => `from conversation ${request.provenance.link}`;
 
 export function studioAct(input: Record<string, unknown>, labels: Record<string, string>): StudioAct | string {
   const parsed = StudioActSchema.safeParse(input);

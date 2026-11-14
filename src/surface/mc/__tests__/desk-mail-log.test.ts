@@ -206,7 +206,7 @@ describe("Retention and headers", () => {
     expect(e("junk", "desk")).toBe("You moved it to Junk on the Desk (3 days ago).");
     expect(e("unimportant", "desk", "Trash")).toBe("You marked its sender unimportant on the Desk (3 days ago).");
     expect(e("todo", "desk")).toBe("You made it a to-do on the Desk (3 days ago).");
-    expect(e("todo", "conversation")).toBe("You made it a to-do in an Ivy conversation (3 days ago).");
+    expect(e("todo", "conversation")).toBe("You made it a to-do in a conversation (3 days ago).");
   });
 
   it("logs a mail's to-do once per place it happened, Desk or Ivy conversation", () => {

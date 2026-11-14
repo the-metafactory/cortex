@@ -28,7 +28,7 @@ describe("Studio close writer", () => {
       const operation = r.created(reply);
       const t = r.parsed("alpha");
       expect(t).toMatchObject({ state: "closed", outcome: "decided", expect: "Twelve people sign up.", reviewOn, outcomeText: "Run it in spring." });
-      expect(t.log.at(-1)?.text).toBe(`Closed as decided from Ivy conversation ?desk=conversation&conversation=${r.id}`);
+      expect(t.log.at(-1)?.text).toBe(`Closed as decided from conversation ?desk=conversation&conversation=${r.id}`);
 
       await r.confirmedAgain(view, operation);
       expect(r.parsed("alpha").log.filter(l => l.text.startsWith("Closed as"))).toHaveLength(1);
