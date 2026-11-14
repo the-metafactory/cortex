@@ -118,6 +118,7 @@ import { MailHandoffWorker, piHandoffOwner } from "./desk/mail-handoff";
 import { taskCloser } from "./desk/mail-handoff-close";
 import { piTurns } from "../../conversations/pi";
 import { DEFAULT_MAIL_RULES, MailRuleLoop } from "./desk/mail-rules";
+import { ruleAttach } from "./desk/rule-attach";
 import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskInterruptionFeedback, handleDeskInterruptions, INTERRUPTION_FEEDBACK_PATH, INTERRUPTIONS_PATH } from "./api/desk-interruptions";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
@@ -281,10 +282,10 @@ export function startServer(
   const wsRegistry = new WsClientRegistry();
   const deskLedger = new HandledLedger();
   const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;
-  const deskMailRules: MailRuleLoop | undefined = options.desk?.mailActions?.move?.length
-    ? new MailRuleLoop({ db, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, config: options.desk.mailRules ?? DEFAULT_MAIL_RULES, ownDomains: options.desk.mailOwnDomains ?? [] }, (): SourceReading[] => deskSourceCache.cached())
+  const deskMailRules: MailRuleLoop | undefined = options.desk
+    ? new MailRuleLoop({ db, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, config: options.desk.mailRules ?? DEFAULT_MAIL_RULES, ownDomains: options.desk.mailOwnDomains ?? [], attach: ruleAttach(db, options.desk, (): SourceReading[] => deskSourceCache.cached()) }, (): SourceReading[] => deskSourceCache.cached())
     : undefined;
-  const deskDmarc: DmarcLoop | undefined = deskMailRules && options.desk?.mailDmarc
+  const deskDmarc: DmarcLoop | undefined = deskMailRules && options.desk?.mailActions?.move?.length && options.desk.mailDmarc
     ? new DmarcLoop({ db, config: options.desk.mailDmarc, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, log: console.error }, (): SourceReading[] => deskSourceCache.cached())
     : undefined;
   const deskSourceCache: SourceCache = new SourceCache(spawnCommand, deskClientMail || deskMailRules ? (prev, next) => {

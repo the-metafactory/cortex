@@ -55,6 +55,15 @@ const taskIdOf = (key: string): string => key.slice("task:".length);
 /** The one active link a mail has, or null. */
 export const activeMailLink = (db: Database, messageId: string): LinkRow | null => one(db, "from_kind = 'mail' AND from_key = ? AND state = 'linked'", mailKey(messageId));
 
+/** The link a rule run wrote, or null. */
+export const linkByRun = (db: Database, runId: string): LinkRow | null => one(db, "rule_run = ?", runId);
+
+/** Where the principal's own attach of a mail went, as of a logged decision: the newest Desk link from that mail made by then. */
+export function linkTargetOf(db: Database, messageId: string, at: number): LinkTarget | null {
+  const row = rows(db, "from_kind = 'mail' AND from_key = ? AND origin = 'desk' AND created_at <= ?", mailKey(messageId), at).at(-1);
+  return row ? { kind: row.toKind, key: row.toKey, title: row.toTitle } : null;
+}
+
 export const linkOf = (row: LinkRow): LinkReceipt => ({
   id: row.id,
   from: { kind: row.fromKind, key: row.fromKey, title: row.fromTitle },
@@ -125,8 +134,15 @@ export interface LinkSubject {
 
 /** A task a mail may be attached to: it is in the synced outline or the Balance inbox, and it is not done. */
 export function taskTarget(day: OutlineDay, id: string): LinkTarget | null {
+  const target = taskTargetOrWhy(day, id);
+  return typeof target === "string" ? null : target;
+}
+
+/** A task as a link target, or why it cannot take mail: "is done" or "is gone". */
+export function taskTargetOrWhy(day: OutlineDay, id: string): LinkTarget | "is done" | "is gone" {
   const node = nodeIn(day, id);
-  return node && !node.done ? { kind: "task", key: node.id, title: node.title } : null;
+  if (!node) return "is gone";
+  return node.done ? "is done" : { kind: "task", key: node.id, title: node.title };
 }
 
 /** A task that may be linked to a meeting: it only has to exist in the synced outline or the Balance inbox. */
@@ -202,20 +218,22 @@ export function attachMail(db: Database, mail: ListedMail, target: LinkTarget | 
   db.transaction(() => {
     if (insertLink(db, subject, target, input)) logMailDecision(db, features, "attach", input.origin, input.now, target.title);
   })();
-  const row = one(db, "request_id = ?", input.requestId);
-  if (!row) return attachRefusal(db, mail.id, input.requestId) ?? refuse(409, "The Desk could not record the link.");
-  return { ok: true, message: linkedMessage(row, input.now), link: linkOf(row) };
+  return receiptOf(db, input, () => attachRefusal(db, mail.id, input.requestId) ?? refuse(409, "The Desk could not record the link."));
 }
+
+const receiptOf = (db: Database, input: LinkInput, missing: () => LinkFailure): LinkResult => {
+  const row = one(db, "request_id = ?", input.requestId);
+  return row ? { ok: true, message: linkedMessage(row, input.now), link: linkOf(row) } : missing();
+};
 
 /** Links a task, thread or note to a meeting. A replay returns the same link; the same pair is linked once. */
 export function linkToMeeting(db: Database, subject: LinkSubject, target: LinkTarget, input: LinkInput): LinkResult {
   const replayed = replayOf(db, input.requestId, subject.key, input.now);
   if (replayed) return replayed;
-  if (one(db, "state = 'linked' AND from_kind = ? AND from_key = ? AND to_kind = ? AND to_key = ?", subject.kind, subject.key, target.kind, target.key)) return refuse(409, `This is already linked to ${quoted(target.title)}.`);
+  const alreadyLinked = refuse(409, `This is already linked to ${quoted(target.title)}.`);
+  if (one(db, "state = 'linked' AND from_kind = ? AND from_key = ? AND to_kind = ? AND to_key = ?", subject.kind, subject.key, target.kind, target.key)) return alreadyLinked;
   insertLink(db, subject, target, input);
-  const row = one(db, "request_id = ?", input.requestId);
-  if (!row) return refuse(409, `This is already linked to ${quoted(target.title)}.`);
-  return { ok: true, message: linkedMessage(row, input.now), link: linkOf(row) };
+  return receiptOf(db, input, () => alreadyLinked);
 }
 
 /** Records that Add to thread filed a mail in a Studio thread, so the card leaves the Desk like any attach. The link id is the capture id. A mail attached elsewhere in the meantime keeps that link, and the capture stays undoable under Done for you. */

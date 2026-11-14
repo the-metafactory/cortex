@@ -50,6 +50,7 @@ export interface AddMailInput {
   thread: string | null;
   reason?: string;
   includeText: boolean;
+  ruleRun?: string;
 }
 
 export function mailForStudio(db: Database, readings: readonly SourceReading[], mail: ListedMail): MailForStudio {
@@ -130,8 +131,8 @@ export async function addMailToStudio(item: MailForStudio, input: AddMailInput, 
   const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, now }, (ctx) => planMail(ctx, item, input, id, contentFrom(deps.localSources, [item.mail.sourceId]).local));
   if (!result.ok) return result;
   const at = now.getTime();
-  if (input.thread !== null) linkStudioMail(deps.db, item.mail, threadTarget(result.studio, input.thread), { id, requestId: id, origin: "desk", now: at });
-  if (result.replayed) return result;
+  if (input.thread !== null) linkStudioMail(deps.db, item.mail, threadTarget(result.studio, input.thread), { id, requestId: id, now: at, ...(input.ruleRun ? { origin: "rule" as const, ruleRun: input.ruleRun } : { origin: "desk" as const }) });
+  if (result.replayed || input.ruleRun) return result;
   deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'studio.capture', ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")
     .run(`studio-capture:${id}`, id, result.message, result.message, at, at);
   logMailDecision(deps.db, features, "studio", "desk", at);

@@ -15,6 +15,8 @@ import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose
 import { queryMailLog } from "../desk/mail-log";
 import { activeMailLink } from "../desk/links";
 import { WORK_MAIL_NO_THREAD, mailLine } from "../desk/mail-studio";
+import { createRule, DEFAULT_MAIL_RULES, runMailRules, undoRuleRun } from "../desk/mail-rules";
+import { ruleAttach } from "../desk/rule-attach";
 import type { CaptureModel, CaptureRequest } from "../desk/studio/capture";
 import { parseThreadFile } from "../desk/studio/format";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
@@ -191,6 +193,21 @@ describe("Add a mail to a Studio thread", () => {
     await runtime.sourceCache?.read(runtime.options?.sources ?? [], NOW);
     const res = await handleDeskLinks(new Request("http://localhost/api/desk/links", { method: "POST", body: JSON.stringify({ op: "link", requestId: "0f3c1a52-6c1e-4b8f-9d2a-1f0e5b7c9a11", from: { kind: "thread", slug: "engines" }, to: { kind: "meeting", event: "cal:work-mail:e1" } }) }), db, runtime, { now: () => NOW, newId: () => "link-1" });
     expect(await res.json()).toMatchObject({ ok: true, link: { from: { kind: "thread", key: "thread:engines", title: "What can engines make?" }, to: { kind: "meeting", title: "Engine review" } } });
+  });
+
+  it("an attach rule files matching mail in its thread, and Undo removes the capture", async () => {
+    const options = runtime.options;
+    if (!options) throw new Error("no desk options");
+    createRule(db, { match: "sender", value: "ada@example.org", action: "attach", target: { kind: "thread", key: "engines", title: "What can engines make?" } }, NOW, () => "r1");
+    const readings = runtime.sourceCache?.cached() ?? [];
+    const attach = ruleAttach(db, options, () => readings, () => NOW);
+    const ledger = new HandledLedger();
+    expect(await runMailRules(readings, { db, mailActions: undefined, ledger, run: async () => ({ code: 0, stdout: "", stderr: "" }), now: () => NOW, config: DEFAULT_MAIL_RULES, newId: () => "run-thread-1", attach })).toEqual({ handled: 1, failed: 0, paused: [] });
+    expect(readThread("engines")).toContain("“Engines w1”");
+    expect(activeMailLink(db, "w1")).toMatchObject({ toKind: "thread", toKey: "engines", origin: "rule", ruleRun: "run-thread-1" });
+    expect(await undoRuleRun("run-thread-1", { db, config: undefined, ledger, run: async () => ({ code: 0, stdout: "", stderr: "" }), now: NOW }, attach)).toMatchObject({ ok: true, restored: "mail:w1" });
+    expect(readThread("engines")).not.toContain("capture:");
+    expect(activeMailLink(db, "w1")).toBeNull();
   });
 
   it("refuses a mail the Desk does not list, an inactive thread and a stack without a Studio", async () => {

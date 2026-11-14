@@ -1,6 +1,6 @@
 import { ATTENTION_KINDS, ATTENTION_RESOLUTIONS } from "../types";
 import { MAIL_LOG_SQL, MAIL_VECTORS_SQL } from "../desk/mail-log-schema";
-import { MAIL_RULES_SQL } from "../desk/mail-rules-schema";
+import { MAIL_RULES_SQL, RULE_TARGET_COLUMNS } from "../desk/mail-rules-schema";
 import { SWEEP_SQL } from "../desk/mail-sweep-schema";
 import { TRUST_SQL } from "../desk/mail-trust-schema";
 import { GRAPH_REPOSITORY_SQL } from "../desk/graph-repository-schema";
@@ -1231,6 +1231,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   { table: "desk_mail_classes", column: "details", ddl: "ALTER TABLE desk_mail_classes ADD COLUMN details TEXT" },
   { table: "desk_mail_moves", column: "correction_id", ddl: "ALTER TABLE desk_mail_moves ADD COLUMN correction_id INTEGER" },
   ...HANDOFF_COLUMNS,
+  ...RULE_TARGET_COLUMNS,
 ];
 
 /**
