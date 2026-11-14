@@ -135,7 +135,10 @@ export class MailLoopHost {
       return pass;
     }
     const grant = this.activeGrant(loop);
+    const seen = new Set<string>();
     for (const item of items) {
+      if (seen.has(item.mail.id)) continue;
+      seen.add(item.mail.id);
       const action = loopActionOf(item.target);
       const runnable = this.runnable(grant, loop, item, action);
       if (runnable.kind === "refused") {
