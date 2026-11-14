@@ -218,7 +218,7 @@ export function pendingRuleMail(db: Database, mails: readonly SourceMail[], susp
   return new Set(mails.filter((m) => !ran.has(m.id) && !offDesk.has(m.id) && ruleFor(rules, m, suspicion, flagged.has(m.id))).map((m) => m.id));
 }
 
-const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze"]);
+const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze", "ignored"]);
 const MOVES = new Set<MailLogAction>(["archive", "junk", "trash"]);
 const ORDER: RuleMatch[] = ["list", "domain", "sender"];
 

@@ -10,7 +10,7 @@ import type { DeskItem } from "./types";
 
 export { SNOOZE_MORNING_HOUR, SNOOZE_SQL, SNOOZE_TIMES, snoozeAt, snoozeWhen, type SnoozeChoice, type SnoozeTime } from "./mail-snooze-schema";
 
-export type SnoozeKind = "time" | "meeting" | "person";
+export type SnoozeKind = "time" | "meeting" | "person" | "hidden";
 export type SnoozeState = "snoozed" | "back";
 
 export interface SnoozeRow {
@@ -51,6 +51,7 @@ const quoted = (title: string): string => `“${title}”`;
 
 /** Whether a snooze is over, over fixture-able facts: the time passed, the meeting ended or can no longer happen, or the person wrote after the snooze. */
 export function wakeOf(row: SnoozeRow, facts: WakeFacts, now: number): WakeDecision {
+  if (row.kind === "hidden") return { kind: "wait" };
   if (row.kind === "time") return row.untilAt !== null && now >= row.untilAt ? { kind: "back", reason: "the time you chose came" } : { kind: "wait" };
   if (row.kind === "person") {
     if (!row.person) return { kind: "back", reason: "the snooze named no person" };
@@ -156,6 +157,7 @@ export function wakeSnoozes(db: Database, facts: WakeFacts, now: number): string
   const woken: string[] = [];
   db.transaction(() => {
     for (const row of readSnoozes(db, "snoozed")) {
+      if (row.kind === "hidden") continue;
       const decision = wakeOf(row, facts, now);
       if (decision.kind === "back") {
         db.query("UPDATE desk_mail_snoozes SET state = 'back', back_at = ?, reason = ? WHERE message_id = ? AND state = 'snoozed'").run(now, decision.reason, row.messageId);
@@ -226,18 +228,22 @@ function resolve(choice: SnoozeChoice, ctx: { now: number; events: ReadonlyMap<s
   return { ...none, kind: "time", untilAt: at, label: `until ${snoozeWhen(at, ctx.now)}` };
 }
 
-export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice, ctx: { now: number; readings: readonly SourceReading[] }): SnoozeResult {
-  const names = new Map(ctx.readings.flatMap((r) => r.mail.flatMap((m): [string, string][] => (m.from.name ? [[m.from.address.toLowerCase(), m.from.name]] : []))));
-  const resolved = resolve(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
-  if (typeof resolved === "string") return refuse(409, resolved);
-  const features = mailFeatures(db, mail);
+function insertSnooze(db: Database, mail: ListedMail, resolved: Resolved, now: number): void {
   db.query(
     `INSERT INTO desk_mail_snoozes (message_id, source_id, sender, subject, kind, until_at, event_key, event_title, event_start, person, person_name, label, state, back_at, reason, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'snoozed', NULL, NULL, ?)
      ON CONFLICT(message_id) DO UPDATE SET source_id = excluded.source_id, sender = excluded.sender, subject = excluded.subject, kind = excluded.kind, until_at = excluded.until_at,
        event_key = excluded.event_key, event_title = excluded.event_title, event_start = excluded.event_start, person = excluded.person, person_name = excluded.person_name,
        label = excluded.label, state = 'snoozed', back_at = NULL, reason = NULL, created_at = excluded.created_at`,
-  ).run(mail.id, mail.sourceId, mail.from.address.toLowerCase(), mail.subject.slice(0, 300), resolved.kind, resolved.untilAt, resolved.eventKey, resolved.eventTitle, resolved.eventStart, resolved.person, resolved.personName, resolved.label, ctx.now);
+  ).run(mail.id, mail.sourceId, mail.from.address.toLowerCase(), mail.subject.slice(0, 300), resolved.kind, resolved.untilAt, resolved.eventKey, resolved.eventTitle, resolved.eventStart, resolved.person, resolved.personName, resolved.label, now);
+}
+
+export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice, ctx: { now: number; readings: readonly SourceReading[] }): SnoozeResult {
+  const names = new Map(ctx.readings.flatMap((r) => r.mail.flatMap((m): [string, string][] => (m.from.name ? [[m.from.address.toLowerCase(), m.from.name]] : []))));
+  const resolved = resolve(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
+  if (typeof resolved === "string") return refuse(409, resolved);
+  const features = mailFeatures(db, mail);
+  insertSnooze(db, mail, resolved, ctx.now);
   logMailDecision(db, features, "snooze", "desk", ctx.now);
   return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. Its read status in your mail stays unchanged.`, until: resolved.label };
 }
@@ -248,4 +254,37 @@ export function cancelSnooze(db: Database, messageId: string): { ok: true; messa
   if (!row) return refuse(409, "This mail is not snoozed.");
   db.query("DELETE FROM desk_mail_snoozes WHERE message_id = ?").run(messageId);
   return { ok: true, message: `${quoted(row.subject)} is back on the Desk.` };
+}
+
+const HIDDEN: Resolved = { kind: "hidden", untilAt: null, eventKey: null, eventTitle: null, eventStart: null, person: null, personName: null, label: "hidden from the Desk" };
+
+/** Hides a mail from the Desk for good: a snooze row that never wakes. The mailbox is not touched. */
+export function hideMail(db: Database, mail: ListedMail, now: number): { ok: true; message: string } {
+  const message = `Hid ${quoted(mail.subject)} from the Desk. It stays in your mailbox as it is.`;
+  if (readSnooze(db, mail.id)?.kind === "hidden") return { ok: true, message };
+  const features = mailFeatures(db, mail);
+  db.transaction(() => {
+    insertSnooze(db, mail, HIDDEN, now);
+    logMailDecision(db, features, "ignored", "desk", now);
+  })();
+  return { ok: true, message };
+}
+
+/** Brings a hidden mail back as it was, without a reason line. */
+export function undoHide(db: Database, messageId: string): { ok: true; message: string } | SnoozeFailure {
+  const row = readSnooze(db, messageId);
+  if (row?.kind !== "hidden") return refuse(409, "This mail is not hidden.");
+  db.query("DELETE FROM desk_mail_snoozes WHERE message_id = ?").run(messageId);
+  return { ok: true, message: `${quoted(row.subject)} is back on the Desk.` };
+}
+
+export interface HiddenMail {
+  key: string;
+  subject: string;
+  sender: string;
+  at: number;
+}
+
+export function hiddenMail(db: Database): HiddenMail[] {
+  return readSnoozes(db, "snoozed").filter((r) => r.kind === "hidden").map((r) => ({ key: `mail:${r.messageId}`, subject: r.subject, sender: r.sender, at: r.createdAt }));
 }
