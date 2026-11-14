@@ -56,6 +56,7 @@ describe("the source contract", () => {
         { id: "b", start: at("14:00"), title: "Bad organizer", organizer: { address: "nobody" } },
         { id: "c", start: at("15:00"), title: "Bad attendees", attendees: [{ address: "nobody" }] },
         { id: "d", start: at("16:00"), title: "No people", organizer: null, attendees: [] },
+        { id: "e", start: at("17:00"), title: "Attendees as text", attendees: "bob@example.org" },
       ],
     }));
     expect(parsed.events.map((e) => ({ id: e.id, organizer: e.organizer, attendees: e.attendees }))).toEqual([
@@ -63,6 +64,7 @@ describe("the source contract", () => {
       { id: "b", organizer: null, attendees: undefined },
       { id: "c", organizer: undefined, attendees: [] },
       { id: "d", organizer: undefined, attendees: undefined },
+      { id: "e", organizer: undefined, attendees: [] },
     ]);
     expect(parsed.dropped).toBe(0);
   });

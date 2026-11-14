@@ -131,10 +131,29 @@ const MailAddressSchema = z.object({
 
 const MAX_EVENT_ATTENDEES = 500;
 
+type MailAddress = z.infer<typeof MailAddressSchema>;
+const absent = (v: unknown): boolean => v === undefined || v === null;
+
+function readAddress(v: unknown): MailAddress | null {
+  const p = MailAddressSchema.safeParse(v);
+  return p.success ? p.data : null;
+}
+
+const readOrganizer = (v: unknown): MailAddress | null | undefined => (absent(v) ? undefined : readAddress(v));
+
+function readAttendees(v: unknown): MailAddress[] | undefined {
+  if (absent(v) || (Array.isArray(v) && v.length === 0)) return undefined;
+  if (!Array.isArray(v)) return [];
+  return v
+    .map(readAddress)
+    .filter((a): a is MailAddress => a !== null)
+    .slice(0, MAX_EVENT_ATTENDEES);
+}
+
 /**
  * A calendar event. `organizer` and `attendees` are the meeting's people, read by the `mail.link-meeting` auto-link. Entries whose
- * address does not parse are dropped, but the list still counts as given: an unreadable organizer becomes null, and a nonempty
- * attendee list with no readable entry becomes empty, so the auto-link refuses every sender rather than none.
+ * address does not parse are dropped, but the list still counts as given: an unreadable organizer becomes null, and an attendee
+ * value that is not an array, or a nonempty one with no readable entry, becomes empty, so the auto-link refuses every sender rather than none.
  */
 export const SourceEventSchema = z.object({
   id: z.string().min(1),
@@ -148,19 +167,8 @@ export const SourceEventSchema = z.object({
   online: z.boolean().optional(),
   url: safeLink.optional(),
   availability: EventAvailabilitySchema.optional(),
-  organizer: z
-    .unknown()
-    .transform((v): z.infer<typeof MailAddressSchema> | null | undefined => {
-      if (v === undefined || v === null) return undefined;
-      const p = MailAddressSchema.safeParse(v);
-      return p.success ? p.data : null;
-    })
-    .optional(),
-  attendees: z
-    .array(z.unknown())
-    .transform((list) => (list.length === 0 ? undefined : list.flatMap((d) => { const p = MailAddressSchema.safeParse(d); return p.success ? [p.data] : []; }).slice(0, MAX_EVENT_ATTENDEES)))
-    .optional()
-    .catch(undefined),
+  organizer: z.unknown().transform(readOrganizer).optional(),
+  attendees: z.unknown().transform(readAttendees).optional(),
 });
 
 const MAX_RECIPIENTS = 20;
