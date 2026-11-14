@@ -333,7 +333,7 @@ export async function composeDesk(
   const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, conversations: deps.conversations, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
-  const ruleCards = canMove ? [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet), now)] : [];
+  const ruleCards = [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet).filter((p) => canMove || p.action === "attach"), now)];
   const dmarc = desk.mailDmarc ? dmarcWeek(db, now, desk.mailDmarc) : null;
   const areaOf = (id: string | null): string | null => readings.find((r) => r.id === id)?.area ?? null;
   const dmarcCards = desk.mailDmarc ? dmarcItems(db, now, desk.mailDmarc, areaOf) : [];
