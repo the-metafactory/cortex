@@ -859,7 +859,6 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 ], "action">;
 export type MailJudgementInput = z.infer<typeof MailJudgementInputSchema>;
 export type MailJudgementAction = MailJudgementInput["action"];
-export declare const MAIL_JUDGEMENT_ACTIONS: readonly MailJudgementAction[];
 export declare const judgementCapability: (action: MailJudgementAction) => string;
 declare const MailJudgementOutputSchema: z.ZodObject<{
 	ref: z.ZodObject<{
@@ -872,7 +871,6 @@ declare const MailJudgementOutputSchema: z.ZodObject<{
 	undo: z.ZodBoolean;
 }, z.core.$strict>;
 export type MailJudgementOutput = z.infer<typeof MailJudgementOutputSchema>;
-export declare const judgementHasUndo: (input: MailJudgementInput) => boolean;
 export declare function mailJudgementDeclaration(adapterId: string): AdapterDeclaration;
 export declare function mailJudgementSnapshot(options: {
 	adapterId: string;

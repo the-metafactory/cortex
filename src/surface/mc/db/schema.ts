@@ -152,6 +152,7 @@ export const TABLE_NAMES = [
   "desk_mail_classes",
   "desk_unimportant",
   "desk_mail_judgement_operations",
+  "desk_mail_judgement_expired",
   "desk_mail_judgement_list_versions",
   "desk_mail_judgement_row_versions",
   "desk_studio_sessions",

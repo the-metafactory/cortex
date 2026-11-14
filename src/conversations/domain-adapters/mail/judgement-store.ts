@@ -54,9 +54,14 @@ export class MailJudgementStore {
   constructor(private readonly options: MailJudgementStoreOptions) {
     this.db = options.db;
     const cutoff = (options.now ?? Date.now)() - UNDO_WINDOW_MS;
-    this.db.query(`DELETE FROM desk_mail_judgement_operations
-      WHERE created_at > 0 AND created_at < ? AND (undo_operation IS NULL OR undone = 1)
-        AND json_extract(result_json, '$.kind') IN ('succeeded', 'failed', 'conflict')`).run(cutoff);
+    this.db.transaction(() => {
+      this.db.query(`INSERT OR IGNORE INTO desk_mail_judgement_expired
+        SELECT operation_id FROM desk_mail_judgement_operations
+        WHERE created_at > 0 AND created_at < ? AND (undo_operation IS NULL OR undone = 1)
+          AND json_extract(result_json, '$.kind') IN ('succeeded', 'failed', 'conflict')`).run(cutoff);
+      this.db.run(`DELETE FROM desk_mail_judgement_operations
+        WHERE operation_id IN (SELECT operation_id FROM desk_mail_judgement_expired)`);
+    })();
   }
 
   dispatch(binding: MailConnectionBinding, request: DispatchRequest, published: () => boolean = () => true): Promise<OwnerResult> {
@@ -91,7 +96,8 @@ export class MailJudgementStore {
         const previous = this.settledResult(existing);
         if (previous) return envelope(previous);
       } else {
-        if (Date.parse(request.deadlineAt) + UNDO_WINDOW_MS < now) return envelope(failure(new JudgementRefusal("operation_expired", "This operation is outside Mail's deduplication window. Nothing changed.")));
+        const expired = this.db.query("SELECT operation_id FROM desk_mail_judgement_expired WHERE operation_id = ?").get(request.operationId);
+        if (expired || Date.parse(request.deadlineAt) + UNDO_WINDOW_MS < now) return envelope(failure(new JudgementRefusal("operation_expired", "This operation is outside Mail's deduplication window. Nothing changed.")));
         this.db.query("INSERT INTO desk_mail_judgement_operations (operation_id, digest, request_id, scope, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(request.operationId, snapshot.digest, request.ownerRequestId, scopeOf(binding), input.message.canonicalId, now);
       }
       reserved = true;

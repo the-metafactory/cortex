@@ -4,6 +4,7 @@ export const MAIL_JUDGEMENT_SQL: string[] = [`
     message_id TEXT NOT NULL, mail_json TEXT, change_json TEXT, result_json TEXT, undone INTEGER NOT NULL DEFAULT 0, undo_operation TEXT, created_at INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS desk_mail_judgement_undo_operation ON desk_mail_judgement_operations(undo_operation);
+  CREATE TABLE IF NOT EXISTS desk_mail_judgement_expired (operation_id TEXT PRIMARY KEY);
   CREATE TABLE IF NOT EXISTS desk_mail_judgement_list_versions (address TEXT PRIMARY KEY, token TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS desk_mail_judgement_row_versions (table_name TEXT NOT NULL, message_id TEXT NOT NULL, token TEXT NOT NULL, PRIMARY KEY (table_name, message_id));
   INSERT OR IGNORE INTO desk_mail_judgement_list_versions SELECT address, lower(hex(randomblob(16))) FROM desk_unimportant;

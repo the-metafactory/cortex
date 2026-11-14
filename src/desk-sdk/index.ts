@@ -125,7 +125,7 @@ export interface DeskMailJudgementBridge {
   changeJudgement(request: DispatchRequest): Promise<OwnerResult>;
 }
 
-export { MAIL_JUDGEMENT_ACTIONS, judgementCapability, judgementHasUndo, mailJudgementDeclaration, mailJudgementSnapshot } from "../conversations/domain-adapters/mail/judgement-contract";
+export { judgementCapability, mailJudgementDeclaration, mailJudgementSnapshot } from "../conversations/domain-adapters/mail/judgement-contract";
 export type { MailJudgementAction, MailJudgementInput, MailJudgementOutput } from "../conversations/domain-adapters/mail/judgement-contract";
 
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */

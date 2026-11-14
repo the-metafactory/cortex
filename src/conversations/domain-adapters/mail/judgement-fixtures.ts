@@ -110,6 +110,12 @@ export async function openMailJudgementRig() {
     get host() { return host; }, get db() { return db; }, get owner() { return owner; }, get journal() { return fixture.journal; },
     readings, folders, grants, approvals, calls, index, bridge, registry,
     press(input: MailJudgementInput, choice?: "always" | "once" | "cancel") { return host.press(input, JUDGEMENT_PROVENANCE, choice); },
+    failReceipts(operationId?: string) {
+      db.run(`CREATE TRIGGER fixture_receipt_failure BEFORE UPDATE OF result_json ON desk_mail_judgement_operations
+        ${operationId ? `WHEN NEW.operation_id = '${operationId.replaceAll("'", "''")}'` : ""}
+        BEGIN SELECT RAISE(ABORT, 'receipt write failed'); END`);
+      return () => db.run("DROP TRIGGER fixture_receipt_failure");
+    },
     recordSentWaiting() {
       const reading = readings.find(item => item.id === JUDGEMENT_BINDING.sourceId);
       if (!reading) throw new Error("The fixture Mail source is missing.");

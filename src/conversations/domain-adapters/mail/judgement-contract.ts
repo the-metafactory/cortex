@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { CORRECTION_MOVES } from "../../../surface/mc/desk/mail-correction-schema";
 import { MAIL_CORRECTIONS } from "../../../surface/mc/desk/mail-action-schema";
+import { SNOOZE_TIMES } from "../../../surface/mc/desk/mail-snooze-schema";
+import { WAITING_OPS } from "../../../surface/mc/desk/mail-waiting-schema";
 import { ObjectReferenceSchema, type AdapterDeclaration } from "../types";
 import { adapterErrorSchema, objectReferenceSchema, objectSchema, schemaRef } from "../schema-primitives";
 import { snapshotDigest } from "../operations/validation";
@@ -8,11 +10,15 @@ import type { ApprovedSnapshot, Provenance } from "../operations/types";
 import { mailAccountRef, mailMoveDeclaration } from "./move-contract";
 
 const message = ObjectReferenceSchema.refine(ref => ref.objectType === "message");
+const DATE_LENGTH = 10;
+const TEXT_LENGTH = 1000;
+const ADDRESS_MIN_LENGTH = 3;
+const ADDRESS_MAX_LENGTH = 320;
 const snooze = z.discriminatedUnion("kind", [
-  z.object({ kind: z.enum(["later", "tomorrow", "next-week"]) }).strict(),
-  z.object({ kind: z.literal("date"), date: z.string().max(10) }).strict(),
-  z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict(),
-  z.object({ kind: z.literal("person"), address: z.string().min(3).max(320) }).strict(),
+  z.object({ kind: z.enum(SNOOZE_TIMES) }).strict(),
+  z.object({ kind: z.literal("date"), date: z.string().max(DATE_LENGTH) }).strict(),
+  z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(TEXT_LENGTH) }).strict(),
+  z.object({ kind: z.literal("person"), address: z.string().min(ADDRESS_MIN_LENGTH).max(ADDRESS_MAX_LENGTH) }).strict(),
 ]);
 
 export const MailJudgementInputSchema = z.discriminatedUnion("action", [
@@ -22,8 +28,8 @@ export const MailJudgementInputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("not-phishing"), message }).strict(),
   z.object({ action: z.literal("snooze"), message, until: snooze }).strict(),
   z.object({ action: z.literal("snooze-cancel"), message }).strict(),
-  z.object({ action: z.literal("waiting"), message, op: z.enum(["snooze", "done", "no-answer", "expect"]) }).strict(),
-  z.object({ action: z.literal("undo"), message, operationId: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("waiting"), message, op: z.enum(WAITING_OPS) }).strict(),
+  z.object({ action: z.literal("undo"), message, operationId: z.string().min(1).max(TEXT_LENGTH) }).strict(),
 ]);
 export type MailJudgementInput = z.infer<typeof MailJudgementInputSchema>;
 export type MailJudgementAction = MailJudgementInput["action"];
@@ -39,13 +45,13 @@ export function mailJudgementDeclaration(adapterId: string): AdapterDeclaration 
   const fields = {
     message: ref,
     said: { type: "string", enum: [...MAIL_CORRECTIONS] },
-    op: { type: "string", enum: ["snooze", "done", "no-answer", "expect"] },
-    operationId: { type: "string", minLength: 1, maxLength: 1000 },
+    op: { type: "string", enum: [...WAITING_OPS] },
+    operationId: { type: "string", minLength: 1, maxLength: TEXT_LENGTH },
     until: { oneOf: [
-      objectSchema({ kind: { type: "string", enum: ["later", "tomorrow", "next-week"] } }, ["kind"]),
-      objectSchema({ kind: { const: "date" }, date: { type: "string", maxLength: 10 } }, ["kind", "date"]),
-      objectSchema({ kind: { const: "meeting" }, event: { type: "string", minLength: 1, maxLength: 1000 } }, ["kind", "event"]),
-      objectSchema({ kind: { const: "person" }, address: { type: "string", minLength: 3, maxLength: 320 } }, ["kind", "address"]),
+      objectSchema({ kind: { type: "string", enum: [...SNOOZE_TIMES] } }, ["kind"]),
+      objectSchema({ kind: { const: "date" }, date: { type: "string", maxLength: DATE_LENGTH } }, ["kind", "date"]),
+      objectSchema({ kind: { const: "meeting" }, event: { type: "string", minLength: 1, maxLength: TEXT_LENGTH } }, ["kind", "event"]),
+      objectSchema({ kind: { const: "person" }, address: { type: "string", minLength: ADDRESS_MIN_LENGTH, maxLength: ADDRESS_MAX_LENGTH } }, ["kind", "address"]),
     ] },
   };
   const extra: Partial<Record<MailJudgementAction, keyof typeof fields>> = { correct: "said", snooze: "until", waiting: "op", undo: "operationId" };

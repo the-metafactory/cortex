@@ -178,13 +178,32 @@ describe("Mail trust, snooze, waiting and corrections read back from the native 
 });
 
 describe("Mail judgement admission and replay", () => {
+  for (const freshDeadline of [false, true]) {
+    test(`pruned operation cannot repeat effects with a ${freshDeadline ? "fresh" : "stale"} deadline`, async () => {
+      const rig = await open();
+      await mark(rig, "once");
+      const original = rig.calls[0]!;
+      removeSender(rig.db, "unimportant", "sender@example.org");
+      const log = queryMailLog(rig.db);
+      rig.advance(UNDO_WINDOW_MS + 1);
+      await rig.reopen();
+      const request = freshDeadline ? { ...original, attemptId: "retry-example", deadlineAt: new Date(Date.parse(AT) + UNDO_WINDOW_MS + 30_001).toISOString() } : original;
+      for (let retry = 0; retry < 2; retry++) {
+        expect((await rig.owner.dispatch(JUDGEMENT_BINDING, request)).result).toMatchObject({ kind: "failed", error: { code: "mail.operation_expired" } });
+        expect(listSenders(rig.db, "unimportant")).toEqual([]);
+        expect(queryMailLog(rig.db)).toEqual(log);
+        await rig.reopen();
+      }
+    });
+  }
+
   test("a receipt write failure rolls back local state and replay recovers with Undo", async () => {
     const rig = await open();
-    rig.db.run("CREATE TRIGGER fixture_receipt_failure BEFORE UPDATE OF result_json ON desk_mail_judgement_operations BEGIN SELECT RAISE(ABORT, 'receipt write failed'); END");
+    const resumeReceipts = rig.failReceipts();
     await expect(rig.press(unimportant, "once")).rejects.toThrow("receipt write failed");
     expect(listSenders(rig.db, "unimportant")).toEqual([]);
     expect(queryMailLog(rig.db)).toEqual([]);
-    rig.db.run("DROP TRIGGER fixture_receipt_failure");
+    resumeReceipts();
     await rig.reopen();
     expect((await rig.owner.dispatch(JUDGEMENT_BINDING, rig.calls[0]!)).result).toMatchObject({ kind: "succeeded", output: { undo: true } });
     expect(listSenders(rig.db, "unimportant")).toHaveLength(1);
@@ -192,11 +211,11 @@ describe("Mail judgement admission and replay", () => {
 
   test("a correction move and restore recover their historical result after local receipt failure", async () => {
     const rig = await open();
-    rig.db.run("CREATE TRIGGER fixture_receipt_failure BEFORE UPDATE OF result_json ON desk_mail_judgement_operations BEGIN SELECT RAISE(ABORT, 'receipt write failed'); END");
+    const resumeReceipts = rig.failReceipts();
     await expect(rig.press({ action: "correct", message, said: "archive" }, "once")).rejects.toThrow("receipt write failed");
     expect(rig.folders.get(message.canonicalId)).toBe("Archive");
     expect(queryMailLog(rig.db)).toEqual([]);
-    rig.db.run("DROP TRIGGER fixture_receipt_failure");
+    resumeReceipts();
     rig.readings[0]!.mail = [];
     await rig.reopen();
     const moved = rig.calls[0]!;
@@ -204,11 +223,11 @@ describe("Mail judgement admission and replay", () => {
     expect(queryMailLog(rig.db)).toHaveLength(1);
     const restoreSnapshot = mailJudgementSnapshot({ ...JUDGEMENT_BINDING, input: { action: "undo", message, operationId: moved.operationId }, provenance: JUDGEMENT_PROVENANCE });
     const restore = { ...moved, operationId: "restore-example", ownerRequestId: "restore-request-example", snapshot: restoreSnapshot };
-    rig.db.run("CREATE TRIGGER fixture_restore_failure BEFORE UPDATE OF result_json ON desk_mail_judgement_operations WHEN NEW.operation_id = 'restore-example' BEGIN SELECT RAISE(ABORT, 'restore receipt failed'); END");
-    await expect(rig.owner.dispatch(JUDGEMENT_BINDING, restore)).rejects.toThrow("restore receipt failed");
+    const resumeRestoreReceipts = rig.failReceipts(restore.operationId);
+    await expect(rig.owner.dispatch(JUDGEMENT_BINDING, restore)).rejects.toThrow("receipt write failed");
     expect(rig.folders.get(message.canonicalId)).toBe("INBOX");
     expect(queryMailLog(rig.db)).toHaveLength(1);
-    rig.db.run("DROP TRIGGER fixture_restore_failure");
+    resumeRestoreReceipts();
     rig.deny();
     expect((await rig.owner.dispatch(JUDGEMENT_BINDING, restore)).result.kind).toBe("uncertain");
     expect(rig.db.query<{ undo_operation: string }, [string]>("SELECT undo_operation FROM desk_mail_judgement_operations WHERE operation_id = ?").get(moved.operationId)?.undo_operation).toBe(restore.operationId);
@@ -226,10 +245,10 @@ describe("Mail judgement admission and replay", () => {
     await mark(rig, "once");
     const expired = rig.calls[0]!;
     judgementReceipt(await rig.press({ ...unimportant, message: judgementMessage("missing-example") }, "once"));
-    rig.db.run("CREATE TRIGGER fixture_receipt_failure BEFORE UPDATE OF result_json ON desk_mail_judgement_operations BEGIN SELECT RAISE(ABORT, 'receipt write failed'); END");
+    const resumeReceipts = rig.failReceipts();
     await expect(rig.press({ action: "correct", message, said: "archive" }, "once")).rejects.toThrow("receipt write failed");
     const unresolved = rig.calls.at(-1)!;
-    rig.db.run("DROP TRIGGER fixture_receipt_failure");
+    resumeReceipts();
     const log = queryMailLog(rig.db);
     rig.advance(UNDO_WINDOW_MS + 31_000);
     const recent = judgementReceipt(await rig.press({ action: "block-domain", message }, "once"));
