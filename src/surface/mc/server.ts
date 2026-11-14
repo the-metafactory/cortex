@@ -132,6 +132,7 @@ import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
+import { DESK_OUTLINE_ASK_PATH, handleDeskOutlineAsk } from "./api/desk-outline-ask";
 import { handleConversations, importedSessions, type ConversationAccess } from "./api/conversations";
 import { conversationWebPrincipal } from "../../conversations/discord-dm";
 import { conversationSources } from "./desk/conversation-sources";
@@ -414,7 +415,7 @@ export function startServer(
 
       if (url.pathname.startsWith("/api/")) {
         if (req.method === "GET" && /^\/api\/conversations\/[^/]+\/stream$/.test(url.pathname)) server.timeout(req, 0);
-        if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail"].includes(url.pathname)) server.timeout(req, 180);
+        if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail", DESK_OUTLINE_ASK_PATH].includes(url.pathname)) server.timeout(req, 180);
         if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines", "/api/desk/routine-capability", "/api/desk/routine-editor"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
           server.timeout(req, 0);
@@ -697,6 +698,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
   if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk, { imported: importedSessions(conversations) });
+  if (pathname === DESK_OUTLINE_ASK_PATH) return handleDeskOutlineAsk(req, db, desk);
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
