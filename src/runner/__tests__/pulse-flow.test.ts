@@ -208,7 +208,7 @@ describe("routine flow execution", () => {
       await command.parseAsync(["node", "cortex", "pulse-flow", "--flows-dir", "relative", "--flow", "relative", "--catalog-file", "relative"]);
     } finally {
       process.stderr.write = stderr;
-      process.exitCode = previous;
+      process.exitCode = previous ?? 0;
     }
     expect(await readFile(file, "utf8")).toContain("absolute");
   });
