@@ -21,13 +21,15 @@ describe("residency gate", () => {
     expect(releaseRefusal("local", { ...localConversation, policy: "cloud" })).toBe("cloud-conversation");
   });
 
-  test("a destination with a missing or malformed policy counts as local, so it may receive local content but never makes it cloud", () => {
-    expect(mayEnter("local", { ...localConversation, policy: undefined })).toBe(true);
+  test("a destination with a missing or malformed policy is not local, so local content may not enter it", () => {
+    for (const policy of [undefined, null, "", "Local", "remote", ["local"]]) expect(releaseRefusal("local", { ...localConversation, policy })).toBe("cloud-conversation");
     expect(mayEnter(undefined, { transport: "web", route: "cloud", policy: "cloud" })).toBe(false);
   });
 
   test("release brands cleared content and refuses the rest with a reason", () => {
-    expect(release({ text: "a" }, "cloud", { transport: "discord", route: "cloud", policy: "cloud" })).toEqual({ released: { text: "a" } as never });
-    expect(release({ text: "a" }, "local", { transport: "discord", route: "cloud", policy: "cloud" })).toEqual({ refusal: "not-web" });
+    const discord: Destination = { transport: "discord", route: "cloud", policy: "cloud" };
+    expect(release({ text: "a", policy: "cloud" }, discord)).toEqual({ released: { text: "a", policy: "cloud" } as never });
+    expect(release({ text: "a", policy: "local" }, discord)).toEqual({ refusal: "not-web" });
+    expect(release({ text: "a", policy: undefined }, discord)).toEqual({ refusal: "not-web" });
   });
 });

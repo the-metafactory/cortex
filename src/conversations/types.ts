@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Residency } from "../common/residency";
+import { type Residency, routeResidency } from "../common/residency";
 import { CLOUD_LANE_ID } from "../common/types/desk-conversations";
 import { CREATABLE_TYPES, type CreatableType } from "./catalog";
 
@@ -10,7 +10,7 @@ export type Policy = Residency;
 export type ModelRoute = Policy | `cloud:${string}`;
 export const ROUTE = new RegExp(`^(?:local|cloud|cloud:${CLOUD_LANE_ID})$`);
 export const isModelRoute = (value: unknown): value is ModelRoute => typeof value === "string" && ROUTE.test(value);
-export const routePolicy = (route: ModelRoute): Policy => route === "local" ? "local" : "cloud";
+export const routePolicy = (route: ModelRoute): Policy => routeResidency(route);
 export const laneName = (lane: { provider: string; model: string }): string => `${lane.provider}/${lane.model}`;
 export const routeLabel = (route: string): string => route.startsWith("cloud:") ? `${route.slice("cloud:".length)} cloud` : route;
 
