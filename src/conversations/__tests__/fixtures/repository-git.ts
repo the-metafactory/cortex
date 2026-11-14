@@ -11,17 +11,20 @@ export async function directGit(root: string, args: string[]): Promise<string> {
   return out;
 }
 
+export async function commitFiles(root: string, files: Record<string, string>, message: string): Promise<string> {
+  for (const [path, content] of Object.entries(files)) await writeFile(join(root, path), content);
+  await directGit(root, ["add", "."]);
+  await directGit(root, ["commit", "--quiet", "-m", message]);
+  return (await directGit(root, ["rev-parse", "HEAD"])).trim();
+}
+
 export async function gitFixture(dir: string) {
   const root = join(dir, "checkout");
   await mkdir(root);
   await directGit(root, ["init", "--quiet", "--initial-branch=probe"]);
   await mkdir(join(root, "restricted"));
   await mkdir(join(root, "excluded"));
-  const files = { "beacon.txt": "synthetic committed beacon\n", "deleted.txt": "synthetic removed file\n", "restricted/note.txt": "SYNTHETIC_LOCAL_ONLY\n", "excluded/note.txt": "SYNTHETIC_EXCLUDED\n", ".env": "SYNTHETIC_ENV_SECRET\n" };
-  for (const [path, content] of Object.entries(files)) await writeFile(join(root, path), content);
-  await directGit(root, ["add", "."]);
-  await directGit(root, ["commit", "--quiet", "-m", "Synthetic initial state"]);
-  const first = (await directGit(root, ["rev-parse", "HEAD"])).trim();
+  const first = await commitFiles(root, { "beacon.txt": "synthetic committed beacon\n", "deleted.txt": "synthetic removed file\n", "restricted/note.txt": "SYNTHETIC_LOCAL_ONLY\n", "excluded/note.txt": "SYNTHETIC_EXCLUDED\n", ".env": "SYNTHETIC_ENV_SECRET\n" }, "Synthetic initial state");
   await writeFile(join(root, "beacon.txt"), "synthetic committed beacon\nsecond committed change\n");
   await directGit(root, ["add", "beacon.txt"]);
   await directGit(root, ["commit", "--quiet", "-m", "Synthetic beacon change"]);

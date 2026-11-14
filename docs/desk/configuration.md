@@ -319,6 +319,54 @@ pi gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM
 
 pi keeps one session per conversation and lane under the stack's conversation directory (`pi-sessions`). If that session is missing, or the lane or engine changed, the next turn starts a new session with the earlier exchange from the conversation record, and the record shows that the context was reconstructed.
 
+### Conversation tools
+
+<!-- glossary-ignore: path -->
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: data -->
+
+`tools` is optional. Without it a conversation still answers through the assistant's Soma projection and the read-only pi tools `pi.tools` allows, and it discovers no project, graph or web source. With it, the assistant can investigate a configured checkout, its forge, a work graph and the public web, and prepare owner actions from what it finds.
+
+```yaml
+mc:
+  desk:
+    conversations:
+      tools:
+        projects:
+          - id: sample-project
+            root: ~/work/sample-project
+            forge: { kind: github, repo: example/sample-project }
+            policy: cloud
+            operations: [repo.read, forge.read, web.read]
+            exclude: [internal, stack/settings.yaml]
+        graphs:
+          - id: desk-work
+            policy: cloud
+            maps:
+              - { id: desk, ref: 'github:github.com/example/desk#10', label: The Desk }
+            read:
+              repos: [github:github.com/example/desk]
+        web:
+          search:
+            kind: searxng
+            url: http://127.0.0.1:8888
+            policy: local
+```
+
+Every source is a configuration entry, never a Cortex default: a project id is stable while its checkout moves, a forge identity carries no credential, and a graph names its registered maps and its read scope. `policy` defaults to `local` and `operations` defaults to an empty list, so a new entry reads nothing until you name an operation. `repo.read` covers the file and Git tools, `forge.read` the GitHub and GitLab reads, `graph.read` the work-graph reads, and `web.read` search and page fetch. Declaring an operation permits an installed tool; it installs nothing and grants no write. A directory, a Git remote or a repository picked for proposal creation is not a conversation source.
+
+**Privacy.** A `cloud` source works on either lane. A `local` source needs a local-policy conversation, the local lane and web transport, and it is invisible to a cloud conversation and to Discord. A read records the source and its policy in the conversation, so one local read makes that conversation local-only for good. Changing or removing a source, its operations, its exclusions or its forge identity refuses later turns of a conversation that used it; start a new conversation with the current permissions. A parent project's cloud allowance never exposes a nested local-only project. Tool results are bounded, redacted, fenced as retrieved data and labelled as never instructions.
+
+**Availability.** Discovery reports `available`, `not-configured`, `denied`, `dependency-missing` or `provider-unavailable` for every tool of every visible source, with a reason that names the missing operation, setting or connection. A hidden source and an unknown source answer the same way, so discovery reveals neither a hidden name nor its count.
+
+**Action authority.** Reads inside the configured scope are autonomous. Writes stay with the creation tools: `creation_propose` prepares an editable proposal and the principal confirms it, or an existing scoped standing permission creates through the owner. A conversation can file an implementation brief, ask to start one recorded node and ask to stop one recorded generation; Ranger's own gates decide what runs, and the worker section below describes those controls. No conversation tool runs a shell, edits a file, discloses a credential, merges, deploys or sends.
+
+**Migrating from Soma-only conversations.** Before `tools`, a cloud conversation had no file read or search: pi's `read`, `grep`, `find` and `ls` are disabled on both lanes, and only `soma_context` was available. Adding `tools` does not re-enable those built-in tools, does not add a shell, and does not load installed packages, MCP servers or other extensions: Cortex still passes `--no-mcp`, `--no-extensions` and `--no-context-files`, and the built-in read tools stay disabled even when `pi.tools` names them. The model gets only the named Cortex tools, each bound to one configured source and one declared operation. An existing configuration keeps working unchanged and simply discovers no source until you list one.
+
+The full tool reference, including every input, bound and status, is [Conversation tool boundary](../conversation-tools.md). `bun scripts/probe-conversation-tools.ts` drives the actual conversation host, a real temporary checkout and disposable owner files through discovery, file, Git, forge, graph, web, history, proposal and worker paths, and reports pass, fail or provisioning-needed per capability. The same page carries the live-stack recipe and records what is deployed and what is not.
+
 ### Communication tools
 
 <!-- glossary-ignore: host -->

@@ -230,3 +230,69 @@ Without `web.search`, `web_search` is listed as `dependency-missing` and a call 
 Page and search text is untrusted data. It sits inside the fenced result, cannot change permissions, tool definitions or standing authority, and is never followed as instructions.
 
 Tests drive both tools through the conversation host with controlled DNS, transport and provider fixtures: `bun run test src/conversations/__tests__/tools-web.test.ts`. The live probe (a cloud-allowed throwaway conversation reading a public documentation page, loopback and redirect denial, and a local-only query that never reaches the provider) needs a deployed stack with a configured provider and has not been run from this build.
+
+<!-- glossary-ignore: run -->
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: path -->
+<!-- glossary-ignore: data -->
+
+## End-to-end probe and live setup
+
+`bun scripts/probe-conversation-tools.ts` drives the actual conversation host, the real tool catalog, the real durable store and the real API confirmation route. It builds a temporary checkout with real Git history, a temporary home and temp directory, and disposable owner fixtures: a recorded `gh` protocol, a recorded `soma` protocol, an injected search requester and fetch transport, and a file-backed Ranger stand-in. It removes everything it created and checks that the temporary root is gone. It needs no credential, account, network or running stack, and it runs in the `test` gate as part of `bun run check`.
+
+The probe prints one row per capability with `PASS`, `FAIL` or `NEEDS`, the basis of the claim and a canonical evidence reference of the form `conversation:<id> cortex.tool-activity:<callId>`. The conversation id is created fresh on every run; the call label is stable.
+
+| Row | Capability | Basis |
+| --- | --- | --- |
+| C1 | Discovery lists the configured projects and graphs with availability and blocking reasons | actual host, synthetic registry |
+| C2 | File evidence with provenance; exclusions, traversal and a nested local-only project refused | real checkout |
+| C3 | Git evidence matches direct Git and the repository bytes are unchanged | real Git |
+| C4 | GitHub read pins the configured host and repository | recorded `gh` protocol |
+| C5 | Work-graph read pins the configured map and scope and runs no write verb | recorded `soma` protocol |
+| C6 | Web search and fetch use the configured provider; a local-only conversation is refused | injected provider and transport |
+| C7 | A local-only checkout is refused in a cloud conversation and read in a local one | real checkout, both lanes |
+| C8 | Each configured lane answers on its own route and the record names the lane | conversation record |
+| C9 | Earlier conversations are searchable and readable with conversation and entry citations | durable history owner |
+| C10 | A proposal is prepared by the conversation, confirmed once through the API and read back from the owner | real API route |
+| C11 | Worker state and cancellation act on the exact recorded generation and never start a second worker | owner-recorded state |
+| C12 | A node the owner will not run automatically is reported as awaiting approval | owner refusal |
+| C13 | Another principal cannot read this principal's history, worker state or proposals | owner and API gates |
+| C14 | Revoking a source during a turn withholds the result and refuses the next call | live registry change |
+| C15 | Prompt injection inside a source file stays fenced data and causes no owner effect | fence and instruction boundary |
+| C16 | A missing connector is reported as unavailable with its reason | owner failure, missing login, missing setting |
+| C17 | A restart reads the owner's recorded state and replays no duplicate effect | host restart, fresh owner fixture |
+| X2 | The temporary root is removed | cleanup check |
+
+A PASS on C1-C17 means the Cortex tool boundary holds on the actual host path for the basis named in the row. It does not mean a live owner answered. The probe records seven capabilities as `NEEDS`, and none of them is claimed as passed:
+
+| Row | Capability | What is missing |
+| --- | --- | --- |
+| P1 | Live GitHub forge read | a `gh` login on the host and a configured real checkout |
+| P2 | Live GitLab forge read | a `glab` login and a configured GitLab project |
+| P3 | Live work-graph read | the `soma` CLI and a registered map |
+| P4 | Live web search and fetch | a configured search provider and public egress |
+| P5 | Live Ranger start, status and stop | a configured `mc.desk.workers` block and a running supervisor |
+| P6 | Live provider and model quality on each lane | configured provider credentials |
+| P7 | Deployed-stack read-only investigation | a running stack and the principal's conversation |
+
+The probe scripts the model turn, so it does not test whether a model obeys the fence, follows the instructions or picks the right tool. It tests that the boundary holds when a turn calls a tool. Model behaviour belongs to the live probe below.
+
+### Live-stack recipe
+
+Run this on the machine that hosts the stack, after the build is installed. It is read-only: it reads a checkout, a forge item, a graph node and a public page, and it creates nothing.
+
+1. Add one `mc.desk.conversations.tools` project for a checkout you may read, with `operations: [repo.read]` and the policy you want. Add a graph source and a `web.search` provider if you want those rows too. Validate with `cortex config validate`.
+2. Restart the stack so the conversation host reloads the registry, then open a new conversation in the Desk with the policy that matches the source.
+3. Ask the assistant to list what it can read, then to read one named file and cite its path. Confirm the answer names the project and the file, and that the conversation record shows a `cortex.tool-activity` entry with `outcome: done` and a `source` revision.
+4. Ask for one forge item and one graph node by number. A missing login or a missing CLI must appear as unavailable with its reason, never as an empty result.
+5. Add a second project with `policy: local`, then ask for it from a cloud conversation. The call must be refused and the refusal must say why. A local-policy web conversation may read it.
+6. Read the conversation record and confirm no credential, no absolute host path and no private source text reached the answer.
+7. Delete the conversation. The probe creates no fixture on a live stack, so there is nothing else to clean up.
+
+Record the provider and model of each answer, the source revision from each tool record, and the cleanup result with the evidence. A row that cannot be exercised stays `NEEDS` with the missing item named.
+
+### Deployed versus preview state
+
+This build is not deployed. The probe above passed on the development host against recorded owner protocols and real local checkouts. The live-stack recipe has not been run from this build, so P1-P7 remain provisioning-needed and no live forge, provider, worker or deployed-stack success is claimed here. Merge, install and a run of the recipe are what turn those rows into evidence.
