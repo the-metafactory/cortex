@@ -48,7 +48,7 @@ describe("GET /api/desk", () => {
 
 const ROOT = join(import.meta.dir, "..", "..", "..", "..");
 const SCOPE = ["src/surface/mc/api", "src/surface/mc/desk", "src/surface/mc/dashboard-v2", "src/conversations/host.ts", "src/conversations/pi.ts"];
-const LEGACY_KEYS = ["Ivy's notes", "Ivy’s notes", "ivy's notes", "ivy’s notes", "trigger: Ivy conversation", "`Ivy conversation: "];
+const LEGACY_READER = /^const LEGACY_\w+ = /;
 
 function sources(path: string): string[] {
   const full = join(ROOT, path);
@@ -59,11 +59,10 @@ function sources(path: string): string[] {
 }
 
 describe("the assistant's name in Desk sources", () => {
-  it("is never the literal Ivy outside the legacy Studio keys", () => {
+  it("is never the literal Ivy outside the readers of the old keys", () => {
     const found = SCOPE.flatMap(sources).flatMap((file) =>
       readFileSync(file, "utf8").split("\n").flatMap((line, i) => {
-        const rest = LEGACY_KEYS.reduce((l, key) => l.replaceAll(key, ""), line);
-        return /\bIvy\b/.test(rest) ? [`${relative(ROOT, file)}:${i + 1}`] : [];
+        return /\bIvy\b/.test(line) && !LEGACY_READER.test(line) ? [`${relative(ROOT, file)}:${i + 1}`] : [];
       }));
     expect(found).toEqual([]);
   });

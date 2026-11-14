@@ -1,5 +1,5 @@
 import { stringify } from "yaml";
-import { NOTE_META_KEYS, sectionKey } from "./format";
+import { NOTE_META_KEYS, NOTES_HEADING, sectionKey } from "./format";
 import { localDate } from "./labels";
 
 export type FrontValue = string | boolean | string[] | undefined;
@@ -61,6 +61,47 @@ function trimBlank(lines: string[]): string[] {
   return out;
 }
 
+export interface Section {
+  key: string | undefined;
+  head: number;
+  end: number;
+}
+
+function bodyStart(lines: readonly string[]): number {
+  if (lines[0]?.trim() !== "---") return 0;
+  const close = lines.findIndex((l, i) => i > 0 && l.trim() === "---");
+  return close < 0 ? 0 : close + 1;
+}
+
+export function sectionsOf(lines: readonly string[]): Section[] {
+  const out: Section[] = [];
+  for (let i = bodyStart(lines); i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (!line.startsWith("## ")) continue;
+    const last = out.at(-1);
+    if (last) last.end = i;
+    out.push({ key: sectionKey(line.slice(3)), head: i, end: lines.length });
+  }
+  return out;
+}
+
+export const finish = (lines: readonly string[]): string => `${lines.join("\n").replace(/\n+$/, "")}\n`;
+
+/** One notes section under the neutral heading: a later notes section, under either heading, moves into the first. */
+export function mergeNotesSections(text: string): string {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const notes = sectionsOf(lines).filter((s) => s.key === "notes");
+  const [first, ...later] = notes;
+  if (!first) return text;
+  if (later.length === 0 && (lines[first.head] ?? "").slice(3).trim() === NOTES_HEADING) return text;
+  const inLater = (i: number): boolean => later.some((s) => i >= s.head && i < s.end);
+  const body = trimBlank([...lines.slice(first.head + 1, first.end), ...later.flatMap((s) => ["", ...lines.slice(s.head + 1, s.end)])]);
+  const before = lines.slice(0, first.head);
+  const after = lines.slice(first.end).filter((_, j) => !inLater(first.end + j));
+  const rest = trimBlank(after);
+  return finish([...before, `## ${NOTES_HEADING}`, "", ...trimBlank(body), ...(rest.length ? ["", ...rest] : [])]);
+}
+
 export function safeBody(text: string): string[] {
   return text
     .replace(/\r\n/g, "\n")
@@ -91,12 +132,12 @@ export const appendLog = (text: string, date: string, line: string): string | nu
   writeSection(text, "log", "Log", (current) => [...current, `- ${date}: ${oneLine(line)}`]);
 
 export const appendEntry = (text: string, key: string, heading: string, entry: string[]): string | null =>
-  writeSection(text, key, heading, (current) => [...current, ...(current.length ? [""] : []), ...entry]);
+  writeSection(key === "notes" ? mergeNotesSections(text) : text, key, heading, (current) => [...current, ...(current.length ? [""] : []), ...entry]);
 
 const META = new RegExp(`^(${NOTE_META_KEYS.join("|")}):`);
 
 function noteDoc(text: string, at: string): { doc: Doc; head: number; end: number } | null {
-  const doc = toDoc(text);
+  const doc = toDoc(mergeNotesSections(text));
   const notes = doc ? findSection(doc, "notes") : null;
   if (!doc || !notes) return null;
   const head = doc.lines.findIndex((l, i) => i > notes.head && i < notes.end && l.startsWith("### ") && l.slice(4).trim() === at);

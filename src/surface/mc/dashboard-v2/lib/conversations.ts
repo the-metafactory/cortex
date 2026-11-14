@@ -73,7 +73,7 @@ export async function chooseOutcome(id: string, proposalId: string, outcome: Ses
 }
 
 export type EntryView =
-  | { kind: "message"; who: "you" | "ivy"; text: string; note?: string }
+  | { kind: "message"; who: "you" | "assistant"; text: string; note?: string }
   | { kind: "activity"; text: string }
   | { kind: "failure"; text: string };
 
@@ -122,7 +122,7 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
     const from = `From the earlier Studio session · ${text(data.model)}, ${text(data.policy)}`;
     return [
       { kind: "message", who: "you", text: text(data.text), note: from },
-      reply ? { kind: "message", who: "ivy", text: reply, note: from } : { kind: "activity", text: "No answer was received for this earlier turn." },
+      reply ? { kind: "message", who: "assistant", text: reply, note: from } : { kind: "activity", text: "No answer was received for this earlier turn." },
     ];
   }
   if (entry.kind === DECISION_KIND) {
@@ -149,7 +149,7 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
   if (entry.kind === TOOL_ACTIVITY_KIND) return [{ kind: "activity", text: toolLine(data) }];
   if (entry.role === "assistant" && entry.error) return [{ kind: "failure", text: `No answer${entry.model ? ` on ${entry.model}` : ""}: ${entry.error}` }];
   if (entry.role === "user" && entry.text) return [{ kind: "message", who: "you", text: entry.text }];
-  if (entry.role === "assistant" && entry.text) return [{ kind: "message", who: "ivy", text: entry.text, ...(entry.model ? { note: entry.model } : {}) }];
+  if (entry.role === "assistant" && entry.text) return [{ kind: "message", who: "assistant", text: entry.text, ...(entry.model ? { note: entry.model } : {}) }];
   return [];
 }
 

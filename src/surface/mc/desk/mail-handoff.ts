@@ -10,7 +10,7 @@ import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
 import { MAX_REPLY_CHARS, type ListedMail, type MailActionResult } from "./mail-actions";
 import { closePendingTasks, queueTaskClose, type TaskCloser } from "./mail-handoff-close";
 import { MAX_FINDING, MAX_FINDINGS } from "./mail-handoff-schema";
-import { handoffAction as act, handoffWhen as when, MAX_INSTRUCTION, OPEN_STATES, type HandoffState, type HandoffView } from "./handoff";
+import { handoffAction as act, handoffKey, HANDOFF_KEY_PREFIX, handoffWhen as when, MAX_INSTRUCTION, OPEN_STATES, type HandoffState, type HandoffView } from "./handoff";
 import { logMailDecision, mailFeatures, senderDomain, type MailFeatures } from "./mail-log";
 import type { MailForStudio } from "./mail-studio";
 import { replySubject } from "./mail-triage";
@@ -21,13 +21,33 @@ import type { DeskAction, DeskItem } from "./types";
 
 export { HANDOFF_SQL, HANDOFF_STATES, MAX_INSTRUCTION, type HandoffState } from "./mail-handoff-schema";
 
-export const HANDOFF_OPS = ["ivy.approve", "ivy.discard", "ivy.retry"] as const;
+export const HAND_ACTION = "assistant.hand";
+export const HANDOFF_OPS = ["assistant.approve", "assistant.discard", "assistant.retry"] as const;
 export type HandoffOp = (typeof HANDOFF_OPS)[number];
 export const isHandoffOp = (action: string): action is HandoffOp => HANDOFF_OPS.includes(action as HandoffOp);
 
-export const HANDOFF_KEY_PREFIX = "ivy:";
-export const handoffKey = (id: string): string => `${HANDOFF_KEY_PREFIX}${id}`;
-export const handoffIdOf = (key: string): string | null => (key.startsWith(HANDOFF_KEY_PREFIX) ? key.slice(HANDOFF_KEY_PREFIX.length) : null);
+const LEGACY_KEY_PREFIX = "ivy:";
+export { HANDOFF_KEY_PREFIX, handoffKey };
+export function handoffIdOf(key: string): string | null {
+  const prefix = [HANDOFF_KEY_PREFIX, LEGACY_KEY_PREFIX].find((p) => key.startsWith(p));
+  return prefix ? key.slice(prefix.length) : null;
+}
+
+export const LEGACY_ACTION_IDS: Readonly<Record<string, string>> = {
+  "ivy.hand": HAND_ACTION,
+  "ivy.approve": "assistant.approve",
+  "ivy.discard": "assistant.discard",
+  "ivy.retry": "assistant.retry",
+  "ivy.edit": "assistant.edit",
+  "mail.ivy": "mail.assistant",
+};
+
+/** A mail request that still names a hand-off action by its old id, with the id renamed; anything else as it came. */
+export function withCurrentActionId(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || !("action" in raw) || typeof raw.action !== "string") return raw;
+  const current = LEGACY_ACTION_IDS[raw.action];
+  return current ? { ...raw, action: current } : raw;
+}
 
 export type HandoffLanes = Partial<Record<Policy, ConversationLane>>;
 
@@ -177,7 +197,7 @@ export interface HandInput {
  * Files the agent task on the first configured task map through the task writer, then records the hand-off for the
  * worker. A retry with the same request id answers the first result. Suspicious mail is refused.
  */
-export async function handMailToIvy(item: MailForStudio, input: HandInput, deps: HandDeps): Promise<HandoffResult> {
+export async function handMailToAssistant(item: MailForStudio, input: HandInput, deps: HandDeps): Promise<HandoffResult> {
   const { db, now, assistantName: name } = deps;
   const replay = readHandoff(db, input.requestId);
   if (replay) return replay.messageId === item.mail.id ? { ok: true, id: replay.id, message: handedMessage(replay, name) } : refuse(409, "That request id belongs to another hand-off.");
@@ -200,7 +220,7 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
   ).run(input.requestId, mail.id, mail.account ?? null, mail.sourceId, item.area, mail.from.name ?? null, mail.from.address, mail.subject, mail.url ?? null, mail.receivedAt, item.summary, mail.firstParagraph ?? null, instruction, routed.route, filed.id, filed.url ?? null, now);
   const superseded = db.query<{ id: string }, [number, string, string]>("UPDATE desk_mail_handoffs SET state = 'discarded', closed_at = ? WHERE message_id = ? AND state = 'failed' AND id != ? RETURNING id").all(now, mail.id, input.requestId);
   queueTaskClose(db, superseded.map((r) => r.id));
-  logMailDecision(db, mailFeatures(db, mail), "ivy", "desk", now);
+  logMailDecision(db, mailFeatures(db, mail), "assistant", "desk", now);
   const row = readHandoff(db, input.requestId);
   return { ok: true, id: input.requestId, message: row ? handedMessage(row, name, map.label) : `Handed to ${name}.` };
 }
@@ -383,16 +403,16 @@ export function handoffLine(row: HandoffRow, now: number, name: string): string 
 
 const viewOf = (row: HandoffRow, now: number, name: string): HandoffView => ({ id: row.id, state: row.state, line: handoffLine(row, now, name), since: row.createdAt });
 
-const HAND_TO_IVY = "mail.ivy";
+const HAND_TO_ASSISTANT = "mail.assistant";
 
 /** The mail card while the assistant has it: the status line, no second hand-off, and Retry after a failure. */
 export function withHandoff(item: DeskItem, row: HandoffRow | undefined, now: number, name: string): DeskItem {
   if (!row) return item;
-  const notIvy = (a: DeskAction): boolean => a.id !== HAND_TO_IVY;
+  const notAssistant = (a: DeskAction): boolean => a.id !== HAND_TO_ASSISTANT;
   const handoff = viewOf(row, now, name);
-  if (row.state !== "failed") return { ...item, actions: item.actions.filter(notIvy), more: (item.more ?? []).filter(notIvy), handoff };
-  const offered = [...item.actions, ...(item.more ?? [])].filter(notIvy).map((a) => (a.role === "primary" ? { ...a, role: "secondary" as const } : a));
-  const all = [act("ivy.retry", `Ask ${name} again`, "primary", row.id), ...offered];
+  if (row.state !== "failed") return { ...item, actions: item.actions.filter(notAssistant), more: (item.more ?? []).filter(notAssistant), handoff };
+  const offered = [...item.actions, ...(item.more ?? [])].filter(notAssistant).map((a) => (a.role === "primary" ? { ...a, role: "secondary" as const } : a));
+  const all = [act("assistant.retry", `Ask ${name} again`, "primary", row.id), ...offered];
   return { ...item, actions: all.slice(0, 3), more: all.slice(3), handoff };
 }
 
@@ -416,7 +436,7 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     if (row.state === "failed") {
       return [{
         ...base, key: handoffKey(row.id), title: `${name} could not finish “${subject}” from ${who}`, why: row.error ?? NO_REASON, score: 50,
-        actions: [act("ivy.retry", `Ask ${name} again`, "primary"), act("ivy.discard", "Discard", "secondary")], more: open,
+        actions: [act("assistant.retry", `Ask ${name} again`, "primary"), act("assistant.discard", "Discard", "secondary")], more: open,
         detail: { ...base.detail, summary: row.error ?? NO_REASON },
         handoff: viewOf(row, now, name), since: row.finishedAt ?? row.createdAt,
       }];
@@ -425,7 +445,7 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     return [{
       ...base, key: handoffKey(row.id), title: `${name} drafted a reply to ${who}: “${subject}”`,
       why: row.account ? `Approve saves it in your ${row.account} Drafts; nothing is sent.` : "The mail source names no account for this mail, so the Desk cannot save the draft. Copy it from the card.", score: 60,
-      actions: row.account ? [act("ivy.approve", "Approve", "primary"), act("ivy.edit", "Edit", "secondary"), act("ivy.discard", "Discard", "secondary")] : [act("ivy.discard", "Discard", "primary")], more: open,
+      actions: row.account ? [act("assistant.approve", "Approve", "primary"), act("assistant.edit", "Edit", "secondary"), act("assistant.discard", "Discard", "secondary")] : [act("assistant.discard", "Discard", "primary")], more: open,
       detail: { ...base.detail, summary: row.findings.join("\n") },
       excerpt: draft,
       ...(row.account ? { reply: { to: senderOf(row.fromName, row.fromAddress), subject: replySubject(row.subject) } } : {}),

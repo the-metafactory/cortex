@@ -18,7 +18,7 @@ describe("Studio note writer", () => {
       expect(t.stand).toBe("Not settled.");
       expect(t.notes).toHaveLength(1);
       const note = t.notes[0];
-      expect(note).toMatchObject({ trigger: "Ivy conversation", model: "local", kind: "stand", status: "open", text: "Run the workshop in spring." });
+      expect(note).toMatchObject({ trigger: "Conversation", model: "local", kind: "stand", status: "open", text: "Run the workshop in spring." });
       expect(note?.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
       expect(t.log.at(-1)?.text).toBe(`Added Assistant's stand from conversation ?desk=conversation&conversation=${r.id}`);
       expect(r.repo.git("log", "-n", "1", "--format=%s")).toContain("Add Assistant's stand to alpha from a conversation");
@@ -45,7 +45,7 @@ describe("Studio note writer", () => {
 
       r.created((await r.submit({ thread: "gamma", kind: "idea", text: "Pair it with the autumn course." })).reply);
       const idea = r.parsed("gamma").notes[0];
-      expect(idea).toMatchObject({ kind: "idea", status: "open", trigger: "Ivy conversation" });
+      expect(idea).toMatchObject({ kind: "idea", status: "open", trigger: "Conversation" });
       expect(await act(r.repo.dir, { act: "dismiss", thread: "gamma", note: idea?.at ?? "" })).toMatchObject({ ok: true });
       expect(r.parsed("gamma").notes[0]?.status).toBe("dismissed");
     } finally { r.repo.clean(); }

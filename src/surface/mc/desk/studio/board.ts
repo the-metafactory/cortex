@@ -1,6 +1,6 @@
 import { responseCoverage } from "./response";
 import type { AreaPolicy } from "../types";
-import type { IvyNote, MaterialLink, StudioCapture, StudioTarget } from "./format";
+import type { AssistantNote, MaterialLink, StudioCapture, StudioTarget } from "./format";
 import type { StudioProblem, StudioProposalView, StudioThreadView, StudioView } from "./view";
 
 const DAY_MS = 86_400_000;
@@ -20,7 +20,7 @@ export interface BoardCard {
   place: number;
   thread: StudioThreadView;
   stand: string;
-  latest: IvyNote | null;
+  latest: AssistantNote | null;
   waitsOnYou: boolean;
   areas: BoardArea[];
   shared: SharedSource[];
@@ -93,8 +93,8 @@ const time = (iso: string): number => {
   return Number.isNaN(t) ? 0 : t;
 };
 
-export function latestNote(notes: readonly IvyNote[]): IvyNote | null {
-  let best: IvyNote | null = null;
+export function latestNote(notes: readonly AssistantNote[]): AssistantNote | null {
+  let best: AssistantNote | null = null;
   for (const n of notes) if (best === null || time(n.at) >= time(best.at)) best = n;
   return best;
 }

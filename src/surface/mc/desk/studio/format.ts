@@ -63,7 +63,7 @@ const ProposalFrontSchema = z.object({
   target: TargetSchema,
 });
 
-export interface IvyNote {
+export interface AssistantNote {
   at: string;
   trigger: string;
   model: string;
@@ -111,7 +111,7 @@ export interface StudioThread {
   reviewOn?: string;
   question: string;
   stand: string;
-  notes: IvyNote[];
+  notes: AssistantNote[];
   responses: StudioResponse[];
   material: MaterialLink[];
   log: LogEntry[];
@@ -177,9 +177,13 @@ function sections(body: string, level: "##" | "###"): { heading: string; text: s
   return out;
 }
 
+export const NOTES_HEADING = "Assistant's notes";
+
 const SECTION_KEYS: Record<string, string> = {
   question: "question",
   "where i stand": "stand",
+  "assistant's notes": "notes",
+  "assistant’s notes": "notes",
   "ivy's notes": "notes",
   "ivy’s notes": "notes",
   material: "material",
@@ -191,13 +195,19 @@ const SECTION_KEYS: Record<string, string> = {
 
 export const sectionKey = (heading: string): string | undefined => SECTION_KEYS[heading.trim().toLowerCase()];
 
+const legacyNotes = (heading: string): boolean => /^ivy['’]s notes$/i.test(heading.trim());
+
 function sectionMap(body: string): Parsed<Map<string, string>> {
   const map = new Map<string, string>();
+  const seen = new Set<string>();
   for (const { heading, text } of sections(body, "##")) {
     const key = sectionKey(heading);
     if (!key) continue;
-    if (map.has(key)) return failed(`has the section "${heading}" twice`);
-    map.set(key, text);
+    const spelling = key === "notes" && legacyNotes(heading) ? "notes:legacy" : key;
+    if (seen.has(spelling)) return failed(`has the section "${heading}" twice`);
+    seen.add(spelling);
+    const earlier = map.get(key);
+    map.set(key, earlier === undefined ? text : `${earlier}\n\n${text}`);
   }
   return { ok: true, value: map };
 }
@@ -205,7 +215,7 @@ function sectionMap(body: string): Parsed<Map<string, string>> {
 export const NOTE_META_KEYS = ["trigger", "model", "mode", "run", "kind", "status", "sample", "because", "relates"] as const;
 const NOTE_META = new RegExp(`^(${NOTE_META_KEYS.join("|")}):[ \\t]*(.*)$`);
 
-function parseNote(heading: string, text: string): Parsed<IvyNote> {
+function parseNote(heading: string, text: string): Parsed<AssistantNote> {
   if (!ISO_TIME.test(heading) || !validDate(heading)) return failed(`has a note headed "${heading}", which is not an ISO time with a zone`);
   const meta = new Map<string, string>();
   const lines = text.split("\n");
@@ -244,8 +254,8 @@ function parseNote(heading: string, text: string): Parsed<IvyNote> {
   };
 }
 
-function parseNotes(text: string): Parsed<IvyNote[]> {
-  const notes: IvyNote[] = [];
+function parseNotes(text: string): Parsed<AssistantNote[]> {
+  const notes: AssistantNote[] = [];
   for (const { heading, text: body } of sections(text, "###")) {
     const note = parseNote(heading, body);
     if (!note.ok) return note;

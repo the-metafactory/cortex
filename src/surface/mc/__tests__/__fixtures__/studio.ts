@@ -1,7 +1,7 @@
-import type { IvyNote } from "../../desk/studio/format";
+import type { AssistantNote } from "../../desk/studio/format";
 import type { StudioThreadView } from "../../desk/studio/view";
 
-export const studioNote = (at: string, over: Partial<IvyNote> = {}): IvyNote => ({ at, trigger: "Stale thread: unchanged for 6 days", model: "cloud", kind: "note", status: "open", sample: true, text: "A thought.", ...over });
+export const studioNote = (at: string, over: Partial<AssistantNote> = {}): AssistantNote => ({ at, trigger: "Stale thread: unchanged for 6 days", model: "cloud", kind: "note", status: "open", sample: true, text: "A thought.", ...over });
 
 export const studioThread = (slug: string, over: Partial<StudioThreadView> = {}): StudioThreadView => ({
   slug,

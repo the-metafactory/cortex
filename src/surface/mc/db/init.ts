@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 import { COLUMN_ADD_MIGRATIONS, REBUILD_MIGRATIONS, SCHEMA_SQL } from "./schema";
+import { ASSISTANT_ROW_MIGRATIONS } from "../desk/assistant-rows";
 
 /**
  * Open (or create) a SQLite database at the given path,
@@ -85,6 +86,8 @@ export function initDatabase(dbPath: string): Database {
       db.run("PRAGMA foreign_keys = ON");
     }
   }
+
+  for (const sql of ASSISTANT_ROW_MIGRATIONS) db.run(sql);
 
   return db;
 }

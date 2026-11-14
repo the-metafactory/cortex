@@ -9,7 +9,7 @@ const ACTION_WORD: Record<MailLogAction, string> = {
   archive: "Archived", junk: "Moved to Junk", trash: "Deleted", restore: "Undone", unimportant: "Marked unimportant", draft: "Reply drafted",
   plan: "Planned", todo: "Made a todo", snooze: "Snoozed", opened: "Opened", ignored: "Ignored", kept: "Read and kept", gone: "Gone from the inbox",
   digest: "Kept for the digest", unsubscribe: "Unsubscribed",
-  "expect-answer": "Expecting an answer", "no-answer": "Needs no answer", "waiting-done": "Stopped waiting", studio: "Added to the Studio", ivy: "Handed to the assistant", accept: "Invitation accepted", decline: "Invitation declined", "not-phishing": "Not phishing", attach: "Attached to a task",
+  "expect-answer": "Expecting an answer", "no-answer": "Needs no answer", "waiting-done": "Stopped waiting", studio: "Added to the Studio", assistant: "Handed to the assistant", accept: "Invitation accepted", decline: "Invitation declined", "not-phishing": "Not phishing", attach: "Attached to a task",
 };
 const WHERE_WORD: Record<MailLogWhere, string> = { desk: "On the Desk", client: "In your mail client", rule: "By your rules", correction: "Corrections you gave", conversation: "In a conversation", auto: "By the Desk on its own" };
 

@@ -2,7 +2,7 @@ import { needsResponse } from "./response";
 import { threadThinking, type ThreadThinking } from "./thinking-view";
 import type { AreaPolicy } from "../types";
 import { areaLookup, latestNote, sameSource, waitsOnYou, type BoardArea } from "./board";
-import type { IvyNote, LogEntry, MaterialLink } from "./format";
+import type { AssistantNote, LogEntry, MaterialLink } from "./format";
 import { dayMonth, outcomeLabel, TYPE_LABEL, withHref } from "./labels";
 import { NO_CONTEXT, relatesTo, type RelatesContext, type Relations, type SparPersona } from "./relates";
 import type { StudioThreadView, StudioView } from "./view";
@@ -25,11 +25,11 @@ export interface ThreadPage {
   choices: BoardArea[];
   policy: AreaPolicy;
   material: PageMaterial[];
-  standProposal: IvyNote | null;
-  ideas: IvyNote[];
-  notes: IvyNote[];
-  proposedRelations: IvyNote[];
-  latest: IvyNote | null;
+  standProposal: AssistantNote | null;
+  ideas: AssistantNote[];
+  notes: AssistantNote[];
+  proposedRelations: AssistantNote[];
+  latest: AssistantNote | null;
   waitsOnYou: boolean;
   needsResponse: boolean;
   log: LogEntry[];
@@ -37,8 +37,8 @@ export interface ThreadPage {
   relations: Relations;
 }
 
-const newestFirst = (a: IvyNote, b: IvyNote): number => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0);
-const isGhost = (n: IvyNote): boolean => n.status === "open" && (n.kind === "stand" || n.kind === "idea");
+const newestFirst = (a: AssistantNote, b: AssistantNote): number => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0);
+const isGhost = (n: AssistantNote): boolean => n.status === "open" && (n.kind === "stand" || n.kind === "idea");
 
 function whereLine(t: StudioThreadView, maxActive: number): string {
   const opened = `opened ${dayMonth(t.opened)}`;
@@ -66,7 +66,7 @@ export function findThread(studio: StudioView, slug: string): StudioThreadView |
   return allThreads(studio).find((t) => t.slug === slug);
 }
 
-export const proposedRelations = (thread: StudioThreadView): IvyNote[] => [...thread.notes].sort(newestFirst).filter((n) => n.kind === "relation" && n.status === "open");
+export const proposedRelations = (thread: StudioThreadView): AssistantNote[] => [...thread.notes].sort(newestFirst).filter((n) => n.kind === "relation" && n.status === "open");
 
 export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesContext = NO_CONTEXT): ThreadPage | null {
   const thread = findThread(studio, slug);

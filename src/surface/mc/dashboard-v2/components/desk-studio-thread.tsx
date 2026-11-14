@@ -3,7 +3,7 @@ import { DeskLink } from "./desk-link";
 import { deskLinkAttributes } from "../lib/desk-link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { clip, plainQuestion } from "../../desk/studio/board";
-import type { IvyNote } from "../../desk/studio/format";
+import type { AssistantNote } from "../../desk/studio/format";
 import { dayMonth, localDate } from "../../desk/studio/labels";
 import type { ThreadPage } from "../../desk/studio/page";
 import { relationCount, type Relation } from "../../desk/studio/relates";
@@ -139,7 +139,7 @@ function useZoomMotion(ref: RefObject<HTMLElement | null>, slug: string, zoom: T
 interface Wire {
   key: string;
   d: string;
-  ivy: boolean;
+  assistant: boolean;
 }
 
 function useWires(ref: RefObject<HTMLElement | null>, page: ThreadPage): Wire[] {
@@ -176,7 +176,7 @@ function useWires(ref: RefObject<HTMLElement | null>, page: ThreadPage): Wire[] 
       const y = r.top + Math.min(r.height / 2, 24);
       const left = n.dataset.wire === "in";
       const d = left ? curve(r.right, y, h.left, hy) : curve(h.right, hy, r.left, y);
-      out.push({ key: n.dataset.key ?? String(out.length), d, ivy: !left });
+      out.push({ key: n.dataset.key ?? String(out.length), d, assistant: !left });
     }
     setWires(out);
   }, [ref, page, tick]);
@@ -202,7 +202,7 @@ interface Acting {
   onDiscuss?: StartDiscussion;
 }
 
-function GhostActions({ keep, note, acting, discuss = true }: { keep: string; note: IvyNote; acting: Acting; discuss?: boolean }) {
+function GhostActions({ keep, note, acting, discuss = true }: { keep: string; note: AssistantNote; acting: Acting; discuss?: boolean }) {
   const { acts, slug } = acting;
   const off = !acts || acts.pending;
   const send = (act: "keep" | "dismiss") => () => void acts?.send({ act, thread: slug, note: note.at });
@@ -243,13 +243,13 @@ function ThreadActions({ page, acting, onBringBack }: { page: ThreadPage; acting
   );
 }
 
-function noteLabel(note: IvyNote): string {
+function noteLabel(note: AssistantNote): string {
   const kind = note.kind === "stand" ? "Proposed stand" : note.kind === "idea" ? "Idea" : "Note";
   const status = note.status === "kept" ? " · Kept" : note.status === "dismissed" ? " · Dismissed" : "";
   return `${kind}${status}`;
 }
 
-function NoteCard({ note, id, label, className, ghost, wire = true, children }: { note: IvyNote; id: string; label: string; className: string; ghost?: string; wire?: boolean; children?: ReactNode }) {
+function NoteCard({ note, id, label, className, ghost, wire = true, children }: { note: AssistantNote; id: string; label: string; className: string; ghost?: string; wire?: boolean; children?: ReactNode }) {
   return (
     <div className={className} data-ghost={ghost} data-wire={wire ? "out" : undefined} data-key={wire ? id : undefined}>
       <span className="lbl">{label}<span>{dayMonthTime(new Date(note.at))} · {modelName(note.model)}{note.mode ? ` · ${note.mode.replaceAll("-", " ")}` : ""}</span></span>
@@ -273,7 +273,7 @@ function RelationItem({ r, onOpen }: { r: Relation; onOpen: (slug: string) => vo
   return <div className="dst-relitem" data-rel={r.kind}>{body}</div>;
 }
 
-function ProposedRelation({ note, acting }: { note: IvyNote; acting: Acting }) {
+function ProposedRelation({ note, acting }: { note: AssistantNote; acting: Acting }) {
   const r = note.relates;
   return (
     <div className="dst-relitem ghost" data-rel="proposed">
@@ -362,7 +362,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
       <PageHeader onBack={onBack} actions={<ThreadActions page={page} acting={acting} {...(onBringBack ? { onBringBack } : {})} />}>{page.typeLabel} · {page.where}</PageHeader>
       <div className="dst-canvas">
         <svg className="dst-wires" aria-hidden="true">
-          {wires.map((w) => <path key={w.key} d={w.d} className={w.ivy ? "ivy" : ""} />)}
+          {wires.map((w) => <path key={w.key} d={w.d} className={w.assistant ? "assistant" : ""} />)}
         </svg>
         <div className="dst-col mid">
           <div className="dst-hub" data-hub>

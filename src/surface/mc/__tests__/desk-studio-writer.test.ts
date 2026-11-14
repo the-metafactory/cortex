@@ -433,7 +433,7 @@ describe("POST /api/desk/studio/act", () => {
     expect(res.status).toBe(200);
     const t = parsed("who-owns-the-spring-workshop");
     expect(t).toMatchObject({ state: "active", type: "question", areas: ["lab"] });
-    expect(t.material.map((m) => m.label)).toEqual([`Ivy conversation: ${link}`]);
+    expect(t.material.map((m) => m.label)).toEqual([`Conversation: ${link}`]);
     expect(t.log[0]?.text).toBe(`Opened from a conversation with Assistant: ${link}`);
     expect(commits()[0]).toBe("Studio: Open who-owns-the-spring-workshop from a conversation with Assistant");
     expect(existsSync(join(dir, "inbox/lecture.md"))).toBe(true);

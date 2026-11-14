@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { WriterRunner } from "./create";
 import { CommandTimeout } from "../common/spawn";
 import { oneLine } from "./actions";
+import { handoffKey } from "./handoff";
 
 export interface TaskCloser {
   argv: readonly string[];
@@ -36,7 +37,7 @@ export function queueTaskClose(db: Database, ids: readonly string[]): void {
 }
 
 async function runCloser(row: PendingRow, closer: TaskCloser): Promise<string | null> {
-  const request = { action: "close", task: row.task_id, outcome: row.state === "approved" ? "approved" : "discarded", receipt: `ivy:${row.id}` };
+  const request = { action: "close", task: row.task_id, outcome: row.state === "approved" ? "approved" : "discarded", receipt: handoffKey(row.id) };
   try {
     const out = await closer.run([...closer.argv], JSON.stringify(request), closer.timeoutMs);
     if (out.code !== 0) return oneLine(out.stderr || out.stdout, `The task closer exited with code ${out.code}.`);
