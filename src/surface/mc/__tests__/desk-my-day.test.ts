@@ -570,7 +570,7 @@ describe("outline-add creates a task or project with its note and due date", () 
     const outlineId = change({ op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: "area:work", title: "Plain" }).outlineId;
     if (!outlineId) throw new Error("Missing outline id");
     const node = work().find(n => n.id === outlineId);
-    expect(node).toEqual({ id: outlineId, title: "Plain", weight: 50, ordering: "parallel", children: [], effort: 1 });
+    expect(node).toEqual({ id: outlineId, title: "Plain", weight: 50, ordering: "parallel", children: [], effort: 1, createdAt: DATE, touchedAt: DATE });
   });
 });
 describe("outline-remove deletes an Inbox task with no completion history", () => {

@@ -3,16 +3,12 @@ import { balanceSyncFixture, SYNC_NOW, syncFixtureState } from "../src/surface/m
 import { findNode } from "../src/balance";
 import { saveBalanceState, loadBalanceState } from "../src/surface/mc/desk/balance-store";
 import { loadMeta } from "../src/surface/mc/desk/balance-sync";
-import { changeMyDay, readMyDay, type MyDayView } from "../src/surface/mc/desk/my-day";
+import { changeMyDay, readMyDay } from "../src/surface/mc/desk/my-day";
 import { syncStudioBalance, withStudioProjection } from "../src/surface/mc/desk/studio-my-day";
+import { serveMyDayRoute } from "./lib/my-day-route";
 
 const stack = await balanceSyncFixture();
-const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: stack.readRoute });
-const get = async (): Promise<MyDayView> => {
-  const response = await fetch(new URL("/api/desk/my-day", server.url));
-  assert.equal(response.status, 200);
-  return response.json() as Promise<MyDayView>;
-};
+const { server, get } = serveMyDayRoute(stack.readRoute);
 try {
   for (const populated of [false, true]) {
     if (populated) saveBalanceState(stack.db, syncFixtureState());

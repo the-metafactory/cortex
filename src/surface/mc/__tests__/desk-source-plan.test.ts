@@ -10,8 +10,10 @@ import { HandledLedger } from "../desk/actions";
 import { afterEach, beforeEach, expect, it, setSystemTime } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
-import { DEFAULT_SETTINGS, findNode, type AppState } from "../../../balance";
+import { DEFAULT_SETTINGS, findNode, type AppState, type OutlineNode } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
+import { balanceNodeSnapshot } from "../desk/balance-store-schema";
+import { saveMeta, syncBalance } from "../desk/balance-sync";
 import {
   changeMyDay,
   localDay,
@@ -563,4 +565,36 @@ it("rejects a parent snapshot changed by Studio while the read-only model propos
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+it("stamps a planned source row with today's created and touched dates", () => {
+  const { result } = plan();
+  const node = findNode(result.view.outline, result.outlineId ?? "");
+  expect(node).toMatchObject({ createdAt: date, touchedAt: date });
+});
+it("stamps a source planned into the Inbox", () => {
+  const { result } = plan(null);
+  expect(result.view.inbox.find((node) => node.id === result.outlineId)).toMatchObject({ createdAt: date, touchedAt: date });
+});
+it("reverses a source planned before touch tracking after a sync adds no dates", () => {
+  const filing = crypto.randomUUID();
+  const legacy: OutlineNode = { id: "todo:legacy", title: item.title, weight: 50, ordering: "parallel", children: [], effort: 1, note: `From ${item.source}: ${item.key}`, dueDate: "2026-11-04" };
+  const link = { taskId: legacy.id, key: item.key, fingerprint: sourceIdentity(item), kind: item.kind };
+  const state = loadBalanceState(db);
+  const parent = state ? findNode(state.outline, "area:work") : null;
+  if (!state || !parent) throw new Error("missing fixture");
+  parent.children.push(legacy);
+  saveBalanceState(db, state);
+  const meta = loadMeta(db);
+  meta.sources.push(link);
+  meta.planned.push({ filing, taskId: legacy.id, parent: "area:work", snapshot: balanceNodeSnapshot(legacy), sourceSnapshot: JSON.stringify(link), reversed: false });
+  saveMeta(db, meta);
+  syncBalance(db, desk, now);
+  const loaded = loadBalanceState(db);
+  const stored = loaded ? findNode(loaded.outline, legacy.id) : null;
+  expect(stored).toMatchObject({ title: item.title, dueDate: "2026-11-04" });
+  expect(stored?.createdAt).toBeUndefined();
+  expect(stored?.touchedAt).toBeUndefined();
+  const reversed = changeMyDay({ db, desk, now, date, requestId: crypto.randomUUID(), command: { op: "source-unplan", id: legacy.id, filing } });
+  expect(findNode(reversed.view.outline, legacy.id)).toBeNull();
+  expect(reversed.view.sources).toHaveLength(0);
 });

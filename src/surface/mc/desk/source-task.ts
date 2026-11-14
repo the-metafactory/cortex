@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { MyDayMeta } from "./my-day-schema";
 import type { DeskItem } from "./types";
 import { localDay } from "./time";
+import { stampCreated } from "./balance-touch";
 
 export function sourceIdentity(item: DeskItem): string {
   const sourceFacts = [
@@ -18,14 +19,14 @@ export function sourceIdentity(item: DeskItem): string {
       : [...sourceFacts, item.title, item.detail.summary];
   return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
-export function todo(meta: MyDayMeta, item: DeskItem): string {
+export function todo(meta: MyDayMeta, item: DeskItem, date: string): string {
   const existing = meta.sources.find(
     (s) => s.fingerprint === sourceIdentity(item),
   );
   if (existing) return existing.taskId;
   const id = `todo:${crypto.randomUUID()}`;
   const url = item.detail.links[0]?.url;
-  meta.inbox.push({
+  meta.inbox.push(stampCreated({
     id,
     title: item.title,
     weight: 50,
@@ -40,7 +41,7 @@ export function todo(meta: MyDayMeta, item: DeskItem): string {
             : localDay(Date.parse(item.dueAt)),
         }
       : {}),
-  });
+  }, date));
   meta.sources.push({
     taskId: id,
     key: item.key,

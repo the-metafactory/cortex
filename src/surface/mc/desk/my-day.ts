@@ -7,6 +7,7 @@ import { planSource, unplanSource } from "./source-plan";
 import { studioLinks, studioOwned, studioProjectLinks, type StudioProjectLink, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
+import { stampCreated, stampTouched } from "./balance-touch";
 import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-day";
 import type { Database } from "bun:sqlite";
 import { applyDayToHistory, findNode, rankAll, recurrenceProjection, selectToday, shiftDays, todayPlanIds, type AppState, type OutlineNode, type RecurrenceProjection, type TodayItem } from "../../../balance";
@@ -48,6 +49,7 @@ export interface MyDayView {
   outline: MyDayOutlineNode;
   observation: Pick<BalanceDayProjection, "status" | "observedAt"> | null;
   sources: MyDayMeta["sources"];
+  touchTrackingSince: string | null;
   yesFilter: string[];
   undos: { receipt: string; title: string }[];
   dayUndo: { receipt: string; text: string } | null;
@@ -81,14 +83,15 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
     wins: state.log.filter(e => e.date === date).map(({ taskId, title }) => ({ taskId, title })),
     undos: meta.undos.filter(u => !u.used && u.date === date).map(u => ({ receipt: u.receipt, title: findNode(state.outline, u.taskId)?.title ?? "Task" })),
     dayUndo: dayUndo ? { receipt: dayUndo.receipt, text: dayUndo.text } : null,
-    outline: withRecurrence(state.outline), observation: projection ? { status: projection.status, observedAt: projection.observedAt } : null, sources: meta.sources, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
+    outline: withRecurrence(state.outline), observation: projection ? { status: projection.status, observedAt: projection.observedAt } : null, sources: meta.sources, touchTrackingSince: meta.touchTrackingSince ?? null, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
   };
 }
 const withLinks = (db: Database, view: Omit<MyDayView, "links">): MyDayView => ({ ...view, links: taskLinks(db, view) });
 export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?: StudioProjection, projection?: BalanceDayProjection): MyDayView {
   return db.transaction(() => {
     const meta = loadMeta(db);
-    return withHandoffs(withLinks(db, viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio, projection)), db, desk, now);
+    const date = localDay(now);
+    return withHandoffs(withLinks(db, viewOf(loadMyDayState(db, desk, meta, date), meta, desk, date, studio, projection)), db, desk, now);
   }).deferred();
 }
 export function movedKeys(db: Database): Set<string> {
@@ -112,13 +115,14 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
   node.weight = command.weight;
   if (command.dueDate) node.dueDate = command.dueDate;
   else delete node.dueDate;
+  stampTouched(node, date);
 }
 /** `reopenable` makes an `outline-complete` of an open task return an undo receipt that My Day `undo` turns into a reopen. */
 export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection; reopenable?: boolean }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string } {
   const { db, desk, now, date, requestId, command, source, studio } = args;
   return db.transaction(() => {
     const meta = loadMeta(db);
-    const state = loadMyDayState(db, desk, meta);
+    const state = loadMyDayState(db, desk, meta, date);
     const payload = JSON.stringify({ date, command });
     const receipt = meta.receipts.find(r => r.id === requestId);
     if (receipt) {
@@ -255,7 +259,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         }
         if (source?.key !== command.key) throw new Error("This source item is no longer on the Desk.");
         if (sourceIdentity(source) !== command.fingerprint) throw new Error("The source changed since you opened it. Refresh before moving it to your Inbox.");
-        outlineId = todo(meta, source);
+        outlineId = todo(meta, source, date);
         break;
       }
       case "propose":
@@ -276,12 +280,12 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         meta.caps = { cap: todayCap(meta, desk), topN: command.topN };
         break;
       case "file": {
-        fileBalanceInbox(state, meta, desk, command.id, command.parent);
+        fileBalanceInbox(state, meta, desk, command.id, command.parent, date);
         break;
       }
       case "add": {
         const parent = outlineDestination(state, desk, command.parent);
-        const added: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "task" ? { effort: 1 } : { done: true }) };
+        const added = stampCreated({ id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "task" ? { effort: 1 } : { done: true }) }, date);
         parent.children.push(added);
         if (command.kind === "task") joined = added.id;
         break;
