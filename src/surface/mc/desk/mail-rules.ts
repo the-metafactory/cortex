@@ -10,7 +10,7 @@ import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
 import type { DeskItem } from "./types";
 import { isVip, listVips } from "./vips";
-import { snoozedIds } from "./mail-snooze";
+import { offDeskIds } from "./links";
 import { readClassifications } from "./classify";
 import { isSuspicious, suspicionContext, type SuspicionContext } from "./mail-suspicion";
 
@@ -214,8 +214,8 @@ export function pendingRuleMail(db: Database, mails: readonly SourceMail[], susp
   const ids = mails.map((m) => m.id);
   const ran = ranIds(db, ids);
   const flagged = flaggedByClassifier(db, ids);
-  const snoozed = snoozedIds(db);
-  return new Set(mails.filter((m) => !ran.has(m.id) && !snoozed.has(m.id) && ruleFor(rules, m, suspicion, flagged.has(m.id))).map((m) => m.id));
+  const offDesk = offDeskIds(db);
+  return new Set(mails.filter((m) => !ran.has(m.id) && !offDesk.has(m.id) && ruleFor(rules, m, suspicion, flagged.has(m.id))).map((m) => m.id));
 }
 
 const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze"]);
@@ -482,10 +482,10 @@ export async function runMailRules(readings: readonly SourceReading[], deps: Rul
   const listed = readings.filter((r) => r.error === null).flatMap((r) => r.mail.filter((m) => m.unread).map((m): ListedMail => ({ ...m, sourceId: r.id })));
   const ran = ranIds(db, listed.map((m) => m.id));
   const flagged = flaggedByClassifier(db, listed.map((m) => m.id));
-  const snoozed = snoozedIds(db);
+  const offDesk = offDeskIds(db);
   const byRule = new Map<string, ListedMail[]>();
   for (const m of listed) {
-    if (ran.has(m.id) || snoozed.has(m.id) || movedTarget(deps.ledger, m.id) !== undefined) continue;
+    if (ran.has(m.id) || offDesk.has(m.id) || movedTarget(deps.ledger, m.id) !== undefined) continue;
     const rule = ruleFor(rules, m, suspicion, flagged.has(m.id));
     if (rule) byRule.set(rule.id, [...(byRule.get(rule.id) ?? []), m]);
   }

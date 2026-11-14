@@ -14,6 +14,7 @@ import { SourceCache, type SourceMail, type SourceReading } from "../desk/source
 import { DAY_MS } from "../desk/time";
 import { addVip } from "../desk/vips";
 import { initDatabase } from "../db/init";
+import { attachMail } from "../desk/links";
 import { mailDesk, queue } from "./desk-mail-fixtures";
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
@@ -148,6 +149,14 @@ describe("rule passes", () => {
     expect(db.query("SELECT action, title, status FROM desk_done").all()).toEqual([{ action: "mail.rule", title: "Archived by your rule: “Report m1”", status: "done" }]);
     expect(queryMailLog(db).map((e) => [e.messageId, e.action, e.where])).toEqual([["m1", "archive", "rule"]]);
     expect(listRules(db)[0]).toMatchObject({ count: 1, lastRunAt: NOW });
+  });
+
+  it("skips a mail attached to a task", async () => {
+    approve("reports@dmarc.example");
+    attachMail(db, { ...mail("m1", "reports@dmarc.example"), sourceId: "work-mail" }, { kind: "task", key: "kickoff", title: "Kickoff prep" }, { id: "link-1", requestId: "attach-1", origin: "desk", now: NOW });
+    const { q, deps } = passDeps([moved("m2")]);
+    expect(await runMailRules([reading([mail("m1", "reports@dmarc.example"), mail("m2", "reports@dmarc.example")])], deps)).toEqual({ handled: 1, failed: 0, paused: [] });
+    expect(q.calls.map((c) => (c.stdin as { messageId: string }).messageId)).toEqual(["m2"]);
   });
 
   it("never touches a VIP's mail", async () => {
