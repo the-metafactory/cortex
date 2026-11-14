@@ -109,6 +109,15 @@ export function heldDuringMeeting(items: DeskItem[], availability: CalendarAvail
   return items.filter((item) => item.kind !== "adapter");
 }
 
+export function quietAdapterInterrupts(items: DeskItem[], availability: CalendarAvailability | undefined, now: number): DeskItem[] {
+  if (availability === undefined || currentGap(availability, now).kind !== "busy") return items;
+  return items.map((item) => {
+    if (item.kind !== "adapter" || item.interrupt === undefined) return item;
+    const { interrupt: _held, ...quiet } = item;
+    return quiet;
+  });
+}
+
 function failure(sent: Delivery | undefined, now: number): string | null {
   if (sent?.status === "failed") return sent.error ?? "The transport gave no reason.";
   if (sent?.status === "sending" && now - sent.createdAt > STUCK_MS) return STUCK;

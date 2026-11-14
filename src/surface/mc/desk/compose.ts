@@ -45,7 +45,7 @@ import type { ParserPermissions } from "../../../common/types/desk-parser";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
-import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
+import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
 import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
@@ -339,7 +339,7 @@ export async function composeDesk(
   const studioSlugs = new Map([...myDay.studioTasks, ...myDay.studioProjects].map(link => [link.id, link.slug]));
   const adapterRows = adapters.items.map(item => withOwnerRespond(item, adapters.owners.get(item.key), studioSlugs, myDay.outline));
   sources.push(...adapters.sources);
-  const corrected = applyCorrections([...markInterrupts([
+  const corrected = applyCorrections(quietAdapterInterrupts([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set(deskCalendar.map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
@@ -349,7 +349,7 @@ export async function composeDesk(
     ...waitingCards,
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
     ...adapterRows,
-  ], rules, readDeliveries(db), now)], activeCorrections);
+  ], rules, readDeliveries(db), now)], availability, now), activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));

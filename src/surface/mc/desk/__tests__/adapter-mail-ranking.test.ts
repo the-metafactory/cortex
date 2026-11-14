@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../db/init";
 import { composeDesk } from "../compose";
-import { heldDuringMeeting, markInterrupts, NO_INTERRUPTIONS, type InterruptRules } from "../interrupt";
+import { heldDuringMeeting, markInterrupts, quietAdapterInterrupts, NO_INTERRUPTIONS, type InterruptRules } from "../interrupt";
 import { assertRoute, contentFrom, sourceBoundary, CloudRouteRefused } from "../source-boundary";
 import type { CalendarAvailability } from "../calendar-availability";
 import type { Json } from "../../../../conversations/domain-adapters/operations/types";
@@ -72,6 +72,17 @@ test("the host holds an adapter interrupt during a meeting and releases it after
   expect(heldDuringMeeting(view.items, meeting(now, true), now)).toEqual([]);
   expect(heldDuringMeeting(view.items, meeting(now, false), now)).toEqual(view.items);
   expect(heldDuringMeeting(view.items, meeting(now, true), now + HOUR)).toEqual(view.items);
+});
+
+test("a busy meeting strips the adapter interrupt marker from the card, which stays listed", async () => {
+  const on: InterruptRules = { ...NO_INTERRUPTIONS, transport: "discord", mail: true };
+  const { view } = await composeRanked(item => [mail(item, "Urgent", 0, true)], on);
+  const now = view.generatedAt;
+  expect(view.items.some(i => i.interrupt !== undefined)).toBe(true);
+  const quiet = quietAdapterInterrupts(view.items, meeting(now, true), now);
+  expect(quiet.length).toBe(view.items.length);
+  expect(quiet.some(i => i.interrupt !== undefined)).toBe(false);
+  expect(quietAdapterInterrupts(view.items, meeting(now, false), now)).toEqual(view.items);
 });
 
 test("ranked rows get no actions from adapter data, only from the binding's declared capabilities", async () => {
