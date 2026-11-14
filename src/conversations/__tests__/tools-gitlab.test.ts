@@ -76,6 +76,33 @@ describe("GitLab reads through conversation dispatch", () => {
     expect(r.argvs.every(argv => argv[argv.indexOf("--hostname") + 1] === HOST)).toBe(true);
   });
 
+  test("discussion continuation preserves exact note and page boundaries", async () => {
+    for (const [count, notesPage, ids, incomplete, nextNotesPage, notesLimitReached] of [
+      [3, 1, [1, 2, 3], false, null, false],
+      [4, 1, [1, 2, 3], true, 2, false],
+      [4, 2, [4], true, null, false],
+      [60, 20, [58, 59, 60], true, null, false],
+      [61, 20, [58, 59, 60], true, null, true],
+    ] as const) {
+      const notes = Array.from({ length: count }, (_, i) => ({ id: i + 1, body: "Note", author: { username: "u" }, created_at: FETCHED }));
+      const r = gitlabRig({ [`${PATH}/issues/3/discussions`]: ok([{ id: "thread", notes }]) });
+      const result = await status(r, "gitlab_discussions", { ...base, kind: "issue", number: 3, notesPage });
+      expect(result).toMatchObject({ status: "ok", discussions: [{ incomplete, nextNotesPage, notesLimitReached, notes: ids.map(id => expect.objectContaining({ id })) }] });
+    }
+  });
+
+  test("MR search and item reads enforce the same head and canonical identity rules", async () => {
+    for (const [patch, expected] of [[{ sha: null }, "invalid-payload"], [{ project_id: 99 }, "identity-mismatch"], [{ web_url: issue.web_url }, "identity-mismatch"]] as const) {
+      const r = gitlabRig({ [`${PATH}/merge_requests`]: ok([{ ...mr, ...patch }]), [`${PATH}/merge_requests/7`]: ok({ ...mr, ...patch }) });
+      for (const tool of ["gitlab_search", "gitlab_item"]) {
+        const result = await status(r, tool, tool === "gitlab_search" ? { ...base, kind: "mr" } : { ...mrInput, kind: "mr" });
+        expect(result.status).toBe(expected);
+        expect(result.items).toBeUndefined();
+        expect(result.item).toBeUndefined();
+      }
+    }
+  });
+
   test("changes, commits and pipelines are bounded head-pinned pages", async () => {
     const r = gitlabRig({
       [`${PATH}/merge_requests/7/diffs`]: ok([{ old_path: "a", new_path: "b", diff: "x".repeat(5000), collapsed: false }]),
@@ -88,6 +115,62 @@ describe("GitLab reads through conversation dispatch", () => {
     let heads = 0;
     r.routes.set(`${PATH}/merge_requests/7`, () => ok({ ...mr, sha: heads++ === 0 ? HEAD : "b".repeat(40) }));
     expect(await status(r, "gitlab_mr_changes", mrInput)).toMatchObject({ status: "head-changed" });
+  });
+
+  test("MR pages observe the final head after the page completes", async () => {
+    for (const [tool, suffix] of [["gitlab_mr_changes", "diffs"], ["gitlab_mr_commits", "commits"], ["gitlab_pipelines", "pipelines"]] as const) {
+      let sha = HEAD;
+      const r = gitlabRig({
+        [`${PATH}/merge_requests/7`]: () => ok({ ...mr, sha }),
+        [`${PATH}/merge_requests/7/${suffix}`]: async () => {
+          await Promise.resolve();
+          sha = "b".repeat(40);
+          return ok([]);
+        },
+      });
+      const result = await status(r, tool, mrInput);
+      expect(result.status).toBe("head-changed");
+      expect(result.entries).toBeUndefined();
+    }
+  });
+
+  test("pipeline page verification withholds evidence when the MR pipeline changes", async () => {
+    const r = gitlabRig({ [`${PATH}/merge_requests/7/pipelines`]: () => {
+      r.routes.set(`${PATH}/merge_requests/7`, ok({ ...mr, head_pipeline: { id: 82 } }));
+      return ok([pipeline]);
+    } });
+    const result = await status(r, "gitlab_pipelines", mrInput);
+    expect(result.status).toBe("state-changed");
+    expect(result.entries).toBeUndefined();
+  });
+
+  test("job post-read checks overlap after the jobs have been read", async () => {
+    let pipelineReads = 0;
+    let mrReads = 0;
+    let jobsRead = false;
+    let pipelinePending = false;
+    let overlapped = false;
+    const r = gitlabRig({
+      [pipelinePath]: async () => {
+        if (++pipelineReads === 2) {
+          expect(jobsRead).toBe(true);
+          pipelinePending = true;
+          await new Promise(resolve => setTimeout(resolve, 10));
+          pipelinePending = false;
+        }
+        return ok(pipeline);
+      },
+      [`${PATH}/merge_requests/7`]: () => {
+        if (++mrReads === 2) {
+          expect(jobsRead).toBe(true);
+          overlapped = pipelinePending;
+        }
+        return ok(mr);
+      },
+      [jobsPath]: () => { jobsRead = true; return ok([job]); },
+    });
+    expect(await status(r, "gitlab_jobs", { ...mrInput, pipeline: 81 })).toMatchObject({ status: "ok", jobs: [{ id: job.id }] });
+    expect(overlapped).toBe(true);
   });
 
   test("jobs retain live status; stale SHA, changing head and changing pipeline withhold evidence", async () => {

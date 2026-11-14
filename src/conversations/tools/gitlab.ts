@@ -9,6 +9,7 @@ interface Target { host: string; repo: string; path: string; url: string }
 const Id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const Sha = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const Page = z.number().int().min(1).max(20).default(1);
+const NOTES_PER_THREAD = 3;
 const Kind = z.enum(["issue", "mr"]);
 const Paging = { page: Page, perPage: z.number().int().min(1).max(10).default(5) };
 const ItemInput = z.object({ project: SourceId, kind: Kind, number: Id }).strict();
@@ -57,6 +58,22 @@ const parse = <T>(schema: z.ZodType<T>, data: unknown): T => {
 };
 const itemPath = (kind: z.infer<typeof Kind>, number: number): string => `/${kind === "mr" ? "merge_requests" : "issues"}/${number}`;
 const itemUrl = (target: Target, kind: z.infer<typeof Kind>, number: number): string => `${target.url}/-${itemPath(kind, number)}`;
+const checkItem = (item: z.infer<typeof Item>, target: Target, projectId: number, kind: z.infer<typeof Kind>): void => {
+  requireIdentity(item.project_id === projectId && item.web_url === itemUrl(target, kind, item.iid));
+  if (kind === "mr" && !item.sha) throw new ReadFailure("invalid-payload", "GitLab returned no MR head SHA.");
+};
+const threadPage = (thread: z.infer<typeof Discussion>, notesPage: number, webUrl: string) => {
+  const offset = (notesPage - 1) * NOTES_PER_THREAD;
+  const end = offset + NOTES_PER_THREAD;
+  const hasMore = thread.notes.length > end;
+  return {
+    id: clip(thread.id, 100),
+    incomplete: notesPage > 1 || thread.notes.length > NOTES_PER_THREAD,
+    nextNotesPage: hasMore && notesPage < 20 ? notesPage + 1 : null,
+    notesLimitReached: notesPage === 20 && hasMore,
+    notes: thread.notes.slice(offset, end).map(note => ({ id: note.id, body: clip(note.body, 200), author: clip(note.author.username, 64), createdAt: clip(note.created_at, 40), resolved: note.resolved, url: `${webUrl}#note_${note.id}` })),
+  };
+};
 
 export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefinition[] {
   const run: GitlabRunner = options.run ?? ((argv, timeout, signal) => runCommand(argv, timeout, undefined, undefined, true, { maxOutputBytes: 1_000_000, signal }));
@@ -74,8 +91,8 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
   };
   const readItem = async (target: Target, projectId: number, kind: z.infer<typeof Kind>, number: number, signal: AbortSignal) => {
     const item = parse(Item, await get(target, itemPath(kind, number), signal));
-    requireIdentity(item.project_id === projectId && item.iid === number && item.web_url === itemUrl(target, kind, number));
-    if (kind === "mr" && !item.sha) throw new ReadFailure("invalid-payload", "GitLab returned no MR head SHA.");
+    requireIdentity(item.iid === number);
+    checkItem(item, target, projectId, kind);
     return item;
   };
   const ensureHead = (before: z.infer<typeof Item>, after: z.infer<typeof Item>): void => {
@@ -90,7 +107,9 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
       if (typeof target === "string") return target;
       try {
         const result = await attempt(["glab", "auth", "status", "--hostname", target.host]);
-        return result.code === 0 ? null : `${classify(result).status}: ${classify(result).message}`;
+        if (result.code === 0) return null;
+        const failure = classify(result);
+        return `${failure.status}: ${failure.message}`;
       } catch (error) { return error instanceof ReadFailure ? `${error.status}: ${error.message}` : "unavailable: GitLab client could not be reached."; }
     },
     run: async (raw, context) => {
@@ -114,10 +133,7 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
   const project = define("gitlab_project", "Read configured GitLab project metadata, visibility and canonical URL.", z.object({ project: SourceId }).strict(), (_input, _target, _id, _signal, metadata) => Promise.resolve({ project: { ...metadata, description: clip(metadata.description, 500) } }));
   const search = define("gitlab_search", "Search a bounded page of issues or MRs within the configured GitLab project only. Text is a literal project search; nextPage continues.", z.object({ project: SourceId, kind: Kind, query: z.string().max(256).regex(/^[^\r\n\0]*$/).default(""), state: z.enum(["opened", "closed", "all"]).default("all"), ...Paging }).strict(), async (input, target, projectId, signal) => {
     const entries = parse(z.array(Item).max(input.perPage), await get(target, input.kind === "mr" ? "/merge_requests" : "/issues", signal, { search: input.query, state: input.state, scope: "all", page: input.page, per_page: input.perPage, order_by: "updated_at", sort: "desc" }));
-    for (const item of entries) {
-      requireIdentity(item.project_id === projectId && item.web_url === itemUrl(target, input.kind, item.iid));
-      if (input.kind === "mr" && !item.sha) throw new ReadFailure("invalid-payload", "GitLab returned no MR head SHA.");
-    }
+    for (const item of entries) checkItem(item, target, projectId, input.kind);
     return { ...pageResult(input, entries.length), items: entries.map(item => ({ number: item.iid, title: clip(item.title, 300), state: item.state, url: item.web_url, updatedAt: item.updated_at, ...(item.sha ? { headSha: item.sha } : {}) })) };
   });
   const item = define("gitlab_item", "Read one authorized GitLab issue or MR. MRs include their observed head SHA.", ItemInput, async (input, target, projectId, signal) => {
@@ -129,16 +145,15 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
     const threads = parse(z.array(Discussion).max(input.perPage), await get(target, `${itemPath(input.kind, input.number)}/discussions`, signal, { page: input.page, per_page: input.perPage }));
     for (const thread of threads) for (const note of thread.notes) requireIdentity((note.project_id === undefined || note.project_id === projectId) && (note.noteable_iid === undefined || note.noteable_iid === input.number));
     if (input.kind === "mr") ensureHead(before, await readItem(target, projectId, "mr", input.number, signal));
-    const noteOffset = (input.notesPage - 1) * 3;
-    return { url: before.web_url, ...(before.sha ? { headSha: before.sha } : {}), ...pageResult(input, threads.length), notesPage: input.notesPage, discussions: threads.map(thread => ({ id: clip(thread.id, 100), incomplete: input.notesPage > 1 || thread.notes.length > 3, nextNotesPage: thread.notes.length > noteOffset + 3 && input.notesPage < 20 ? input.notesPage + 1 : null, notesLimitReached: input.notesPage === 20 && thread.notes.length > noteOffset + 3, notes: thread.notes.slice(noteOffset, noteOffset + 3).map(note => ({ id: note.id, body: clip(note.body, 200), author: clip(note.author.username, 64), createdAt: clip(note.created_at, 40), resolved: note.resolved, url: `${before.web_url}#note_${note.id}` })) })) };
+    return { url: before.web_url, ...(before.sha ? { headSha: before.sha } : {}), ...pageResult(input, threads.length), notesPage: input.notesPage, discussions: threads.map(thread => threadPage(thread, input.notesPage, before.web_url)) };
   });
-  const mrPage = <T>(name: string, description: string, suffix: string, schema: z.ZodType<T>, convert: (entry: T, target: Target, projectId: number) => object) => define(name, description, MrInput, async (input, target, projectId, signal) => {
+  const mrPage = <T>(name: string, description: string, suffix: string, schema: z.ZodType<T>, convert: (entry: T, target: Target, projectId: number) => object, verify?: (before: z.infer<typeof Item>, after: z.infer<typeof Item>) => void) => define(name, description, MrInput, async (input, target, projectId, signal) => {
     const before = await readItem(target, projectId, "mr", input.number, signal);
     const entries = parse(z.array(schema).max(input.perPage), await get(target, `${itemPath("mr", input.number)}/${suffix}`, signal, { page: input.page, per_page: input.perPage }));
     const values = entries.map(entry => convert(entry, target, projectId));
     const after = await readItem(target, projectId, "mr", input.number, signal);
     ensureHead(before, after);
-    if (suffix === "pipelines" && before.head_pipeline?.id !== after.head_pipeline?.id) throw new ReadFailure("state-changed", "The MR pipeline changed during the read; results were withheld.");
+    verify?.(before, after);
     return { url: before.web_url, headSha: before.sha, ...pageResult(input, entries.length), entries: values };
   });
   const changes = mrPage("gitlab_mr_changes", "Read a bounded page of MR file diffs pinned to its observed head SHA; collapsed, too-large and clipped diffs remain explicit.", "diffs", Change, entry => ({ oldPath: entry.old_path, newPath: entry.new_path, diff: clip(entry.diff, 1000), incomplete: entry.collapsed === true || entry.too_large === true || entry.diff === undefined || entry.diff.length > 1000, newFile: entry.new_file, deletedFile: entry.deleted_file }));
@@ -150,6 +165,8 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
     const url = `${target.url}/-/pipelines/${entry.id}`;
     requireIdentity((entry.project_id === undefined || entry.project_id === projectId) && (entry.web_url === undefined || entry.web_url === url));
     return { id: entry.id, sha: entry.sha, status: entry.status, url, updatedAt: entry.updated_at };
+  }, (before, after) => {
+    if (before.head_pipeline?.id !== after.head_pipeline?.id) throw new ReadFailure("state-changed", "The MR pipeline changed during the read; results were withheld.");
   });
   const jobs = define("gitlab_jobs", "Read a bounded job-status page for a pipeline at the MR's current head. Withhold results when the MR or pipeline changes; never read logs or artifacts.", MrInput.extend({ pipeline: Id }).strict(), async (input, target, projectId, signal) => {
     const before = await readItem(target, projectId, "mr", input.number, signal);
@@ -162,8 +179,7 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
     if (pipeline.sha !== before.sha) throw new ReadFailure("stale", "The pipeline describes another commit; job evidence was withheld.");
     const entries = parse(z.array(Job).max(input.perPage), await get(target, `/pipelines/${input.pipeline}/jobs`, signal, { page: input.page, per_page: input.perPage }));
     for (const entry of entries) requireIdentity(entry.pipeline.id === input.pipeline && entry.pipeline.project_id === projectId && entry.pipeline.sha === before.sha && entry.commit.id === before.sha && entry.web_url === `${target.url}/-/jobs/${entry.id}`);
-    const after = await readPipeline();
-    const mrAfter = await readItem(target, projectId, "mr", input.number, signal);
+    const [after, mrAfter] = await Promise.all([readPipeline(), readItem(target, projectId, "mr", input.number, signal)]);
     ensureHead(before, mrAfter);
     if (after.sha !== pipeline.sha || after.status !== pipeline.status || after.updated_at !== pipeline.updated_at || before.head_pipeline?.id !== mrAfter.head_pipeline?.id) throw new ReadFailure("state-changed", "The pipeline changed during the read; job evidence was withheld. Read it again.");
     return { url: pipeline.web_url, headSha: before.sha, pipeline: { id: pipeline.id, status: pipeline.status }, ...pageResult(input, entries.length), jobs: entries.map(entry => ({ id: entry.id, name: clip(entry.name, 200), stage: clip(entry.stage, 100), status: entry.status, url: entry.web_url })) };
