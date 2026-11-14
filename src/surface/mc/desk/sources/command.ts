@@ -131,7 +131,11 @@ const MailAddressSchema = z.object({
 
 const MAX_EVENT_ATTENDEES = 500;
 
-/** A calendar event. `organizer` and `attendees` are the meeting's people, read by the `mail.link-meeting` auto-link; entries whose address does not parse are dropped. */
+/**
+ * A calendar event. `organizer` and `attendees` are the meeting's people, read by the `mail.link-meeting` auto-link. Entries whose
+ * address does not parse are dropped, but the list still counts as given: an unreadable organizer becomes null, and a nonempty
+ * attendee list with no readable entry becomes empty, so the auto-link refuses every sender rather than none.
+ */
 export const SourceEventSchema = z.object({
   id: z.string().min(1),
   start: isoDate,
@@ -144,8 +148,19 @@ export const SourceEventSchema = z.object({
   online: z.boolean().optional(),
   url: safeLink.optional(),
   availability: EventAvailabilitySchema.optional(),
-  organizer: MailAddressSchema.optional().catch(undefined),
-  attendees: lenientList(MailAddressSchema, MAX_EVENT_ATTENDEES),
+  organizer: z
+    .unknown()
+    .transform((v): z.infer<typeof MailAddressSchema> | null | undefined => {
+      if (v === undefined || v === null) return undefined;
+      const p = MailAddressSchema.safeParse(v);
+      return p.success ? p.data : null;
+    })
+    .optional(),
+  attendees: z
+    .array(z.unknown())
+    .transform((list) => (list.length === 0 ? undefined : list.flatMap((d) => { const p = MailAddressSchema.safeParse(d); return p.success ? [p.data] : []; }).slice(0, MAX_EVENT_ATTENDEES)))
+    .optional()
+    .catch(undefined),
 });
 
 const MAX_RECIPIENTS = 20;

@@ -248,6 +248,14 @@ describe("an auto-link to a meeting with an attendee list", () => {
     expect(linksCount()).toBe(0);
   });
 
+  it("refuses every sender when the source listed people the Desk cannot read", async () => {
+    const unreadable = { ...MEETING, organizer: { address: "nobody" }, attendees: [{ address: "not an address" }] };
+    const s = deskWithClassifier([mail("m1")], [unreadable, PAST]);
+    s.answers.set("m1", LINK_MEETING);
+    await s.compose();
+    expect(linksCount()).toBe(0);
+  });
+
   it("links any sender when the meeting lists no attendees", async () => {
     const s = deskWithClassifier([mail("m1", { from: { address: "someone@example.net" } })], [{ ...MEETING, attendees: [] }, PAST]);
     s.answers.set("m1", LINK_MEETING);
