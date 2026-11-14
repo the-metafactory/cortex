@@ -78,6 +78,7 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
   let conversationId = "";
   let sink: ReleaseSink = { kind: "web", conversationId };
   const cloud: { conversationId: string; sink: ReleaseSink; sends: Json[]; context: HostContext | null } = { conversationId: "", sink: { kind: "web", conversationId: "" }, sends: [], context: null };
+  const listen = (target: ReleaseSink, into: Json[]): void => { sinks.set(canonicalWire(target), value => { into.push(value); return Promise.resolve(); }); };
   const sessionOf = (sessionRef: string): string | null => (sessionRef === SESSION ? conversationId : sessionRef === CLOUD_SESSION && cloud.conversationId !== "" ? cloud.conversationId : null);
   const bindings: AuthorityBindings = {
     currentRevision: () => authorityHash({ policy, lease }),
@@ -105,12 +106,12 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
       const conversation = await status.host.create({ title: "Conformance", policy: "local", links: [], origin: { kind: "web" } }, principal.principal);
       conversationId = conversation.id;
       sink = { kind: "web", conversationId };
-      sinks.set(canonicalWire(sink), value => { sends.push(value); return Promise.resolve(); });
+      listen(sink, sends);
       if (input.mailBinding) {
         const reader = await status.host.create({ title: "Conformance cloud reader", policy: "cloud", links: [], origin: { kind: "web" } }, principal.principal);
         cloud.conversationId = reader.id;
         cloud.sink = { kind: "web", conversationId: reader.id };
-        sinks.set(canonicalWire(cloud.sink), value => { cloud.sends.push(value); return Promise.resolve(); });
+        listen(cloud.sink, cloud.sends);
       }
     }
     const writer = await status.host.lifecycleWriters().begin(plan, 0);
@@ -156,6 +157,7 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
   };
 }
 
+// glossary-ignore: run
 /** A reader in a cloud-policy conversation. The rig opens one only for a run with a Mail binding. */
 export interface CloudReader {
   context: HostContext;

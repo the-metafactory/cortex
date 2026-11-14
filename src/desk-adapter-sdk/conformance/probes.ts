@@ -114,13 +114,7 @@ export async function probeQuery(env: ProbeEnv, binding: ReadBinding): Promise<C
   }
 }
 
-/**
- * Reads one query capability as a reader in a cloud-policy conversation. For a Mail connection that is `local`, the
- * host must answer `denied` with no group and no count, release nothing and never call the package; for a `cloud`
- * connection the read must be released to that reader. The host shares one query runner per host and `probeQuery`
- * closes it, so this probe runs first and leaves the runner open.
- */
-export async function probeCloudReader(env: ProbeEnv, binding: ReadBinding, egress: "local" | "cloud"): Promise<CapabilityReport> {
+async function probeCloudReader(env: ProbeEnv, binding: ReadBinding, egress: "local" | "cloud"): Promise<CapabilityReport> {
   const id = binding.capabilityId;
   const reader = env.rig.cloudReader;
   if (!reader) return refused(id, "cloud-reader", "host_unavailable", "The run opened no cloud reader.");
@@ -134,7 +128,7 @@ export async function probeCloudReader(env: ProbeEnv, binding: ReadBinding, egre
     const called = env.recorded.queries.length - calls;
     const released = reader.sends.length - sends;
     if (egress === "local") {
-      const denied = result.status === "denied" && result.groups.length === 0 && released === 0 && called === 0;
+      const denied = result.status === "denied" && result.groups.length === 0 && !result.noMatch && result.continuation === undefined && released === 0 && called === 0;
       return denied
         ? conformant(id, "cloud-reader", "a local Mail connection was denied to a cloud reader with no group or count, and the package was not called")
         : refused(id, "cloud-reader", "cloud_reader_admitted", `A cloud reader of a local Mail connection got ${result.status} with ${String(result.groups.length)} group(s), ${String(released)} release(s) and ${String(called)} package call(s).`);
@@ -145,6 +139,25 @@ export async function probeCloudReader(env: ProbeEnv, binding: ReadBinding, egre
   } catch (error) {
     return refused(id, "cloud-reader", "query_failed", firstLine(messageOf(error)));
   }
+}
+
+// glossary-ignore: host, run
+/**
+ * Probes a package's query and poll read bindings, and with `cloudEgress` (a run with a Mail binding) each query
+ * capability as a cloud reader. A cloud read of a `local` connection must be `denied` with no group, no count and no
+ * match signal, release nothing and never call the package; one of a `cloud` connection must be released. The host
+ * shares one query runner per host and `probeQuery` closes it, so the cloud reads run first; their reports follow.
+ */
+export async function probeReads(env: ProbeEnv, cloudEgress?: "local" | "cloud"): Promise<CapabilityReport[]> {
+  const queries = env.manifest.readBindings.filter(binding => binding.mode === "query");
+  const cloudReads: CapabilityReport[] = [];
+  if (cloudEgress) for (const binding of queries) cloudReads.push(await probeCloudReader(env, binding, cloudEgress));
+  const reports: CapabilityReport[] = [];
+  for (const binding of env.manifest.readBindings) {
+    if (binding.mode === "query") reports.push(await probeQuery(env, binding));
+    if (binding.mode === "poll") reports.push(await probeObservation(env, binding));
+  }
+  return [...reports, ...cloudReads];
 }
 
 function observationRefusal(env: ProbeEnv, binding: ReadBinding, source: QuerySource): { code: string; detail: string } {
