@@ -22,7 +22,8 @@ export type ConformanceVariant =
   | "token-only"
   | "broker-only"
   | "egress"
-  | "junk-read";
+  | "junk-read"
+  | "mail-read";
 
 export const CONFORMANCE_DOMAINS: Record<string, ConformanceDomain> = {
   greenhouse: {
@@ -80,6 +81,15 @@ export const CONFORMANCE_DOMAINS: Record<string, ConformanceDomain> = {
 };
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
+const MAIL_READ_LINES = [
+  "let mailHost;",
+  "async function listedRows(connectionId) {",
+  "  const listing = await mailHost.mail.listed({ adapterId: D.adapterId, connectionId });",
+  "  (globalThis.__conformanceMailListings ??= []).push(listing);",
+  "  if (!listing) throw new Error(\"mail.not_bound\");",
+  "  return listing.mail.map((mail, index) => ({ id: `mail-${index + 1}`, name: mail.subject, place: D.place.rows[0].id }));",
+  "}",
+];
 const EGRESS_LINE = "    try { void fetch(\"https://owner.invalid/desk-conformance\", { method: \"POST\" }).catch(() => undefined); } catch (error) { void error; }";
 const ref = (schemaId: string) => ({ schemaId, version: "1.0.0" });
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", additionalProperties: false, required, properties });
@@ -193,10 +203,11 @@ export function conformanceBackend(domain: ConformanceDomain, variant: Conforman
     "  const places = D.place.rows;",
     "  return { readVersion: \"1.0.0\", payload: { items: places.map(place => ({ name: place.name })) }, annotations: places.map((place, index) => annotate(`/items/${index}`, ref(connectionId, D.place.type, place.id), D.place.schema, ref(connectionId, D.place.type, place.id), index, `${place.id}-evidence`)), observedAt: now(), ordering: \"provider\", snapshot: { kind: \"stable\", id: \"places\" } };",
     "}",
-    "function search(request) {",
+    ...(variant === "mail-read" ? MAIL_READ_LINES : []),
+    `${variant === "mail-read" ? "async " : ""}function search(request) {`,
     ...(variant === "junk-read" ? ["  if (D.variant === \"junk-read\") return { readVersion: \"1.0.0\", payload: { items: [] }, annotations: \"not-a-page\" };"] : []),
     "  const connectionId = request.destinations[0].connectionId;",
-    "  const matching = scoped(request.destinations);",
+    variant === "mail-read" ? "  const matching = await listedRows(connectionId);" : "  const matching = scoped(request.destinations);",
     "  const offset = request.cursor === undefined ? 0 : Number(request.cursor);",
     "  const page = matching.slice(offset, offset + request.limit);",
     "  const next = offset + page.length;",
@@ -209,9 +220,9 @@ export function conformanceBackend(domain: ConformanceDomain, variant: Conforman
     "}",
     "const watch = {",
     "  modes: [\"poll\"],",
-    "  fetch(request) {",
+    `  ${variant === "mail-read" ? "async " : ""}fetch(request) {`,
     "    const connectionId = request.source.connectionId;",
-    "    const page = scoped(request.source.destinations).slice(0, 20);",
+    variant === "mail-read" ? "    const page = (await listedRows(connectionId)).slice(0, 20);" : "    const page = scoped(request.source.destinations).slice(0, 20);",
     "    return { version: \"1.0.0\", payload: { items: page.map(row => itemValue(row, connectionId)) }, events: page.map((row, index) => ({ kind: \"present\", pointer: `/items/${index}`, ref: ref(connectionId, D.item.type, row.id), schemaRef: D.item.schema, destination: ref(connectionId, D.place.type, row.place), observedAt: now(), revision: \"1\", evidenceId: `${row.id}-observed` })), gap: false, coverage: \"objects\" };",
     "  },",
     "};",
@@ -232,6 +243,7 @@ export function conformanceBackend(domain: ConformanceDomain, variant: Conforman
     "  },",
     "});",
     "export function createDeskAdapter(host) {",
+    ...(variant === "mail-read" ? ["  mailHost = host;"] : []),
     variant === "throws" ? "  throw new Error(\"synthetic adapter creation failure\");" : "",
     "  if (D.writable) host.registerConnector(D.capabilityIds.create, connector);",
     "  return { declaration: D.declaration, bindings: { handlers: { [D.capabilityIds.placeList]: listPlaces, [D.capabilityIds.search]: search, ...(D.writable ? { [D.capabilityIds.get]: getOne } : {}) }, observations: { [D.capabilityIds.watch]: watch } } };",

@@ -5,14 +5,16 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { join } from "node:path";
 import { DeskPackageLoader, type DeskPackageCandidate, type DeskTrustedConnectorOptions } from "../../conversations/domain-adapters/package";
 import { DeskGenerationStore } from "../../conversations/domain-adapters/package-generation";
+import type { MailConnectionBinding, MailReadSource } from "../../conversations/domain-adapters/mail-read";
 import type { ObjectReference } from "../../conversations/domain-adapters/types";
 import { probeAction } from "./actions";
+import { CONFORMANCE_CONNECTION_ID } from "./connection";
 import { recordConnector } from "./connectors";
 import { listDestinations, probeObservation, probeQuery, schemaIndex, type ProbeEnv } from "./probes";
 import { emptyOwnerCalls, overallVerdict, refused, type CapabilityReport, type ConformanceReport, type OwnerCalls } from "./report";
 import { ConformanceRefusal, openConformanceRig, SYNTHETIC_CREDENTIAL_HANDLE } from "./rig";
 
-export const CONNECTION_ID = "conformance-connection";
+export const CONNECTION_ID = CONFORMANCE_CONNECTION_ID;
 
 export const authorizeConnection: DeskTrustedConnectorOptions["authorizeConnection"] = current =>
   Promise.resolve({ version: 1, available: current.status === "active" && current.credentialHandle === SYNTHETIC_CREDENTIAL_HANDLE, revision: "conformance-credential-1" });
@@ -40,8 +42,14 @@ export async function openConformanceStore(dir: string): Promise<{ engine: Harne
   return { engine, store: new DeskGenerationStore(engine) };
 }
 
-export async function exercise(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, skeleton: Skeleton): Promise<Outcome> {
+function conformanceMailBinding(mail: MailReadSource | undefined, adapterId: string): MailConnectionBinding | undefined {
+  const matches = mail?.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === CONNECTION_ID) ?? [];
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export async function exercise(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, skeleton: Skeleton, mail?: MailReadSource): Promise<Outcome> {
   const { adapterId, manifest } = candidate;
+  const mailBinding = conformanceMailBinding(mail, adapterId);
   const declaration = manifest.declaration;
   const actionIds = declaration.capabilities.filter(capability => capability.kind === "action").map(capability => capability.capabilityId);
   const readIds = declaration.capabilities.filter(capability => capability.kind !== "action").map(capability => capability.capabilityId);
@@ -68,7 +76,7 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
     try {
       rig = await openConformanceRig({
         dir: temp, registry, connector, adapterId, connectionId: CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
-        writeCapabilityIds: actionId === undefined ? [] : [actionId], writerCapabilityId: actionId ?? plain.support.capabilityId, destinations,
+        writeCapabilityIds: actionId === undefined ? [] : [actionId], writerCapabilityId: actionId ?? plain.support.capabilityId, destinations, ...(mailBinding ? { mailBinding } : {}),
       });
     } catch (error) {
       const code = error instanceof ConformanceRefusal ? error.code : "host_unavailable";
@@ -92,11 +100,11 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
   return finish({ ...skeleton, actions: actionIds }, capabilities, ownerCalls);
 }
 
-export async function executePackage(packageDir: string, temp: string): Promise<Outcome> {
+export async function executePackage(packageDir: string, temp: string, mail?: MailReadSource): Promise<Outcome> {
   const skeleton: Skeleton = { packageDir, actions: [], credentialRequests: 0 };
   const { engine, store } = await openConformanceStore(temp);
   try {
-    const loader = new DeskPackageLoader({ bundledPackages: [packageDir], store });
+    const loader = new DeskPackageLoader({ bundledPackages: [packageDir], store, ...(mail ? { mail } : {}) });
     const discovery = await loader.discover();
     const candidate = discovery.candidates[0];
     if (!candidate) {
@@ -111,7 +119,7 @@ export async function executePackage(packageDir: string, temp: string): Promise<
     }
     const activated = await loader.activate(candidate.packageId);
     if (!activated.ok) return stopped(named, "refused", activated.error.code, activated.error.message);
-    return await exercise(loader, candidate, temp, named);
+    return await exercise(loader, candidate, temp, named, mail);
   } finally {
     await engine.close(BACKGROUND_CONTEXT);
   }

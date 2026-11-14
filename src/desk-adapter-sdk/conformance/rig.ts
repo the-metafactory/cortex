@@ -8,6 +8,7 @@ import { writerLease } from "../../conversations/domain-adapters/operations/writ
 import { syntheticWriterPlan, syntheticWriterSteps } from "../../conversations/domain-adapters/operations/writer-fixtures";
 import { canonicalWire } from "../../conversations/domain-adapters/operations/validation";
 import type { Json } from "../../conversations/domain-adapters/operations/types";
+import { mailReadRestriction, type MailConnectionBinding } from "../../conversations/domain-adapters/mail-read";
 import { ReadBindings } from "../../conversations/domain-adapters/reads/bindings";
 import type { DomainAdapterRegistry } from "../../conversations/domain-adapters/registry";
 import type { ObjectReference } from "../../conversations/domain-adapters/types";
@@ -35,6 +36,7 @@ export interface ConformanceRigInput {
   writeCapabilityIds: readonly string[];
   writerCapabilityId: string;
   destinations: readonly ObjectReference[];
+  mailBinding?: MailConnectionBinding;
 }
 
 function registerReadBindings(input: ConformanceRigInput): ReadBindings {
@@ -62,10 +64,13 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
     registryRevision: "registry-1", executionBindingRevision: input.connector.support.declarationId, operationVisible: true, readsAllowed: true, writesAllowed: true, releaseAllowed: true,
     allowedAudiences: ["web", "discord", "model", "view"],
   };
-  const restrictions: RestrictionRecord[] = input.destinations.map(source => ({
-    version: 1, status: "active", restrictionRef: randomUUID(), source, ownerRevision: "conformance-owner-1", decisionRef: "conformance-provenance", audiences: ["web", "discord", "model", "view"],
-    egress: "cloud", readScope: [principal.principalRef], resolverBinding: "conformance-restriction-resolver", revision: "1",
-  }));
+  const restrictions: RestrictionRecord[] = input.destinations.map(source => {
+    const metadata: Omit<RestrictionRecord, "source" | "egress"> = {
+      version: 1, status: "active", restrictionRef: randomUUID(), ownerRevision: "conformance-owner-1", decisionRef: "conformance-provenance", audiences: ["web", "discord", "model", "view"],
+      readScope: [principal.principalRef], resolverBinding: "conformance-restriction-resolver", revision: "1",
+    };
+    return input.mailBinding ? mailReadRestriction(input.mailBinding, source, metadata) : { ...metadata, source, egress: "cloud" };
+  });
   const lease: WriterLease = { bindingKey: "conformance-binding", epoch: 1, instanceId: "conformance-instance", supervisorReceiptRef: "conformance-supervisor" };
   const sends: Json[] = [];
   const sinks = new Map<string, (value: Json) => Promise<void>>();
