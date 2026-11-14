@@ -73,6 +73,7 @@ export interface DeskActionConnector {
 /** Builds one connector per connection; the host calls it only after a connection exists. */
 export type DeskConnectorFactory = (connection: DeskAdapterConnection) => DeskActionConnector;
 
+// glossary-ignore: host, run, message, body
 /** One listed mail's identity: the connection that listed it and its Message-ID. */
 export interface DeskMailReference {
   readonly connection: string;

@@ -13,6 +13,7 @@ SDK 1.3.0 publishes the existing conformance harness through `@the-metafactory/c
 
 SDK 1.4.0 adds an optional `continuation` to observation batches and requests for bounded polling. Each page has at most 20 events. The Cortex runtime rechecks authority for every page and commits the validated pages together, within 1,000 events, 50 pages, 1 MiB and the existing fetch deadline. A continuation must stay within one stable snapshot and must not repeat. Budget exhaustion reports a gap; failed or revoked page reads publish no partial update. Continuations are transient to one read and are never released as display values or reused as subscription checkpoints.
 
+<!-- glossary-ignore: host, message, body, run -->
 SDK 1.5.0 adds `host.mail`, the host's read bridge to Mail (cortex#3593). `host.mail.listed(connection)` resolves to the mail one Mail source listed for one source-and-account connection, or to `null` for a connection the host does not bind to Mail for this adapter. See "Mail read bridge" below. A package built against 1.4.0 still loads.
 
 An external package's Bun verification script can execute the same checks as `scripts/desk-adapter-conformance.ts`:
@@ -180,6 +181,7 @@ Rules:
 
 ## Mail read bridge
 
+<!-- glossary-ignore: host, message, body, run, data -->
 Mail owns its state (cortex#3356 D9). An out-of-tree adapter reads Mail only through `host.mail`, a view of what a Mail source already listed (cortex#3294 Q7). The bridge never runs the provider and never searches it.
 
 The host supplies the loader's `mail` option (`MailReadSource` in `src/conversations/domain-adapters/mail-read.ts`):
@@ -193,7 +195,7 @@ The host supplies the loader's `mail` option (`MailReadSource` in `src/conversat
 - `mail` holds only the mail that source listed under that account. Mail that names no account is never supplied. Each entry is referenced as `{ connection, messageId }`, so the same Message-ID under two connections is two entries.
 - An entry carries the sender, subject, date, unread flag and at most the first paragraph (leading blank lines dropped, cut at the next blank line, 1,000 characters at most). It never carries a body.
 - `health` is `{ state: "fresh", listedAt }` after a successful listing. After a provider failure it is `{ state: "stale", code: "provider_failure" }` and the listing keeps the last listed mail, so nothing is reported as deleted. A source that has not listed yet is `{ state: "stale", code: "not_listed" }` with no mail.
-- The call is served only inside a backend call the host admitted for that same connection (a query handler, an observation fetch or an action-connector call). Called anywhere else, including from a handler running for another connection, it rejects with `mail_read_unadmitted`, so a handler cannot carry one connection's mail into another connection's release.
+- The call is served only inside a backend call the host admitted for that same connection (a query handler, an observation fetch or an action-connector call). Called anywhere else, including from a handler running for another connection, it rejects with `mail_read_unadmitted`. This scopes what the bridge serves; it is not a sandbox. Backend code is trusted in-process code (see "Trust position"), so a package that keeps mail read for one connection and returns it from a call for another is not prevented by the Cortex runtime. That conduct is part of what the principal approves with the package release.
 - A connection of another adapter, an unknown connection or one with no account resolves to `null`. Once the adapter's generation is disabled, uninstalled or superseded, the call rejects with `adapter_unavailable`.
 
 The host publishes each Mail connection's read restriction with `mailReadRestriction(binding, destination, metadata)`. A connection with no explicit `dataPolicy` is `local`, so the query runner denies a cloud reader with status `denied`, no group and no count, and the adapter is never called.

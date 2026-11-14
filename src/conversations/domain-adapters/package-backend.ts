@@ -37,7 +37,7 @@ export const connectionKey = (connection: DeskAdapterConnection): string => JSON
 /** The key of the connection whose admitted backend call is running now, if any. */
 export const admittedCallKey = (): string | undefined => admittedCalls.getStore();
 
-/** Runs one admitted backend call for a connection; host reads such as listed mail serve only that connection inside it. */
+/** Runs one admitted backend call for a connection; inside it, reads such as listed mail serve only that connection. */
 export function withAdmittedCall<T>(connection: DeskAdapterConnection, run: () => T): T {
   return admittedCalls.run(connectionKey(connection), run);
 }
