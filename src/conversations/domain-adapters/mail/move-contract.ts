@@ -4,6 +4,8 @@ import { adapterErrorSchema, objectReferenceSchema, objectSchema, schemaRef } fr
 import { snapshotDigest } from "../operations/validation";
 import type { ApprovedSnapshot, Provenance } from "../operations/types";
 
+export const UNDO_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 export const MAIL_MOVE_CAPABILITY = "mail.move";
 export const MAIL_TRASH_CAPABILITY = "mail.trash";
 export const MAIL_RESTORE_CAPABILITY = "mail.restore";

@@ -4,13 +4,13 @@ import type { WriterRunner } from "./create";
 import type { ListedMail, MailActionsConfig, TrashLedger } from "./mail-actions";
 import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailFeatures, type MailLogAction, type MailLogWhere } from "./mail-log";
 import { CommandTimeout } from "../common/spawn";
-import { DAY_MS } from "./time";
+import { UNDO_WINDOW_MS } from "../../../conversations/domain-adapters/mail/move-contract";
 import { addSender, isVip, listVips, normalizeVip } from "./vips";
 
 export const MOVE_TARGETS = ["archive", "junk", "trash"] as const;
 export type MoveTarget = (typeof MOVE_TARGETS)[number];
 
-export const UNDO_WINDOW_MS = 7 * DAY_MS;
+export { UNDO_WINDOW_MS };
 
 const FOLDER: Record<MoveTarget, string> = { archive: "Archive", junk: "Junk", trash: "Trash" };
 const DONE: Record<MoveTarget, string> = { archive: "Archived", junk: "Moved to Junk", trash: "Deleted" };

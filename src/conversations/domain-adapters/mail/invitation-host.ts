@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { UNDO_WINDOW_MS } from "../../../surface/mc/desk/mail-move";
+import { UNDO_WINDOW_MS } from "./move-contract";
 import type { ApprovedSnapshot, Provenance } from "../operations/types";
 import type { StoredOperation } from "../operations/journal";
 import type { BoundaryError } from "../types";
 import { GRANT_OPTIONS, type GrantChoice, type MailMoveHostOptions, type ReceiptState } from "./move-host";
-import { INVITATION_CAPABILITIES, INVITATION_LABELS, INVITATION_NO_UNDO, INVITATION_NOTIFICATION_WARNING, INVITATION_REPLIES, InvitationInputSchema, InvitationOutputSchema, mailInvitationSnapshot, type InvitationAction, type InvitationReply } from "./invitation-contract";
+import { INVITATION_CAPABILITIES, INVITATION_LABELS, INVITATION_NO_UNDO, INVITATION_NOTIFICATION_WARNING, INVITATION_REPLIES, InvitationInputSchema, InvitationOutputSchema, invitationActionFor, mailInvitationSnapshot, type InvitationAction, type InvitationInput, type InvitationReply } from "./invitation-contract";
 
 export type InvitationHostOptions = Omit<MailMoveHostOptions, "newId"> & {
   refreshInvitation(selection: { messageId: string; invitationId: string }, provenance: Provenance): Promise<void>;
@@ -38,6 +38,30 @@ interface Selection { messageId: string; invitationId: string; expectedRevision:
 interface Intent { provenance: Provenance; choice?: GrantChoice }
 const refused = (message: string): InvitationOutcome => ({ kind: "unavailable", reason: { code: "mail.invitation_unavailable", message } });
 const isReply = (action: InvitationAction): action is InvitationReply => (INVITATION_REPLIES as readonly string[]).includes(action);
+const selectionFrom = (origin: { input: InvitationInput; output: { revision: string } }): Selection => ({ messageId: origin.input.message.canonicalId, invitationId: origin.input.invitation.canonicalId, expectedRevision: origin.output.revision });
+
+function promptDetails(mode: "reply" | "restorable" | "confirm-only", replies: InvitationReply[]): Pick<InvitationPrompt, "covers" | "question" | "warning" | "options"> {
+  switch (mode) {
+    case "reply": return {
+      covers: replies.map(reply => INVITATION_CAPABILITIES[reply]),
+      question: `Use one click for ${replies.map(reply => INVITATION_LABELS[reply]).join(", ")} on this mail connection?`,
+      warning: INVITATION_NOTIFICATION_WARNING,
+      options: GRANT_OPTIONS,
+    };
+    case "restorable": return {
+      covers: [INVITATION_CAPABILITIES.remove, INVITATION_CAPABILITIES.restore],
+      question: "Remove declined invitations with one click on this mail connection? Covers removal and restoration.",
+      warning: "Removes only the declined invitation. Undo can restore it if it has not changed.",
+      options: GRANT_OPTIONS,
+    };
+    case "confirm-only": return {
+      covers: [],
+      question: "Remove this declined invitation?",
+      warning: "This connection cannot restore an event. No Undo is available; confirm each removal.",
+      options: GRANT_OPTIONS.filter(option => option.choice !== "always"),
+    };
+  }
+}
 
 export class MailInvitationHost {
   private readonly undoing = new Set<string>();
@@ -60,7 +84,7 @@ export class MailInvitationHost {
   async remove(request: Intent & { declineOperationId: string }): Promise<InvitationOutcome> {
     const origin = await this.load(request.declineOperationId);
     if (origin?.action !== "decline" || origin.stored.journal.state !== "succeeded" || !origin.output || !this.owns(origin.snapshot)) return refused("A successful decline on this connection is required before removing its invitation.");
-    return this.press("remove", { messageId: origin.input.message.canonicalId, invitationId: origin.input.invitation.canonicalId, expectedRevision: origin.output.revision }, request, request.declineOperationId);
+    return this.press("remove", selectionFrom({ input: origin.input, output: origin.output }), request, request.declineOperationId);
   }
 
   async undo(operationId: string, provenance: Provenance): Promise<InvitationOutcome> {
@@ -70,7 +94,7 @@ export class MailInvitationHost {
     try {
       const origin = await this.load(operationId);
       if (!origin?.output) return refused("The removed invitation has no restoration evidence.");
-      return await this.press("restore", { messageId: origin.input.message.canonicalId, invitationId: origin.input.invitation.canonicalId, expectedRevision: origin.output.revision }, { provenance, choice: "once" }, operationId);
+      return await this.press("restore", selectionFrom({ input: origin.input, output: origin.output }), { provenance, choice: "once" }, operationId);
     } finally { this.undoing.delete(operationId); }
   }
 
@@ -80,21 +104,17 @@ export class MailInvitationHost {
     let snapshot: ApprovedSnapshot;
     try { snapshot = mailInvitationSnapshot({ ...this.options, ...selection, action, provenance: intent.provenance }); }
     catch { return refused("The invitation request does not match the Mail contract."); }
-    const restorable = this.declared("restore");
-    const canGrant = isReply(action) || restorable;
-    const covered = isReply(action) ? INVITATION_REPLIES.filter(reply => this.declared(reply)) : restorable ? ["remove", "restore"] as const : [];
-    const covers = covered.map(action => INVITATION_CAPABILITIES[action]);
+    const mode = isReply(action) ? "reply" : this.declared("restore") ? "restorable" : "confirm-only";
+    const canGrant = mode !== "confirm-only";
+    const details = promptDetails(mode, INVITATION_REPLIES.filter(reply => this.declared(reply)));
     let grantId = canGrant ? await this.options.authority.findGrant(INVITATION_CAPABILITIES[action]) : null;
     if (!grantId) {
       if (intent.choice === undefined) return { kind: "needs-grant", prompt: {
-        connectionId: this.options.connectionId, action, covers,
-        question: isReply(action) ? `Use one click for ${covered.map(action => INVITATION_LABELS[action]).join(", ")} on this mail connection?` : restorable ? "Remove declined invitations with one click on this mail connection? Covers removal and restoration." : "Remove this declined invitation?",
-        warning: isReply(action) ? INVITATION_NOTIFICATION_WARNING : restorable ? "Removes only the declined invitation. Undo can restore it if it has not changed." : "This connection cannot restore an event. No Undo is available; confirm each removal.",
-        options: canGrant ? GRANT_OPTIONS : GRANT_OPTIONS.filter(option => option.choice !== "always"),
+        connectionId: this.options.connectionId, action, ...details,
       } };
       if (intent.choice === "always") {
         if (!canGrant) return refused("Removing an event without restoration requires confirmation each time.");
-        grantId = await this.options.authority.grant(covers);
+        grantId = await this.options.authority.grant(details.covers);
         if (!grantId) return { kind: "denied", reason: { code: "authority_denied", message: "Standing permission is not allowed on this connection." } };
       }
     }
@@ -116,7 +136,7 @@ export class MailInvitationHost {
     const stored = await this.options.journal.read(operationId);
     if (!stored || "kind" in stored.journal.snapshot) return null;
     const snapshot = stored.journal.snapshot;
-    const action = (Object.keys(INVITATION_CAPABILITIES) as InvitationAction[]).find(action => INVITATION_CAPABILITIES[action] === snapshot.capabilityId);
+    const action = invitationActionFor(snapshot.capabilityId);
     const parsed = InvitationInputSchema.safeParse(snapshot.input);
     if (!action || !parsed.success) return null;
     const results = stored.journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response.result] : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? [entry.event.lookup.result.response.result] : []);
@@ -150,7 +170,8 @@ export class MailInvitationHost {
   private async removalUndo(stored: StoredOperation): Promise<InvitationReceipt["undo"]> {
     const blocked = (reason: string): InvitationReceipt["undo"] => ({ kind: "unavailable", reason });
     if (!this.declared("restore")) return blocked("unsupported");
-    if ((this.options.now ?? Date.now)() - Date.parse(stored.journal.events[0]?.at ?? "") > UNDO_WINDOW_MS) return blocked("expired");
+    const at = Date.parse(stored.journal.events.find(entry => entry.event.kind === "approved")?.at ?? "");
+    if (!Number.isFinite(at) || (this.options.now ?? Date.now)() - at > UNDO_WINDOW_MS) return blocked("expired");
     const linked = await Promise.all((await this.options.index.compensations(stored.journal.operationId)).map(id => this.options.journal.read(id)));
     if (linked.some(item => item?.journal.state === "succeeded")) return blocked("undone");
     if (linked.some(item => item && ["confirmed", "dispatching", "pending", "uncertain"].includes(item.journal.state))) return blocked("in-progress");

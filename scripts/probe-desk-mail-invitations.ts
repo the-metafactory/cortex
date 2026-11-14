@@ -38,8 +38,17 @@ for (const reply of INVITATION_REPLIES) {
       assert.deepEqual(await fixture.host.receipt(removed.receipt.operationId), removed.receipt);
       const restored = await fixture.host.undo(removed.receipt.operationId, invitationProvenance);
       assert.equal(restored.kind, "receipt");
+      if (restored.kind !== "receipt") throw new Error("Missing restoration receipt");
+      assert.equal(restored.receipt.state, "done");
+      assert.deepEqual((await fixture.journal().read(restored.receipt.operationId))?.journal.links, { compensatesOperationId: removed.receipt.operationId });
       assert.equal(fixture.owner.removed, false);
-      console.log("PASS decline leaves event; separate removal grant, receipt and linked Undo survive journal reopen");
+      await fixture.reopen();
+      assert.deepEqual(await fixture.options.index.compensations(removed.receipt.operationId), [restored.receipt.operationId]);
+      assert.deepEqual(await fixture.host.receipt(restored.receipt.operationId), restored.receipt);
+      assert.deepEqual((await fixture.host.receipt(removed.receipt.operationId))?.undo, { kind: "unavailable", reason: "undone" });
+      assert.equal((await fixture.host.undo(removed.receipt.operationId, invitationProvenance)).kind, "unavailable");
+      assert.equal(fixture.calls.length, 3);
+      console.log("PASS decline leaves event; removal has its own grant; receipts and consumed Undo survive journal and index reopen");
     }
     console.log(`PASS ${reply}: explicit warning, scoped reply grant and no-Undo receipt`);
   } finally { await fixture.close(); }

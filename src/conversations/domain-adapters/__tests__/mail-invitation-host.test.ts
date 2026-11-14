@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { openInvitationFixture, invitationProvenance as provenance, invitationSelection as selection } from "../mail/invitation-fixture";
 import { INVITATION_CAPABILITIES, INVITATION_REPLIES } from "../mail/invitation-contract";
 import { MailInvitationHost, type InvitationOutcome } from "../mail/invitation-host";
-import { UNDO_WINDOW_MS } from "../../../surface/mc/desk/mail-move";
+import { UNDO_WINDOW_MS } from "../mail/move-contract";
 
 const fixtures: Awaited<ReturnType<typeof openInvitationFixture>>[] = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.close(); });
@@ -89,8 +89,12 @@ describe("declined invitation removal", () => {
     const restored = receipt(await fixture.host.undo(removed.operationId, provenance));
     expect(restored).toMatchObject({ action: "restore", state: "done", basis: "grant" });
     expect((await fixture.journal().read(restored.operationId))?.journal.links).toEqual({ compensatesOperationId: removed.operationId });
+    await fixture.reopen();
+    expect(await fixture.options.index.compensations(removed.operationId)).toEqual([restored.operationId]);
+    expect(await fixture.host.receipt(restored.operationId)).toEqual(restored);
     expect((await fixture.host.receipt(removed.operationId))?.undo).toEqual({ kind: "unavailable", reason: "undone" });
     expect((await fixture.host.undo(removed.operationId, provenance)).kind).toBe("unavailable");
+    expect(fixture.calls).toHaveLength(3);
     expect(fixture.owner.removed).toBe(false);
     expect(fixture.owner.notifications).toBe(1);
   });
@@ -134,6 +138,29 @@ describe("declined invitation removal", () => {
     expect((await fixture.host.undo(removed.operationId, provenance)).kind).toBe("unavailable");
     expect(fixture.owner.removed).toBe(true);
   });
+
+  for (const approvalTime of ["missing", "invalid"] as const) {
+    test(`${approvalTime} approval time cannot offer or dispatch Undo`, async () => {
+      const fixture = await rig();
+      const declined = await decline(fixture);
+      const removed = receipt(await fixture.host.remove({ declineOperationId: declined.operationId, provenance, choice: "once" }));
+      const journal = fixture.journal();
+      const read = journal.read.bind(journal);
+      const mocked = spyOn(journal, "read").mockImplementation(async operationId => {
+        const stored = await read(operationId);
+        if (!stored || operationId !== removed.operationId) return stored;
+        if (approvalTime === "missing") stored.journal.events.shift();
+        else stored.journal.events[0]!.at = "invalid";
+        return stored;
+      });
+      try {
+        expect((await fixture.host.receipt(removed.operationId))?.undo).toEqual({ kind: "unavailable", reason: "expired" });
+        expect((await fixture.host.undo(removed.operationId, provenance)).kind).toBe("unavailable");
+        expect(fixture.calls).toHaveLength(2);
+        expect(fixture.owner.removed).toBe(true);
+      } finally { mocked.mockRestore(); }
+    });
+  }
 });
 
 describe("invitation owner refusals", () => {

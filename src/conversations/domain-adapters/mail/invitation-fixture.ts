@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,7 @@ import { fixtureBindings } from "../fixtures";
 import { AT, authority, attemptFixture, eventFixture, openJournalFixture, support } from "../operations/fixtures";
 import type { Authority, DispatchRequest, OwnerResult } from "../operations/types";
 import { MailInvitationHost, type InvitationHostOptions } from "./invitation-host";
-import { INVITATION_CAPABILITIES, INVITATION_REPLIES, InvitationInputSchema, mailInvitationDeclaration, type InvitationAction } from "./invitation-contract";
+import { INVITATION_REPLIES, InvitationInputSchema, invitationActionFor, mailInvitationDeclaration, type InvitationAction } from "./invitation-contract";
 
 export const invitationProvenance = { conversationId: "mail", proposalId: "invitation", revision: 1, entryId: null, link: "?desk=mail" };
 export const invitationSelection = { messageId: "message-example", invitationId: "invitation-example", expectedRevision: "1" };
@@ -19,8 +20,9 @@ export async function openInvitationFixture(actions: readonly InvitationAction[]
   if (!registration.ok) throw new Error(registration.error.message);
   const dir = await mkdtemp(join(tmpdir(), "desk-invitation-"));
   let store = await openJournalFixture(join(dir, "journal.sqlite"), registry);
-  const ids: string[] = [];
-  const compensation = new Map<string, string[]>();
+  const indexPath = join(dir, "index.sqlite");
+  let indexDb = new Database(indexPath);
+  indexDb.run("CREATE TABLE invitation_operations (operation_id TEXT PRIMARY KEY, compensates TEXT)");
   const calls: DispatchRequest[] = [];
   const grants: { id: string; capabilityIds: readonly string[] }[] = [];
   const refreshes: string[] = [];
@@ -29,9 +31,11 @@ export async function openInvitationFixture(actions: readonly InvitationAction[]
   let denyApproval = false;
   let denyGrant = false;
   const connectionId = "fixture-connection";
+  const ids = () => indexDb.query<{ operation_id: string }, []>("SELECT operation_id FROM invitation_operations ORDER BY rowid").all().map(row => row.operation_id);
   const index: InvitationHostOptions["index"] = {
-    add: (id, original) => { ids.push(id); if (original) compensation.set(original, [...compensation.get(original) ?? [], id]); return Promise.resolve(); },
-    list: () => Promise.resolve([...ids]), compensations: id => Promise.resolve([...compensation.get(id) ?? []]),
+    add: (id, original) => { indexDb.run("INSERT INTO invitation_operations (operation_id, compensates) VALUES (?, ?)", [id, original ?? null]); return Promise.resolve(); },
+    list: () => Promise.resolve(ids()),
+    compensations: id => Promise.resolve(indexDb.query<{ operation_id: string }, [string]>("SELECT operation_id FROM invitation_operations WHERE compensates = ? ORDER BY rowid").all(id).map(row => row.operation_id)),
   };
 
   function binding(request: DispatchRequest): OwnerResult["result"] {
@@ -42,7 +46,7 @@ export async function openInvitationFixture(actions: readonly InvitationAction[]
     if (owner.missing) return { kind: "failed", error: { code: "mail.message_missing", message: "The invitation is missing." }, evidence };
     if (owner.uncertain) return { kind: "uncertain", error: { code: "mail.uncertain", message: "The provider outcome is unknown." } };
     if (owner.revision !== input.expectedRevision) return { kind: "conflict", error: { code: "mail.invitation_changed", message: "The invitation changed. Read it again before acting." }, currentOwnerRevision: owner.revision, evidence };
-    const action = (Object.keys(INVITATION_CAPABILITIES) as InvitationAction[]).find(action => INVITATION_CAPABILITIES[action] === request.snapshot.capabilityId);
+    const action = invitationActionFor(request.snapshot.capabilityId);
     if (!action) throw new Error("The fixture received an undeclared invitation action.");
     if (action === "remove") {
       if (owner.reply !== "decline" || owner.removed) return { kind: "failed", error: { code: "mail.not_declined", message: "Only a current declined invitation can be removed." }, evidence };
@@ -79,13 +83,20 @@ export async function openInvitationFixture(actions: readonly InvitationAction[]
       await store.journal.receive(operationId, prepared.revision, { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, snapshotDigest: request.snapshot.digest, resultId: randomUUID(), reportedAt: AT, result: binding(request) }, AT);
     },
   };
+  let host = new MailInvitationHost(options);
   return {
-    host: new MailInvitationHost(options), options, owner, calls, grants, ids, refreshes,
+    get host() { return host; }, options, owner, calls, grants, get ids() { return ids(); }, refreshes,
     journal: () => store.journal,
     advance: (ms: number) => { clock += ms; },
     denyApproval: () => { denyApproval = true; }, denyGrant: () => { denyGrant = true; },
     revoke: () => { grants.splice(0); },
-    reopen: async () => { await store.close(); store = await openJournalFixture(join(dir, "journal.sqlite"), registry); },
-    close: async () => { await store.close(); await rm(dir, { recursive: true, force: true }); },
+    reopen: async () => {
+      await store.close();
+      indexDb.close();
+      store = await openJournalFixture(join(dir, "journal.sqlite"), registry);
+      indexDb = new Database(indexPath, { create: false });
+      host = new MailInvitationHost(options);
+    },
+    close: async () => { await store.close(); indexDb.close(); await rm(dir, { recursive: true, force: true }); },
   };
 }
