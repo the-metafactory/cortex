@@ -18,6 +18,8 @@ The top areas come from `desk.areas`. Add projects and tasks below them. Weights
 
 If another window changes the item you are editing, Save refuses the stale edit and preserves your draft. Close and reopen the editor to load the current values.
 
+In `GET /api/desk/my-day`, every outline row with a `repeat` rule also carries `recurrence: { returnsOn, finished, reappearsOn }`. For a done row, `returnsOn` is its next occurrence and `reappearsOn` is that date minus the row's lead days, the day the row opens again. `finished` is true when the repeat is exhausted; both dates are then null. An open repeating row has `finished: false` and null dates. The Balance engine's recurrence rule computes all three, so a client never recomputes them. Rows without `repeat` have no `recurrence`, and the stored outline never holds it.
+
 ## Choose your caps
 
 `desk.myDay.cap` sets the My day baseline, from 1 to 7. `desk.topN` sets the Needs you baseline, from 1 to 10. Both default to 5, ratified by the principal in cortex#2871.

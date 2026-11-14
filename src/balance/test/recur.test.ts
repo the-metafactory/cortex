@@ -1,6 +1,6 @@
 import { required } from "../core/required";
 import { describe, expect, test } from "bun:test";
-import { addMonths, applyRecurrence, nextOccurrence, recurrenceFinished, } from "../core/recur";
+import { addMonths, applyRecurrence, nextOccurrence, recurrenceFinished, recurrenceProjection, } from "../core/recur";
 import { availableTasks } from "../core/scheduler";
 import type { OutlineNode, Recurrence } from "../core/types";
 const TODAY = "2026-07-10";
@@ -199,5 +199,36 @@ describe("multi-window contexts and case-insensitivity", () => {
     test("nextOpeningToday picks the earliest window still ahead", () => {
         expect(nextOpeningToday(home, "2026-07-10", "09:00")).toBe("18:00");
         expect(nextOpeningToday(home, "2026-07-10", "22:00")).toBe(null);
+    });
+});
+describe("recurrenceProjection", () => {
+    const weekly: Recurrence = { unit: "week", interval: 1 };
+    const doneWeekly = (extra: Partial<OutlineNode> = {}) => leaf("water", { repeat: weekly, leadDays: 2, done: true, completedAt: "2026-07-10", ...extra });
+    test("a done repeating row returns on its next occurrence and reappears lead days earlier", () => {
+        expect(recurrenceProjection(doneWeekly())).toEqual({ returnsOn: nextOccurrence("2026-07-10", weekly), finished: false, reappearsOn: "2026-07-15" });
+    });
+    test("applyRecurrence reopens the row on reappearsOn and not a day before", () => {
+        const reappearsOn = required(required(recurrenceProjection(doneWeekly())).reappearsOn);
+        expect(applyRecurrence(tree(doneWeekly()), "2026-07-14").respawned).toEqual([]);
+        expect(applyRecurrence(tree(doneWeekly()), reappearsOn).respawned).toEqual(["water"]);
+    });
+    test("a fractional lead counts whole days, as applyRecurrence does", () => {
+        const reappearsOn = required(required(recurrenceProjection(doneWeekly({ leadDays: 1.5 }))).reappearsOn);
+        expect(reappearsOn).toBe("2026-07-16");
+        expect(applyRecurrence(tree(doneWeekly({ leadDays: 1.5 })), "2026-07-15").respawned).toEqual([]);
+        expect(applyRecurrence(tree(doneWeekly({ leadDays: 1.5 })), reappearsOn).respawned).toEqual(["water"]);
+    });
+    test("without lead days the row reappears on its return date", () => {
+        expect(recurrenceProjection(doneWeekly({ leadDays: undefined }))).toEqual({ returnsOn: "2026-07-17", finished: false, reappearsOn: "2026-07-17" });
+    });
+    test("an exhausted repeat is finished and has no dates", () => {
+        expect(recurrenceProjection(doneWeekly({ repeat: { ...weekly, count: 3, timesDone: 3 } }))).toEqual({ returnsOn: null, finished: true, reappearsOn: null });
+        expect(recurrenceProjection(doneWeekly({ repeat: { ...weekly, until: "2026-07-16" } }))).toEqual({ returnsOn: null, finished: true, reappearsOn: null });
+    });
+    test("an open repeating row has no dates", () => {
+        expect(recurrenceProjection(leaf("w", { repeat: weekly, leadDays: 2 }))).toEqual({ returnsOn: null, finished: false, reappearsOn: null });
+    });
+    test("a row without a repeat has no projection", () => {
+        expect(recurrenceProjection(leaf("w", { done: true, completedAt: "2026-07-10" }))).toBeNull();
     });
 });
