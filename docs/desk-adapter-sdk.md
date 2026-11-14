@@ -1,7 +1,7 @@
 <!-- glossary-ignore: host, token, path, user, data, message, body, run -->
 # Desk adapter package and SDK authoring contract
 
-This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.7.0, an additive amendment of 1.0.0 through 1.6.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.7.0"`).
+This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.8.0, an additive amendment of 1.0.0 through 1.7.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.8.0"`).
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
@@ -21,6 +21,9 @@ SDK 1.6.0 lets a conformance run supply a fake Mail source (cortex#3615). `runCo
 
 <!-- glossary-ignore: host, run, data -->
 SDK 1.7.0 extends the fake Mail source to the failure scenarios and adds a cloud reader to a Mail run (cortex#3629). `runFailureScenarios(packageDir, { mail })` takes the same `MailReadSource` as `runConformance`, and a conformance run with a Mail binding reports a `cloud-reader` probe per query capability. Only the harness changes; a package built against 1.6.0 still loads.
+
+<!-- glossary-ignore: host, run, data -->
+SDK 1.8.0 reads every connection the fake Mail source binds and reports what the package's queries answered there (cortex#3627). The report gains `mailQueries`, a list of `ConformanceMailQuery`. See "What a Mail read adapter's queries answer" below. Only the harness changes; a package built against 1.7.0 still loads.
 
 An external package's Bun verification script can execute the same checks as `scripts/desk-adapter-conformance.ts`:
 
@@ -57,7 +60,23 @@ const capabilities = await runConformance(import.meta.dir, { mail });
 - `runFailureScenarios(packageDir, { mail })` takes the same source. Its scenarios and its companion run read listed mail from it and publish the connection's restriction the same way, so a Mail read adapter's companion run can be conformant. Without `mail` it behaves as before. <!-- glossary-ignore: host, run -->
 - `MailReadSource`, `MailConnectionBinding`, `MailSourceListing` and `MailSourceItem` are the shapes the Cortex runtime's loader takes, published for this harness. They change only additively within Desk SDK 1.x; a breaking change to them bumps the SDK major version.
 
-The tests are `src/conversations/domain-adapters/__tests__/conformance-mail.test.ts`.
+### What a Mail read adapter's queries answer
+
+<!-- glossary-ignore: host, run, data -->
+With `mail`, the run also reads every query binding through the host query runner on each connection the source binds exactly once for the package's adapter, `CONFORMANCE_CONNECTION_ID` included, so a caller can assert on what the adapter answers per connection:
+
+```ts
+const report = await runConformance(import.meta.dir, { mail });
+for (const query of report.mailQueries ?? []) console.log(query.connectionId, query.capabilityId, query.verdict, query.objects);
+```
+
+- Each connection is bound to its source and account through the production bridge. A listing with `error: null` reads `fresh`; one with `error` set reads `stale` with `provider_failure` and keeps its mail; a binding whose source has no listing reads `stale` with `not_listed` and no mail.
+- For each bound connection the run lists the package's destinations, publishes their read restriction through `mailReadRestriction` (`local` unless the binding's `dataPolicy` says `cloud`) and reads every query binding from a local conversation. `report.mailQueries` holds one `ConformanceMailQuery` per connection and query binding: its verdict, how many pages the host released, each released object's `value` in `objects`, and the published `dataPolicy`. The released page envelopes stay internal, so their shape is not part of the SDK contract. A refused read there refuses the run.
+- A handler's read of another connection is refused with `mail_read_unadmitted`, as in the host, so a run cannot leak mail across connections. A connection the source does not bind reads `null`, and a connection bound twice is not read.
+- Without `mail` the report has no `mailQueries`. `runFailureScenarios` does not read the extra connections.
+- `bun scripts/probe-desk-conformance-export.ts --mail <package>` runs the repository's synthetic `tideway` Mail read package (the `mail-read` variant in `src/conversations/domain-adapters/__tests__/fixtures/conformance-build.ts`) through the package export, from outside the repository, with listed mail on the conformance connection, `mail-fresh` and `mail-stale`, and exits nonzero unless the run is conformant. Its bindings name adapter `tideway`, so it is a check of the export, not a probe for another author's package.
+
+The tests are `src/conversations/domain-adapters/__tests__/conformance-mail.test.ts` and `scripts/__tests__/desk-conformance-export.test.ts`.
 
 Pass `{ companionDir: "/path/to/another/local/adapter" }` as the second argument to `runFailureScenarios` to check a second adapter's availability after every scenario. The harness uses synthetic local authority and removes its temporary stores when finished. Credential-only packages report why they were not exercised. Use only trusted local test backends: package code executes with the process's privileges.
 

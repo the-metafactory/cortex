@@ -7,12 +7,13 @@ import { DeskPackageLoader, type DeskPackageCandidate, type DeskTrustedConnector
 import { DeskGenerationStore } from "../../conversations/domain-adapters/package-generation";
 import type { MailConnectionBinding, MailReadSource } from "../../conversations/domain-adapters/mail-read";
 import type { ObjectReference } from "../../conversations/domain-adapters/types";
+import type { TrustedConnector } from "../../conversations/authority";
 import { probeAction } from "./actions";
 import { CONFORMANCE_CONNECTION_ID } from "./connection";
-import { recordConnector } from "./connectors";
-import { listDestinations, probeReads, schemaIndex, type ProbeEnv } from "./probes";
-import { emptyOwnerCalls, overallVerdict, refused, type CapabilityReport, type ConformanceReport, type OwnerCalls } from "./report";
-import { ConformanceRefusal, openConformanceRig, SYNTHETIC_CREDENTIAL_HANDLE } from "./rig";
+import { recordConnector, type Recorded } from "./connectors";
+import { listDestinations, probeReads, runQuery, schemaIndex, type ProbeEnv } from "./probes";
+import { emptyOwnerCalls, overallVerdict, refused, type CapabilityReport, type ConformanceMailQuery, type ConformanceReport, type OwnerCalls } from "./report";
+import { ConformanceRefusal, openConformanceRig, SYNTHETIC_CREDENTIAL_HANDLE, type ConformanceRig } from "./rig";
 
 
 export const authorizeConnection: DeskTrustedConnectorOptions["authorizeConnection"] = current =>
@@ -44,8 +45,79 @@ export async function openConformanceStore(dir: string): Promise<{ engine: Harne
 // glossary-ignore: run
 /** The fake Mail source's one binding for the run's connection and this adapter, if it has exactly one. */
 export function conformanceMailBinding(mail: MailReadSource | undefined, adapterId: string): MailConnectionBinding | undefined {
-  const matches = mail?.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === CONFORMANCE_CONNECTION_ID) ?? [];
+  return mailBindingFor(mail, adapterId, CONFORMANCE_CONNECTION_ID);
+}
+
+function mailBindingFor(mail: MailReadSource | undefined, adapterId: string, connectionId: string): MailConnectionBinding | undefined {
+  const matches = mail?.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === connectionId) ?? [];
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+// glossary-ignore: host, run
+interface ConnectionSeam { connectionId: string; plain: TrustedConnector; destinations: readonly ObjectReference[]; actionId?: string; mailBinding?: MailConnectionBinding }
+
+async function openConnection(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, seam: ConnectionSeam): Promise<{ rig: ConformanceRig; recorded: Recorded }> {
+  const { adapterId, manifest } = candidate;
+  const readIds = manifest.declaration.capabilities.filter(capability => capability.kind !== "action").map(capability => capability.capabilityId);
+  const { connector, recorded } = recordConnector(seam.plain);
+  const rig = await openConformanceRig({
+    dir: temp, registry: loader.registry(), connector, adapterId, connectionId: seam.connectionId, readBindings: manifest.readBindings, readCapabilityIds: readIds,
+    writeCapabilityIds: seam.actionId === undefined ? [] : [seam.actionId], writerCapabilityId: seam.actionId ?? seam.plain.support.capabilityId, destinations: seam.destinations,
+    ...(seam.mailBinding ? { mailBinding: seam.mailBinding } : {}),
+  });
+  return { rig, recorded };
+}
+
+const refusalOf = (error: unknown): { code: string; detail: string } =>
+  ({ code: error instanceof ConformanceRefusal ? error.code : "host_unavailable", detail: error instanceof Error ? error.message : "The host seam could not open." });
+
+const releasedObjects = (pages: readonly unknown[]): unknown[] => pages.flatMap(page => {
+  const objects = (page as { objects?: unknown } | null)?.objects;
+  return Array.isArray(objects) ? objects.map(object => (object as { value?: unknown } | null)?.value) : [];
+});
+
+async function readMailConnection(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, mailBinding: MailConnectionBinding): Promise<ConformanceMailQuery[]> {
+  const { adapterId, manifest } = candidate;
+  const { connectionId } = mailBinding;
+  const queries = manifest.readBindings.filter(binding => binding.mode === "query");
+  const refusedAll = ({ code, detail }: { code: string; detail: string }): ConformanceMailQuery[] =>
+    queries.map(binding => ({ connectionId, capabilityId: binding.capabilityId, verdict: "refused", code, detail, released: 0, objects: [] }));
+  const built = loader.trustedConnector(adapterId, { adapterId, connectionId }, { authorizeConnection });
+  if (!built.ok) return refusedAll({ code: built.error.code, detail: built.error.message });
+  const plain = built.value.connector;
+  const sample = { schemas: schemaIndex(manifest), destinations: [] as ObjectReference[], adapterId, connectionId };
+  sample.destinations.push(...(await listDestinations({ registry: loader.registry(), manifest, sample, plain, adapterId, connectionId })).destinations);
+  let opened;
+  try {
+    opened = await openConnection(loader, candidate, temp, { connectionId, plain, destinations: sample.destinations, mailBinding });
+  } catch (error) {
+    return refusedAll(refusalOf(error));
+  }
+  const { rig, recorded } = opened;
+  try {
+    const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId };
+    const dataPolicy = rig.restrictions[0]?.egress;
+    const answered: ConformanceMailQuery[] = [];
+    for (const binding of queries) {
+      const { report, pages } = await runQuery(env, binding);
+      answered.push({
+        connectionId, capabilityId: report.capabilityId, verdict: report.verdict, ...(report.code === undefined ? {} : { code: report.code }), detail: report.detail,
+        ...(dataPolicy === undefined ? {} : { dataPolicy }), released: pages.length, objects: releasedObjects(pages),
+      });
+    }
+    return answered;
+  } finally {
+    await rig.close();
+  }
+}
+
+async function readMailConnections(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, mail: MailReadSource, outcome: Outcome): Promise<Outcome> {
+  const byConnection = Map.groupBy(mail.connections().filter(binding => binding.adapterId === candidate.adapterId), binding => binding.connectionId);
+  const mailQueries: ConformanceMailQuery[] = [];
+  for (const [binding, ...more] of byConnection.values()) {
+    if (binding && more.length === 0) mailQueries.push(...await readMailConnection(loader, candidate, temp, binding));
+  }
+  return { ...outcome, ...overallVerdict([...outcome.capabilities, ...mailQueries]), mailQueries };
 }
 
 export async function exercise(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, skeleton: Skeleton, mail?: MailReadSource): Promise<Outcome> {
@@ -53,7 +125,6 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
   const mailBinding = conformanceMailBinding(mail, adapterId);
   const declaration = manifest.declaration;
   const actionIds = declaration.capabilities.filter(capability => capability.kind === "action").map(capability => capability.capabilityId);
-  const readIds = declaration.capabilities.filter(capability => capability.kind !== "action").map(capability => capability.capabilityId);
   const registry = loader.registry();
   const capabilities: CapabilityReport[] = [];
   const ownerCalls = emptyOwnerCalls();
@@ -72,18 +143,15 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
       destinations.push(...listed.destinations);
       capabilities.push(...listed.reports);
     }
-    const { connector, recorded } = recordConnector(plain);
-    let rig;
+    let opened;
     try {
-      rig = await openConformanceRig({
-        dir: temp, registry, connector, adapterId, connectionId: CONFORMANCE_CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
-        writeCapabilityIds: actionId === undefined ? [] : [actionId], writerCapabilityId: actionId ?? plain.support.capabilityId, destinations, ...(mailBinding ? { mailBinding } : {}),
-      });
+      opened = await openConnection(loader, candidate, temp, { connectionId: CONFORMANCE_CONNECTION_ID, plain, destinations, ...(actionId === undefined ? {} : { actionId }), ...(mailBinding ? { mailBinding } : {}) });
     } catch (error) {
-      const code = error instanceof ConformanceRefusal ? error.code : "host_unavailable";
-      capabilities.push(refused(actionId ?? adapterId, "action", code, error instanceof Error ? error.message : "The host seam could not open."));
+      const { code, detail } = refusalOf(error);
+      capabilities.push(refused(actionId ?? adapterId, "action", code, detail));
       continue;
     }
+    const { rig, recorded } = opened;
     const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
     try {
       if (index === 0) capabilities.push(...await probeReads(env, mailBinding ? mailBinding.dataPolicy ?? "local" : undefined));
@@ -115,7 +183,8 @@ export async function executePackage(packageDir: string, temp: string, mail?: Ma
     }
     const activated = await loader.activate(candidate.packageId);
     if (!activated.ok) return stopped(named, "refused", activated.error.code, activated.error.message);
-    return await exercise(loader, candidate, temp, named, mail);
+    const outcome = await exercise(loader, candidate, temp, named, mail);
+    return mail ? await readMailConnections(loader, candidate, temp, mail, outcome) : outcome;
   } finally {
     await engine.close(BACKGROUND_CONTEXT);
   }

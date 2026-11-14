@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskMailListing } from "../../../desk-sdk";
-import { CONFORMANCE_CONNECTION_ID, runConformance, runFailureScenarios, type ConformanceReport, type MailConnectionBinding, type MailReadSource, type MailSourceListing } from "../../../desk-adapter-sdk/conformance";
+import { CONFORMANCE_CONNECTION_ID, formatReport, runConformance, runFailureScenarios, type ConformanceMailQuery, type ConformanceReport, type MailConnectionBinding, type MailReadSource, type MailSourceListing } from "../../../desk-adapter-sdk/conformance";
 import { openConformanceRig } from "../../../desk-adapter-sdk/conformance/rig";
 import { DomainAdapterRegistry } from "../registry";
 import type { TrustedConnector } from "../../authority";
-import { conformanceDomain, writeConformancePackage } from "./fixtures/conformance-build";
+import { conformanceDomain, MAIL_PEER_CONNECTIONS, writeConformancePackage } from "./fixtures/conformance-build";
 
 const ADAPTER = "tideway";
 const SOURCE = "source-example";
@@ -69,10 +69,17 @@ describe("a conformance run given a fake Mail source", () => {
 
     expectUnbound(report);
     expect(report.capabilities.find(item => item.probe === "query")).toMatchObject({ verdict: "refused", code: "invalid_query_page" });
+    expect(report.mailQueries).toBeUndefined();
   });
 
-  test("a binding for another connection leaves the conformance connection unbound", async () => {
-    expectUnbound(await runConformance(packageDir, { mail: fakeMail([binding({ connectionId: "connection-other" })]) }));
+  test("a binding for another connection leaves the conformance connection unbound and is read on its own", async () => {
+    const report = await runConformance(packageDir, { mail: fakeMail([binding({ connectionId: "connection-other" })]) });
+
+    expect(report.status).toBe("refused");
+    expect(report.capabilities.find(item => item.probe === "query")).toMatchObject({ verdict: "refused", code: "invalid_query_page" });
+    expect(report.capabilities.some(item => item.probe === "cloud-reader")).toBe(false);
+    expect(seenListings().filter(read => read === null).length).toBeGreaterThan(0);
+    expect(report.mailQueries?.map(query => [query.connectionId, query.verdict])).toEqual([["connection-other", "conformant"]]);
   });
 });
 
@@ -148,5 +155,83 @@ describe("the read restriction a conformance run publishes for a Mail connection
     expect(await publishedEgress(binding())).toEqual(["local"]);
     expect(await publishedEgress(binding({ dataPolicy: "cloud" }))).toEqual(["cloud"]);
     expect(await publishedEgress()).toEqual(["cloud"]);
+  });
+});
+
+describe("a conformance run whose Mail source binds several connections", () => {
+  const [FRESH, STALE] = MAIL_PEER_CONNECTIONS;
+  const SEARCH = `${ADAPTER}.gauge.search`;
+  const FRESH_SOURCE = "source-fresh";
+  const STALE_SOURCE = "source-stale";
+  const freshListing: MailSourceListing = {
+    id: FRESH_SOURCE, readAt: LISTED_AT, error: null,
+    mail: [
+      { id: "<fresh-1@example.invalid>", account: "fresh@example.invalid", from: { name: "Sender One", address: "one@example.invalid" }, subject: "Fresh subject one", receivedAt: "2026-11-14T07:00:00.000Z", unread: true, firstParagraph: "Opening line.\n\nSecond paragraph." },
+      { id: "<fresh-2@example.invalid>", account: "fresh@example.invalid", from: { address: "two@example.invalid" }, subject: "Fresh subject two", receivedAt: "2026-11-14T07:10:00.000Z", unread: false },
+      { id: "<fresh-3@example.invalid>", account: "fresh@example.invalid", from: { address: "three@example.invalid" }, subject: "Fresh subject three", receivedAt: "2026-11-14T07:20:00.000Z", unread: true },
+      { id: "<other@example.invalid>", account: "other@example.invalid", from: { address: "other@example.invalid" }, subject: "Under another account", receivedAt: "2026-11-14T07:30:00.000Z", unread: true },
+    ],
+  };
+  const staleListing: MailSourceListing = {
+    id: STALE_SOURCE, readAt: LISTED_AT, error: "provider_failure",
+    mail: [{ id: "<stale-1@example.invalid>", account: "stale@example.invalid", from: { address: "kept@example.invalid" }, subject: "Kept subject", receivedAt: "2026-11-13T07:00:00.000Z", unread: false }],
+  };
+  const fresh = binding({ connectionId: FRESH, sourceId: FRESH_SOURCE, account: "fresh@example.invalid" });
+  const stale = binding({ connectionId: STALE, sourceId: STALE_SOURCE, account: "stale@example.invalid", dataPolicy: "cloud" });
+  const source = (bindings: MailConnectionBinding[], listings: MailSourceListing[] = [freshListing, staleListing]): MailReadSource => ({ connections: () => bindings, listings: () => listings });
+  const searchOn = (queries: ConformanceMailQuery[] | undefined, connectionId: string) => queries?.find(query => query.connectionId === connectionId && query.capabilityId === SEARCH);
+  const names = (query: ConformanceMailQuery | undefined) => (query?.objects ?? []).map(object => (object as { name: string }).name);
+  const notes = (query: ConformanceMailQuery | undefined) => (query?.objects ?? []).map(object => (object as { note: string }).note);
+
+  test("reads each bound connection's queries through the host query runner and reports what they answered", async () => {
+    const report = await runConformance(packageDir, { mail: source([fresh, stale]) });
+
+    const onFresh = searchOn(report.mailQueries, FRESH);
+    expect(onFresh).toMatchObject({ verdict: "conformant", dataPolicy: "local" });
+    expect(onFresh?.released).toBe(2);
+    expect(names(onFresh)).toEqual(["Fresh subject one", "Fresh subject two", "Fresh subject three"]);
+    expect(notes(onFresh)).toEqual(Array(3).fill("account fresh@example.invalid; fresh; peer read mail_read_unadmitted"));
+
+    const onStale = searchOn(report.mailQueries, STALE);
+    expect(onStale).toMatchObject({ verdict: "conformant", dataPolicy: "cloud" });
+    expect(names(onStale)).toEqual(["Kept subject"]);
+    expect(notes(onStale)).toEqual(["account stale@example.invalid; stale provider_failure; peer read mail_read_unadmitted"]);
+
+    const read = seenListings().filter(listing => listing !== null);
+    expect(read.find(listing => listing.connection.connectionId === FRESH)?.mail[0]).toMatchObject({ ref: { connection: FRESH, messageId: "<fresh-1@example.invalid>" }, account: "fresh@example.invalid", firstParagraph: "Opening line." });
+    expect(read.find(listing => listing.connection.connectionId === STALE)?.health).toEqual({ state: "stale", code: "provider_failure" });
+    expect(formatReport(report)).toContain(`${SEARCH} on ${FRESH}`);
+    expect(report.networkRequests).toBe(0);
+  });
+
+  test("serves null to the unbound conformance connection, whose standard probes refuse the run", async () => {
+    const report = await runConformance(packageDir, { mail: source([fresh, stale]) });
+
+    expect(seenListings()).toContain(null);
+    expect(report.capabilities.find(item => item.probe === "query")).toMatchObject({ verdict: "refused", code: "invalid_query_page" });
+    expect(report.status).toBe("refused");
+    expect(report.mailQueries?.every(query => query.verdict === "conformant")).toBe(true);
+  });
+
+  test("with the conformance connection bound too, every connection is read and the run is conformant", async () => {
+    const own = binding({ connectionId: CONFORMANCE_CONNECTION_ID, sourceId: FRESH_SOURCE, account: "fresh@example.invalid" });
+    const report = await runConformance(packageDir, { mail: source([own, fresh, stale]) });
+
+    expect(report.status).toBe("conformant");
+    expect(seenListings()).not.toContain(null);
+    expect(report.mailQueries?.map(query => query.connectionId)).toEqual([CONFORMANCE_CONNECTION_ID, FRESH, STALE]);
+  });
+
+  test("a source that has not listed yet reads stale with no mail", async () => {
+    const report = await runConformance(packageDir, { mail: source([fresh], []) });
+
+    expect(searchOn(report.mailQueries, FRESH)).toMatchObject({ verdict: "conformant", objects: [] });
+    expect(seenListings().find(listing => listing?.connection.connectionId === FRESH)).toMatchObject({ health: { state: "stale", code: "not_listed" }, mail: [] });
+  });
+
+  test("a connection bound twice is not read, as the host serves it no mail", async () => {
+    const report = await runConformance(packageDir, { mail: source([fresh, { ...fresh, account: "fresh-again@example.invalid" }, stale]) });
+
+    expect(report.mailQueries?.map(query => query.connectionId)).toEqual([STALE]);
   });
 });

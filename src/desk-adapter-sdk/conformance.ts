@@ -9,7 +9,7 @@ import { executePackage } from "./conformance/run";
 export { DESK_ADAPTER_SDK_VERSION } from "../desk-sdk/version";
 export { CONFORMANCE_CONNECTION_ID } from "./conformance/connection";
 export type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceListing } from "../conversations/domain-adapters/mail-read-source";
-export { formatReport, type CapabilityReport, type ConformanceReport, type OwnerCalls, type ProbeKind, type Verdict } from "./conformance/report";
+export { formatReport, type CapabilityReport, type ConformanceMailQuery, type ConformanceReport, type OwnerCalls, type ProbeKind, type Verdict } from "./conformance/report";
 export { FAILURE_SCENARIOS, formatFailureReport, runFailureScenarios, type CompanionReport, type FailureOptions, type FailureReport, type ScenarioName, type ScenarioReport, type ScenarioVerdict } from "./conformance/failures";
 
 // glossary-ignore: host, run
@@ -19,6 +19,10 @@ export { FAILURE_SCENARIOS, formatFailureReport, runFailureScenarios, type Compa
  * package's adapter and `CONFORMANCE_CONNECTION_ID` makes `host.mail.listed()` serve that connection inside the
  * query and observation probes, and the binding's `dataPolicy` sets the read restriction the host publishes for the
  * connection's destinations, as `mailReadRestriction` does.
+ *
+ * The run also reads every query binding through the host query runner on each connection `mail` binds exactly once
+ * for the package's adapter, and reports what each answered in `mailQueries` (cortex#3627). A handler's read of
+ * another connection is refused as in the host, and a refused read there refuses the run.
  */
 export interface ConformanceOptions {
   tempParent?: string;

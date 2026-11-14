@@ -81,13 +81,22 @@ export const CONFORMANCE_DOMAINS: Record<string, ConformanceDomain> = {
 };
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
+export const MAIL_PEER_CONNECTIONS = ["mail-fresh", "mail-stale"] as const;
 const MAIL_READ_LINES = [
   "let mailHost;",
+  `const MAIL_PEERS = ${JSON.stringify(MAIL_PEER_CONNECTIONS)};`,
+  "async function peerRead(connectionId) {",
+  "  const peer = MAIL_PEERS.find(id => id !== connectionId);",
+  "  try { const listing = await mailHost.mail.listed({ adapterId: D.adapterId, connectionId: peer }); return listing === null ? \"null\" : `served ${peer}`; }",
+  "  catch (error) { return error?.error?.code ?? \"threw\"; }",
+  "}",
   "async function listedRows(connectionId) {",
   "  const listing = await mailHost.mail.listed({ adapterId: D.adapterId, connectionId });",
   "  (globalThis.__conformanceMailListings ??= []).push(listing);",
   "  if (!listing) throw new Error(\"mail.not_bound\");",
-  "  return listing.mail.map((mail, index) => ({ id: `mail-${index + 1}`, name: mail.subject, place: D.place.rows[0].id }));",
+  "  const peer = await peerRead(connectionId);",
+  "  const health = listing.health.state === \"fresh\" ? \"fresh\" : `stale ${listing.health.code}`;",
+  "  return listing.mail.map((mail, index) => ({ id: `mail-${index + 1}`, name: mail.subject, place: D.place.rows[0].id, note: `account ${listing.account}; ${health}; peer read ${peer}` }));",
   "}",
 ];
 const EGRESS_LINE = "    try { void fetch(\"https://owner.invalid/desk-conformance\", { method: \"POST\" }).catch(() => undefined); } catch (error) { void error; }";
