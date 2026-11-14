@@ -232,7 +232,7 @@ export class AuthorityMediator {
   private grantMatches(grant: GrantRecord, resolved: Resolved, snapshot: ApprovedSnapshot, purpose: "mutation" | "cancellation"): boolean {
     const c = grant.constraints;
     const selector = c.context;
-    return c.adapterId === snapshot.adapterId && c.connectionId === snapshot.connectionId && grant.purpose === purpose && c.capabilityIds.includes(snapshot.capabilityId) && exactReferences(c.destinations, snapshot.destinations) && canonicalWire(c.target ?? null) === canonicalWire(snapshot.target ?? null) && (selector.kind === "principal" || selector.kind === "conversation" && selector.conversationId === resolved.binding.conversationId || selector.kind === "area" && resolved.policy.areaId !== undefined && selector.areaId === resolved.policy.areaId) && !(c.sourceReleaseCeiling === "local" && snapshot.policy === "cloud");
+    return c.adapterId === snapshot.adapterId && c.connectionId === snapshot.connectionId && grant.purpose === purpose && c.capabilityIds.includes(snapshot.capabilityId) && (c.selection === "connection" || exactReferences(c.destinations, snapshot.destinations) && canonicalWire(c.target ?? null) === canonicalWire(snapshot.target ?? null)) && (selector.kind === "principal" || selector.kind === "conversation" && selector.conversationId === resolved.binding.conversationId || selector.kind === "area" && resolved.policy.areaId !== undefined && selector.areaId === resolved.policy.areaId) && !(c.sourceReleaseCeiling === "local" && snapshot.policy === "cloud");
   }
 
   private canMutate(resolved: Resolved, snapshot: ApprovedSnapshot): boolean {
@@ -258,6 +258,14 @@ export class AuthorityMediator {
     return this.approve(context, approval, grantId);
   }
 
+  private openGrant(state: AuthorityState, resolved: Resolved, constraints: GrantRecord["constraints"]): string {
+    const grantId = randomUUID();
+    const grant: GrantRecord = { version: 1, status: "active", purpose: "mutation", grantId, grantRevision: "1", principalRef: resolved.principal.principalRef, constraints, createdAt: this.now().toISOString() };
+    state.records[`grant:${grantId}`] = [{ kind: "grant", value: grant }];
+    state.heads[`grant:${grantId}`] = 1;
+    return grantId;
+  }
+
   async grantApprovedOperation(context: HostContext, operationId: string, scope: "conversation" | "global"): Promise<string | null> {
     return this.exclusive(async () => {
       const stored = await this.journal.read(operationId);
@@ -269,13 +277,32 @@ export class AuthorityMediator {
         const approval = stored.journal.events[0]?.event;
         if (approval?.kind !== "approved" || approval.authority.principalRef !== resolved.principal.principalRef || approval.authority.basis.kind !== "confirmation") return null;
         this.basis(state, resolved, operationId, snapshot, approval.authority.basis, "mutation");
-        const grantId = randomUUID();
-        const grant: GrantRecord = { version: 1, status: "active", purpose: "mutation", grantId, grantRevision: "1", principalRef: resolved.principal.principalRef, constraints: { adapterId: snapshot.adapterId, connectionId: snapshot.connectionId, capabilityIds: [snapshot.capabilityId], destinations: snapshot.destinations, ...(snapshot.target ? { target: snapshot.target } : {}), context: scope === "global" ? { kind: "principal" } : { kind: "conversation", conversationId: snapshot.provenance.conversationId }, sourceReleaseCeiling: snapshot.policy }, createdAt: this.now().toISOString() };
-        state.records[`grant:${grantId}`] = [{ kind: "grant", value: grant }];
-        state.heads[`grant:${grantId}`] = 1;
-        return grantId;
+        return this.openGrant(state, resolved, { adapterId: snapshot.adapterId, connectionId: snapshot.connectionId, capabilityIds: [snapshot.capabilityId], destinations: snapshot.destinations, ...(snapshot.target ? { target: snapshot.target } : {}), context: scope === "global" ? { kind: "principal" } : { kind: "conversation", conversationId: snapshot.provenance.conversationId }, sourceReleaseCeiling: snapshot.policy });
       });
     });
+  }
+
+  async grantConnectionActions(context: HostContext, connectionId: string, capabilityIds: readonly string[]): Promise<string | null> {
+    const wanted = [...new Set(capabilityIds)];
+    if (!wanted.length) return null;
+    return this.exclusive(async () => {
+      let resolved: Resolved;
+      try { resolved = await this.resolve(context, connectionId); } catch { return null; }
+      const { connection, policy, binding } = resolved;
+      if (binding.maintenance || !policy.operationVisible || !policy.readsAllowed || !policy.writesAllowed || !wanted.every(id => connection.writeCapabilityIds.includes(id))) return null;
+      return this.commit(state => {
+        return this.openGrant(state, resolved, { adapterId: connection.adapterId, connectionId, capabilityIds: wanted, selection: "connection", destinations: [], context: { kind: "principal" }, sourceReleaseCeiling: "local" });
+      });
+    });
+  }
+
+  async findConnectionGrant(context: HostContext, connectionId: string, capabilityId: string): Promise<string | null> {
+    const resolved = await this.resolve(context, connectionId).catch(() => null);
+    if (!resolved) return null;
+    const state = await this.state();
+    const match = Object.keys(state.records).filter(key => key.startsWith("grant:")).flatMap(key => { const grant = headRecord(state, "grant", key.slice(6)); return grant ? [grant] : []; })
+      .find(grant => grant.status === "active" && grant.purpose === "mutation" && grant.principalRef === resolved.principal.principalRef && grant.constraints.selection === "connection" && grant.constraints.connectionId === connectionId && grant.constraints.capabilityIds.includes(capabilityId));
+    return match?.grantId ?? null;
   }
 
   async revokeCreationGrant(context: HostContext, grantId: string): Promise<void> {
