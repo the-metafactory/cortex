@@ -134,11 +134,15 @@ export class MailLoopHost {
       pass.paused = true;
       return pass;
     }
-    const grant = this.activeGrant(loop);
     const seen = new Set<string>();
     for (const item of items) {
+      if (this.paused(loop)) {
+        pass.paused = true;
+        break;
+      }
       if (seen.has(item.mail.id)) continue;
       seen.add(item.mail.id);
+      const grant = this.activeGrant(loop);
       const action = loopActionOf(item.target);
       const runnable = this.runnable(grant, loop, item, action);
       if (runnable.kind === "refused") {
@@ -149,8 +153,9 @@ export class MailLoopHost {
         ? await this.options.moves.move({ action: "trash", messageId: item.mail.id, provenance, grantId: runnable.grantId })
         : await this.options.moves.move({ action: "move", messageId: item.mail.id, target: item.target, provenance, grantId: runnable.grantId });
       if (outcome.kind === "receipt") {
-        pass.acted += 1;
         pass.receipts.push(outcome.receipt);
+        if (outcome.receipt.state === "done") pass.acted += 1;
+        else pass.failures.push({ messageId: item.mail.id, state: outcome.receipt.state, message: outcome.receipt.message });
       } else if (outcome.kind === "denied") {
         pass.proposals.push(this.proposal(loop, grant, item, "denied", outcome.reason.message));
       } else {

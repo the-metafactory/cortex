@@ -44,7 +44,7 @@ export type MailLoopTarget = (typeof MAIL_LOOP_TARGETS)[number];
 
 export const loopActionOf = (target: MailLoopTarget): MailLoopAction => (target === "trash" ? "trash" : "move");
 
-/** The connection capabilities a standing grant must name to run the given loop actions, including their Undo. */
+/** The connection capabilities a standing grant must name for the given loop actions, including their Undo. */
 export const loopCapabilityIds = (actions: readonly MailLoopAction[]): string[] =>
   [...new Set([...actions.map(action => MAIL_ACTION_CAPABILITY[action]), MAIL_RESTORE_CAPABILITY])];
 

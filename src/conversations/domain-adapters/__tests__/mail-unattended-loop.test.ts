@@ -117,6 +117,63 @@ describe("a Mail rule pass under a standing grant", () => {
   });
 });
 
+describe("a move the provider does not carry out", () => {
+  test("records a failed receipt and a failure instead of counting an action", async () => {
+    const rig = await open();
+    rig.seed(["m1"]);
+    await rig.grant("rule", ["move"], ruleSelection());
+    const pass = await rig.loop.runRules(ruleWork([loopMail("m1"), loopMail("m2")]), LOOP_PROVENANCE);
+    expect(pass.acted).toBe(1);
+    expect(pass.failures).toMatchObject([{ messageId: "m2", state: "missing" }]);
+    expect(pass.receipts.map(receipt => [receipt.messageId, receipt.state])).toEqual([["m1", "done"], ["m2", "missing"]]);
+    expect(rig.folders.get("m2")).toBeUndefined();
+  });
+
+  test("a DMARC report the provider cannot move is a failure, not an action", async () => {
+    const rig = await open();
+    await rig.grant("dmarc", ["move"], dmarcSelection());
+    const pass = await rig.loop.runDmarc(dmarcWork([dmarcMail("d1", DIGEST.id)]), LOOP_PROVENANCE);
+    expect(pass.acted).toBe(0);
+    expect(pass.failures).toMatchObject([{ messageId: "d1", state: "missing" }]);
+  });
+});
+
+describe("the standing grant and the pause are read again before each move", () => {
+  test("revoking the grant between moves leaves the rest of the pass proposing", async () => {
+    const rig = await open();
+    rig.seed(["m1", "m2"]);
+    const grant = await rig.grant("rule", ["move"], ruleSelection());
+    rig.beforeEachMove(() => { rig.revoke(grant.grantId); });
+    const pass = await rig.loop.runRules(ruleWork([loopMail("m1"), loopMail("m2")]), LOOP_PROVENANCE);
+    expect(pass.acted).toBe(1);
+    expect(pass.proposals).toMatchObject([{ messageId: "m2", reason: "no-grant" }]);
+    expect(rig.calls).toHaveLength(1);
+    expect(rig.folders.get("m2")).toBe("INBOX");
+  });
+
+  test("replacing the grant between moves leaves mail outside the new selection alone", async () => {
+    const rig = await open();
+    rig.seed(["m1", "m2"]);
+    await rig.grant("rule", ["move"], ruleSelection());
+    rig.beforeEachMove(async () => { await rig.grant("rule", ["move"], ruleSelection("someone@elsewhere.example")); });
+    const pass = await rig.loop.runRules(ruleWork([loopMail("m1"), loopMail("m2")]), LOOP_PROVENANCE);
+    expect(pass.acted).toBe(1);
+    expect(pass.proposals).toMatchObject([{ messageId: "m2", reason: "outside-selection" }]);
+    expect(rig.folders.get("m2")).toBe("INBOX");
+  });
+
+  test("pausing between moves stops the rest of the pass without proposing", async () => {
+    const rig = await open();
+    rig.seed(["m1", "m2"]);
+    await rig.grant("rule", ["move"], ruleSelection());
+    rig.beforeEachMove(() => { rig.pause("rule"); });
+    const pass = await rig.loop.runRules(ruleWork([loopMail("m1"), loopMail("m2")]), LOOP_PROVENANCE);
+    expect(pass).toMatchObject({ paused: true, acted: 1, proposals: [] });
+    expect(rig.calls).toHaveLength(1);
+    expect(rig.folders.get("m2")).toBe("INBOX");
+  });
+});
+
 describe("a DMARC pass under a standing grant", () => {
   test("files each report the named digest rule held, and leaves a report it did not hold", async () => {
     const rig = await open();

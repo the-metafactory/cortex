@@ -41,6 +41,7 @@ export interface MailLoopRig {
   receipt(operationId: string): Promise<MailMoveReceipt | null>;
   receipts(): Promise<MailMoveReceipt[]>;
   seed(ids: readonly string[], folder?: string): void;
+  beforeEachMove(hook: (request: DispatchRequest) => void | Promise<void>): void;
   deny(on: boolean): void;
   advance(ms: number): void;
   reopen(): Promise<void>;
@@ -100,9 +101,12 @@ export async function openMailLoopRig(): Promise<MailLoopRig> {
     return { kind: "succeeded", output: { ref, folder }, evidence: { kind: "effect", evidenceId: `effect:${request.attemptId}`, observedAt: AT, ownerRequestId: request.ownerRequestId, receipt: { moved: folder }, refs: [ref] } };
   };
 
+  let beforeEachMove: ((request: DispatchRequest) => void | Promise<void>) | null = null;
+
   const dispatch = async (operationId: string): Promise<void> => {
     const prepared = await prepareDispatch(fixture.journal, operationId, { connectionId: LOOP_CONNECTION, declarationId: "mail-loop-owner", expected: "an approved move", now });
     calls.push(prepared.request);
+    if (beforeEachMove) await beforeEachMove(prepared.request);
     await deliver(fixture.journal, prepared, binding(prepared.request));
   };
 
@@ -125,6 +129,7 @@ export async function openMailLoopRig(): Promise<MailLoopRig> {
     receipt: operationId => loop.receipt(operationId),
     receipts: () => loop.receipts(),
     seed: (ids, folder = "INBOX") => { for (const id of ids) if (!folders.has(id)) folders.set(id, folder); },
+    beforeEachMove: hook => { beforeEachMove = hook; },
     deny: on => { denied = on; },
     advance: ms => { now += ms; },
     async reopen() {

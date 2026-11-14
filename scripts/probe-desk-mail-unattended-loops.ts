@@ -44,6 +44,13 @@ try {
   assert.equal(undone.kind, "receipt");
   assert.equal(rig.folders.get("rule-1"), "INBOX");
 
+  const missing = await rig.loop.runRules({ rule: RULE, mail: [loopMail("rule-missing")] }, LOOP_PROVENANCE);
+  assert.equal(missing.acted, 0);
+  assert.deepEqual(missing.proposals, []);
+  assert.deepEqual(missing.failures.map(failure => [failure.messageId, failure.state]), [["rule-missing", "missing"]]);
+  assert.deepEqual(missing.receipts.map(receipt => receipt.state), ["missing"]);
+  assert.equal(rig.folders.get("rule-missing"), undefined);
+
   proposesOnly(await rig.loop.runDmarc({ target: "archive", mail: [dmarcMail("dmarc-1", DIGEST)] }, LOOP_PROVENANCE), ["dmarc-1"]);
   assert.equal(rig.folders.get("dmarc-1"), "INBOX");
 
