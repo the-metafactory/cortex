@@ -94,6 +94,9 @@ export async function sourceConversations(host: ConversationHost, deps: StudioCo
   return { source, conversations, sessions };
 }
 
+const startCreate = (host: ConversationHost, request: Parameters<ConversationHost["create"]>[0], principal: string, seed: Seed): Promise<ConversationMeta> =>
+  host.create(request, principal, { ...seed, requireLane: true });
+
 export async function startFromSource(host: ConversationHost, deps: StudioConversationDeps, body: z.infer<typeof StartSchema>, principal: string): Promise<ConversationMeta> {
   const { startId } = body;
   const source = body.source.owner === "graph-node" ? { ...body.source, id: canonicalTaskRef(body.source.id) } : body.source;
@@ -101,12 +104,12 @@ export async function startFromSource(host: ConversationHost, deps: StudioConver
   const [resolved] = await host.sourcesOf([source]);
   if (resolved?.state !== "available") throw new ConversationError(403, "That source is unavailable, so no conversation was started.");
   if (source.owner === "balance-task" || source.owner === "balance-project") {
-    return host.create({ title: clip(resolved.title), links: [source], origin: { kind: "balance", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
+    return startCreate(host, { title: clip(resolved.title), links: [source], origin: { kind: "balance", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
   }
   if (source.owner === "graph-node") {
     const text = "Help me talk through the linked Ranger question. Prepare proposals for my confirmation. Starting this conversation changes nothing on the graph. To save decisions along the way, propose a ruling on the node; once I have settled the question, propose closing the node with the resolution and a one-line gist.";
     const key = `ranger-grilling:${source.id}`;
-    const conversation = await host.create({ title: clip(resolved.title), links: [source], origin: { kind: "graph", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
+    const conversation = await startCreate(host, { title: clip(resolved.title), links: [source], origin: { kind: "graph", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
     const unopened = (await host.entries(conversation.id, 1, undefined)).entries.length === 0;
     if (unopened) await host.submit(conversation.id, { inputId: key, transport: "web", text, mode: "queue" });
     return host.meta(conversation.id);
@@ -120,12 +123,12 @@ export async function startFromSource(host: ConversationHost, deps: StudioConver
   const original = thread ? sessionSubject(thread, note ? { kind: "ghost", note: note.note } : { kind: "thread" }) : null;
   if (!thread || thread.state === "closed" || original === null) throw new ConversationError(409, "Choose an open idea, proposed stand or an active thread.");
   const scope = ownerScope({ thread: slug, ...(note ? { note: note.note } : {}), original, stand: thread.stand });
-  return host.create({ title: studioTitle(Boolean(note), original), links: [source], origin: { kind: "studio", ref: slug }, policy: thread.policy }, principal, { key, scope, titleFromSource: true });
+  return startCreate(host, { title: studioTitle(Boolean(note), original), links: [source], origin: { kind: "studio", ref: slug }, policy: thread.policy }, principal, { key, scope, titleFromSource: true });
 }
 
 export async function startFromAsk(host: ConversationHost, areas: DeskOptions["areas"], body: z.infer<typeof AskStartSchema>, principal: string): Promise<ConversationMeta> {
   const policy = body.area ? effectivePolicy([body.area], areas).policy : "cloud";
-  const conversation = await host.create({ title: clip(body.text), links: [], origin: { kind: "web", ref: "desk-ask" }, policy }, principal, { key: `desk-ask:${body.startId}` });
+  const conversation = await startCreate(host, { title: clip(body.text), links: [], origin: { kind: "web", ref: "desk-ask" }, policy }, principal, { key: `desk-ask:${body.startId}` });
   await host.submit(conversation.id, { inputId: `desk-ask:${body.startId}`, transport: "web", text: body.text, mode: "queue" });
   return host.meta(conversation.id);
 }

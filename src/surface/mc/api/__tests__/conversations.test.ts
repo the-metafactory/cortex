@@ -165,6 +165,7 @@ describe("conversation API gates", () => {
     const local = await handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method: "POST", headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, body: JSON.stringify({ startId: "2c9a7e51-8b0d-4f3a-9c6e-1d2b3a4f5e60", text: "a lab question", area: "lab" }) }), new URL(`http://127.0.0.1:8767${path}`), guard(), () => status, { db: initDatabase(":memory:"), runtime: { options: lab, ledger: new HandledLedger() } });
     expect(local.status).toBe(503);
     expect(((await local.json()) as { error: string }).error).toContain("No local model is configured");
+    expect((await status.host.list()).map(c => c.id)).toEqual([conversation.id]);
   });
 
   test("a command-bar question says why when conversations are not set up or no model can answer, and nothing is sent", async () => {
@@ -177,7 +178,9 @@ describe("conversation API gates", () => {
     statuses.push(status);
     const failed = await call(status, "POST", "/api/conversations/asks", ask);
     expect(failed.status).toBe(503);
-    expect(((await failed.json()) as { error: string }).error).toContain("Nothing was sent");
+    expect(await failed.json()).toEqual({ ok: false, error: "No conversation model is configured. Nothing was sent." });
+    if (status.state !== "ready") throw new Error("host not ready");
+    expect(await status.host.list()).toEqual([]);
   });
 
   test("the stack principal is the governance allowlist when set, else the local principal", () => {
