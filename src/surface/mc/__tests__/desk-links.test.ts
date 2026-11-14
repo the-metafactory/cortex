@@ -6,7 +6,7 @@ import { DEFAULT_SETTINGS, type AppState } from "../../../balance";
 import { HandledLedger } from "../desk/actions";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { activeMailLink, linkedMailIds, linkStudioMail, offDeskIds, readLink } from "../desk/links";
+import { activeMailLink, linkedMailIds, linkStudioMail, meetingLinks, offDeskIds, readLink } from "../desk/links";
 import { handleDeskLinks } from "../api/desk-links";
 import { addNote } from "../desk/notes";
 import type { SourceEvent } from "../desk/sources/command";
@@ -211,5 +211,16 @@ describe("link to a meeting", () => {
     expect(await link(rt, { op: "unlink", link: "link-1" })).toEqual({ status: 200, json: { ok: true, message: "“Venue quote” is back on the Desk.", restored: "mail:m1" } });
     expect(await eventLinks(rt)).toBeUndefined();
     expect((await composeWith(db, options, rt, NOW)).items.some((i) => i.key === "mail:m1")).toBe(true);
+  });
+
+  it("drops a removed task from its meeting, and stops listing links of a meeting that ended before today", async () => {
+    const rt = withEvents([], [meeting()]);
+    await link(rt, { op: "link", requestId: REQUEST, from: { kind: "task", id: "kickoff" }, to: { kind: "meeting", event: EVENT } });
+    const state = seed();
+    state.outline.children[0]?.children.splice(0, 1);
+    saveBalanceState(db, state);
+    expect(await eventLinks(rt)).toBeUndefined();
+    expect(readLink(db, "link-1")).toMatchObject({ state: "lost", reason: "“Kickoff prep” was removed" });
+    expect(meetingLinks(db, at(5, 0)).size).toBe(0);
   });
 });

@@ -319,7 +319,7 @@ export async function composeDesk(
   }));
   const calendar = [...events, ...written];
   const sod = startOfDay(now);
-  const linksByEvent = meetingLinks(db);
+  const linksByEvent = meetingLinks(db, sod);
   const todayCalendar = withEventLinks(calendarEvents(calendar, sod, sod + DAY_MS), linksByEvent);
   const aheadCalendar = withEventLinks(calendarEvents(calendar, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS), linksByEvent);
   const deskCalendar = calendarEvents(calendar, sod, sod + TIMELINE_DAYS * DAY_MS);

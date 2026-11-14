@@ -8,7 +8,7 @@ import { listOpenNotes } from "../desk/notes";
 import { STUDIO_SLUG } from "../desk/studio/format";
 import { oneLine } from "../desk/studio/edit";
 import { withSyncedBalance } from "../desk/studio-my-day";
-import { fail, noStore, undoAttachDeps } from "./desk-mail";
+import { fail, MeetingChoiceSchema, noStore, undoAttachDeps } from "./desk-mail";
 
 const SubjectSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("task"), id: z.string().min(1).max(200) }).strict(),
@@ -17,7 +17,7 @@ const SubjectSchema = z.discriminatedUnion("kind", [
 ]);
 
 const LinksRequestSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("link"), requestId: z.uuid(), from: SubjectSchema, to: z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict() }).strict(),
+  z.object({ op: z.literal("link"), requestId: z.uuid(), from: SubjectSchema, to: MeetingChoiceSchema }).strict(),
   z.object({ op: z.literal("unlink"), link: z.string().min(1).max(64) }).strict(),
 ]);
 
@@ -66,7 +66,7 @@ export async function handleDeskLinks(req: Request, db: Database, runtime: DeskR
 async function link(db: Database, runtime: DeskRuntime, from: Subject, event: string, ctx: { now: number; readings: Parameters<typeof readingEvents>[0]; newId: () => string; requestId: string }) {
   const subject = await subjectOf(db, runtime, from, ctx.now);
   if (!subject) return { ok: false as const, status: 404, error: GONE };
-  const target = meetingTarget(readingEvents(ctx.readings), event, false, ctx.now);
+  const target = meetingTarget(readingEvents(ctx.readings), event, { upcoming: false, now: ctx.now });
   if (typeof target === "string") return { ok: false as const, status: 409, error: target };
   return linkToMeeting(db, subject, target, { id: ctx.newId(), requestId: ctx.requestId, origin: "desk", now: ctx.now });
 }

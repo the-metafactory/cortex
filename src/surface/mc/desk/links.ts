@@ -89,10 +89,12 @@ export interface EventLink {
   origin: LinkOrigin;
 }
 
-/** The active links to each meeting, by Desk event key. */
-export function meetingLinks(db: Database): Map<string, EventLink[]> {
+const MEETING_LINKED = "state = 'linked' AND to_kind = 'meeting' AND (to_end IS NULL OR to_end >= ?)";
+
+/** The active links to each meeting that ends at or after `since`, by Desk event key. */
+export function meetingLinks(db: Database, since: number): Map<string, EventLink[]> {
   const out = new Map<string, EventLink[]>();
-  for (const r of rows(db, "state = 'linked' AND to_kind = 'meeting'")) out.set(r.toKey, [...(out.get(r.toKey) ?? []), { id: r.id, kind: r.fromKind, key: r.fromKey, title: r.fromTitle, origin: r.origin }]);
+  for (const r of rows(db, MEETING_LINKED, since)) out.set(r.toKey, [...(out.get(r.toKey) ?? []), { id: r.id, kind: r.fromKind, key: r.fromKey, title: r.fromTitle, origin: r.origin }]);
   return out;
 }
 
@@ -136,10 +138,10 @@ export function taskSubject(day: OutlineDay, id: string): LinkSubject | null {
 export const NO_MEETING = "The Desk no longer sees that meeting. Pick another one.";
 
 /** A meeting the readings list, as a link target. A mail may only go to a meeting that has not ended. */
-export function meetingTarget(events: EventFacts["events"], key: string, forMail: boolean, now: number): LinkTarget | string {
+export function meetingTarget(events: EventFacts["events"], key: string, when: { upcoming: boolean; now: number }): LinkTarget | string {
   const event = events.get(key);
   if (!event) return NO_MEETING;
-  if (forMail && event.end <= now) return "That meeting is already over.";
+  if (when.upcoming && event.end <= when.now) return "That meeting is already over.";
   return { kind: "meeting", key, title: event.title, at: event.at, end: event.end };
 }
 
@@ -253,17 +255,19 @@ export async function undoAttach(db: Database, id: string, deps: UndoAttachDeps)
   return { ok: true, message: `${quoted(row.fromTitle)} is back on the Desk.`, restored: row.fromKey };
 }
 
-/** Marks every active mail link to a task the outline no longer has as lost, so the mail comes back with the reason. */
+/** Marks every active link to or from a task the outline no longer has as lost: a mail attached to it comes back with the reason, and a meeting stops listing it. */
 export function loseTaskLinks(db: Database, day: OutlineDay, now: number): void {
-  const gone = rows(db, "state = 'linked' AND to_kind = 'task'").filter((row) => !nodeIn(day, row.toKey));
+  const toGone = rows(db, "state = 'linked' AND to_kind = 'task'").filter((row) => !nodeIn(day, row.toKey));
+  const fromGone = rows(db, "state = 'linked' AND from_kind = 'task'").filter((row) => !nodeIn(day, taskIdOf(row.fromKey)));
   db.transaction(() => {
-    for (const row of gone) endLink(db, row.id, "lost", `${quoted(row.toTitle)} was removed`, now);
+    for (const row of toGone) endLink(db, row.id, "lost", `${quoted(row.toTitle)} was removed`, now);
+    for (const row of fromGone) endLink(db, row.id, "lost", `${quoted(row.fromTitle)} was removed`, now);
   })();
 }
 
-/** Follows each linked meeting by its key: a moved or renamed meeting updates the link, a cancelled one marks it lost so a linked mail comes back. A meeting that ended keeps its links. */
+/** Follows each linked meeting by its key until a day after it ended: a moved or renamed meeting updates the link, a cancelled one marks it lost so a linked mail comes back. A meeting that ended keeps its links. */
 export function followMeetingLinks(db: Database, facts: EventFacts, now: number): void {
-  const linked = rows(db, "state = 'linked' AND to_kind = 'meeting'");
+  const linked = rows(db, MEETING_LINKED, now - DAY_MS);
   db.transaction(() => {
     for (const row of linked) {
       const sighting = sightEvent(facts, row.toKey, { title: row.toTitle, at: row.toAt, end: row.toEnd });

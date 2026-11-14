@@ -38,16 +38,18 @@ const waitingOp = (action: string): WaitingOp | null => {
 
 const HANDOFF_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
+export const MeetingChoiceSchema = z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict();
+
 const SnoozeChoiceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.enum(SNOOZE_TIMES) }).strict(),
   z.object({ kind: z.literal("date"), date: z.string().max(10) }).strict(),
-  z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict(),
+  MeetingChoiceSchema,
   z.object({ kind: z.literal("person"), address: z.string().min(3).max(320) }).strict(),
 ]);
 
 const AttachTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("task"), id: z.string().min(1).max(200) }).strict(),
-  z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict(),
+  MeetingChoiceSchema,
 ]);
 
 const MailRequestSchema = z.discriminatedUnion("action", [
@@ -190,7 +192,7 @@ const TASK_GONE = "That task no longer exists or is done. Pick another one.";
 async function attachTarget(db: Database, runtime: DeskRuntime, to: AttachBody["to"], now: number): Promise<LinkTarget | string> {
   const desk = runtime.options;
   if (!desk) return "The Desk is turned off on this stack.";
-  if (to.kind === "meeting") return meetingTarget(readingEvents(runtime.sourceCache?.cached() ?? []), to.event, true, now);
+  if (to.kind === "meeting") return meetingTarget(readingEvents(runtime.sourceCache?.cached() ?? []), to.event, { upcoming: true, now });
   const day = await withSyncedBalance(db, desk, now, (source) => readMyDay(db, desk, now, source));
   return taskTarget(day, to.id) ?? TASK_GONE;
 }
