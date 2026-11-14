@@ -17,7 +17,8 @@ import { faultyConnector, hold, type Fault, type FaultPlan, type Hold } from "./
 import { guardNetwork } from "./network";
 import { listDestinations, schemaIndex, type ProbeEnv } from "./probes";
 import { emptyOwnerCalls, totalOwnerCalls, type OwnerCalls, type Verdict } from "./report";
-import { CONNECTION_ID, authorizeConnection, exercise, openConformanceStore } from "./run";
+import { CONFORMANCE_CONNECTION_ID } from "./connection";
+import { authorizeConnection, exercise, openConformanceStore } from "./run";
 import { openConformanceRig, STACK, type ConformanceRig } from "./rig";
 import { sampleValue, schemaUrn } from "./sample";
 
@@ -121,20 +122,20 @@ async function arm(run: ScenarioRun, candidate: DeskPackageCandidate, plan: Faul
   const view = registry.draftingView(actionId);
   if (!view) throw new Error("The registry does not describe the action capability.");
   const readIds = manifest.declaration.capabilities.filter(capability => capability.kind !== "action").map(capability => capability.capabilityId);
-  const built = run.loader.trustedConnector(adapterId, { adapterId, connectionId: CONNECTION_ID }, { authorizeConnection, actionCapabilityId: actionId });
+  const built = run.loader.trustedConnector(adapterId, { adapterId, connectionId: CONFORMANCE_CONNECTION_ID }, { authorizeConnection, actionCapabilityId: actionId });
   if (!built.ok) throw new Error(built.error.message);
   const plain = built.value.connector;
-  const sample = { schemas: schemaIndex(manifest), destinations: [] as ObjectReference[], adapterId, connectionId: CONNECTION_ID };
-  const listed = await listDestinations({ registry, manifest, sample, plain, adapterId, connectionId: CONNECTION_ID });
+  const sample = { schemas: schemaIndex(manifest), destinations: [] as ObjectReference[], adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
+  const listed = await listDestinations({ registry, manifest, sample, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID });
   sample.destinations.push(...listed.destinations);
   const binding = manifest.readBindings.find(item => item.mode === "query" && action.objectTypes.includes(item.objectType));
   if (!binding) throw new Error("The package declares no query binding for the action's object type.");
   const { connector, recorded } = recordConnector(faultyConnector(plain, plan));
   const rig = await openConformanceRig({
-    dir: run.temp, registry, connector, adapterId, connectionId: CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
+    dir: run.temp, registry, connector, adapterId, connectionId: CONFORMANCE_CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
     writeCapabilityIds: [actionId], writerCapabilityId: actionId, destinations: sample.destinations,
   });
-  const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONNECTION_ID };
+  const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
   return { rig, env, actionId, view, binding, close: async () => { await rig.close(); } };
 }
 

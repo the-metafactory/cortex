@@ -14,7 +14,6 @@ import { listDestinations, probeObservation, probeQuery, schemaIndex, type Probe
 import { emptyOwnerCalls, overallVerdict, refused, type CapabilityReport, type ConformanceReport, type OwnerCalls } from "./report";
 import { ConformanceRefusal, openConformanceRig, SYNTHETIC_CREDENTIAL_HANDLE } from "./rig";
 
-export const CONNECTION_ID = CONFORMANCE_CONNECTION_ID;
 
 export const authorizeConnection: DeskTrustedConnectorOptions["authorizeConnection"] = current =>
   Promise.resolve({ version: 1, available: current.status === "active" && current.credentialHandle === SYNTHETIC_CREDENTIAL_HANDLE, revision: "conformance-credential-1" });
@@ -43,7 +42,7 @@ export async function openConformanceStore(dir: string): Promise<{ engine: Harne
 }
 
 function conformanceMailBinding(mail: MailReadSource | undefined, adapterId: string): MailConnectionBinding | undefined {
-  const matches = mail?.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === CONNECTION_ID) ?? [];
+  const matches = mail?.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === CONFORMANCE_CONNECTION_ID) ?? [];
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -57,17 +56,17 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
   const capabilities: CapabilityReport[] = [];
   const ownerCalls = emptyOwnerCalls();
   const destinations: ObjectReference[] = [];
-  const sample = { schemas: schemaIndex(manifest), destinations, adapterId, connectionId: CONNECTION_ID };
+  const sample = { schemas: schemaIndex(manifest), destinations, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
   const groups: (string | undefined)[] = actionIds.length > 0 ? actionIds : [undefined];
   for (const [index, actionId] of groups.entries()) {
-    const built = loader.trustedConnector(adapterId, { adapterId, connectionId: CONNECTION_ID }, { authorizeConnection, ...(actionId === undefined ? {} : { actionCapabilityId: actionId }) });
+    const built = loader.trustedConnector(adapterId, { adapterId, connectionId: CONFORMANCE_CONNECTION_ID }, { authorizeConnection, ...(actionId === undefined ? {} : { actionCapabilityId: actionId }) });
     if (!built.ok) {
       capabilities.push(refused(actionId ?? adapterId, "action", built.error.code, built.error.message));
       continue;
     }
     const plain = built.value.connector;
     if (index === 0) {
-      const listed = await listDestinations({ registry, manifest, sample, plain, adapterId, connectionId: CONNECTION_ID });
+      const listed = await listDestinations({ registry, manifest, sample, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID });
       destinations.push(...listed.destinations);
       capabilities.push(...listed.reports);
     }
@@ -75,7 +74,7 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
     let rig;
     try {
       rig = await openConformanceRig({
-        dir: temp, registry, connector, adapterId, connectionId: CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
+        dir: temp, registry, connector, adapterId, connectionId: CONFORMANCE_CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
         writeCapabilityIds: actionId === undefined ? [] : [actionId], writerCapabilityId: actionId ?? plain.support.capabilityId, destinations, ...(mailBinding ? { mailBinding } : {}),
       });
     } catch (error) {
@@ -83,7 +82,7 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
       capabilities.push(refused(actionId ?? adapterId, "action", code, error instanceof Error ? error.message : "The host seam could not open."));
       continue;
     }
-    const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONNECTION_ID };
+    const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
     try {
       if (index === 0) {
         for (const binding of manifest.readBindings) {

@@ -12,6 +12,7 @@ export type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceL
 export { formatReport, type CapabilityReport, type ConformanceReport, type OwnerCalls, type ProbeKind, type Verdict } from "./conformance/report";
 export { FAILURE_SCENARIOS, formatFailureReport, runFailureScenarios, type CompanionReport, type FailureOptions, type FailureReport, type ScenarioName, type ScenarioReport, type ScenarioVerdict } from "./conformance/failures";
 
+// glossary-ignore: host, run
 /**
  * Options for one conformance run. `tempParent` is where the run's temporary store is made (the system temp
  * directory by default). `mail` is a fake Mail source the run's host reads listed mail from: a binding for the

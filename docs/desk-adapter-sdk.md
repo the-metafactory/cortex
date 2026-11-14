@@ -51,6 +51,7 @@ const capabilities = await runConformance(import.meta.dir, { mail });
 - With no `mail`, or without exactly one binding for that connection, `host.mail.listed()` resolves to `null`, as it does for an unbound connection in production.
 - The binding's `dataPolicy` sets the read restriction the run's host publishes for the connection's destinations, through `mailReadRestriction`: `local` when absent, `cloud` when the binding says so. Without a Mail binding the run publishes `cloud`, as before. The run reads from a local conversation, so either policy admits its reads; a cloud reader's denial is tested through the host query runner, not this harness.
 - `runFailureScenarios` takes no Mail source.
+- `MailReadSource`, `MailConnectionBinding`, `MailSourceListing` and `MailSourceItem` are the shapes the Cortex runtime's loader takes, published for this harness. They change only additively within Desk SDK 1.x; a breaking change to them bumps the SDK major version.
 
 The tests are `src/conversations/domain-adapters/__tests__/conformance-mail.test.ts`.
 

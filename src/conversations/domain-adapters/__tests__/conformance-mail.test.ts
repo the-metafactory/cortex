@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskMailListing } from "../../../desk-sdk";
 import { CONFORMANCE_CONNECTION_ID, runConformance, type MailConnectionBinding, type MailReadSource, type MailSourceListing } from "../../../desk-adapter-sdk/conformance";
-import { CONNECTION_ID } from "../../../desk-adapter-sdk/conformance/run";
 import { openConformanceRig } from "../../../desk-adapter-sdk/conformance/rig";
 import { DomainAdapterRegistry } from "../registry";
 import type { TrustedConnector } from "../../authority";
@@ -71,6 +70,7 @@ describe("a conformance run given a fake Mail source", () => {
     const report = await runConformance(packageDir, { mail: fakeMail([binding({ connectionId: "connection-other" })]) });
 
     expect(report.status).toBe("refused");
+    expect(seenListings().length).toBeGreaterThan(0);
     expect(seenListings().every(read => read === null)).toBe(true);
   });
 
@@ -84,17 +84,17 @@ describe("a conformance run given a fake Mail source", () => {
 });
 
 describe("the read restriction a conformance run publishes for a Mail connection", () => {
-  const destination = { adapterId: ADAPTER, connectionId: CONNECTION_ID, objectType: "estuary", canonicalId: "estuary-inner" };
+  const destination = { adapterId: ADAPTER, connectionId: CONFORMANCE_CONNECTION_ID, objectType: "estuary", canonicalId: "estuary-inner" };
   const connector = {
     writerOwner: "conformance-owner",
     authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "conformance-credential-1" }),
     dispatch: () => Promise.reject(new Error("The restriction check dispatches nothing.")),
-    support: { lifecycleVersion: "1.0.0", adapterId: ADAPTER, connectionId: CONNECTION_ID, capabilityId: "conformance-writer", declarationId: "conformance-declaration", dedup: { kind: "none" }, operationLookup: "none", conditionalUpdate: "none", cancellation: "none" },
+    support: { lifecycleVersion: "1.0.0", adapterId: ADAPTER, connectionId: CONFORMANCE_CONNECTION_ID, capabilityId: "conformance-writer", declarationId: "conformance-declaration", dedup: { kind: "none" }, operationLookup: "none", conditionalUpdate: "none", cancellation: "none" },
   } as unknown as TrustedConnector;
 
   async function publishedEgress(mailBinding?: MailConnectionBinding): Promise<string[]> {
     const rig = await openConformanceRig({
-      dir: root, registry: new DomainAdapterRegistry(), connector, adapterId: ADAPTER, connectionId: CONNECTION_ID, readBindings: [], readCapabilityIds: [],
+      dir: root, registry: new DomainAdapterRegistry(), connector, adapterId: ADAPTER, connectionId: CONFORMANCE_CONNECTION_ID, readBindings: [], readCapabilityIds: [],
       writeCapabilityIds: [], writerCapabilityId: "conformance-writer", destinations: [destination], ...(mailBinding ? { mailBinding } : {}),
     });
     try {

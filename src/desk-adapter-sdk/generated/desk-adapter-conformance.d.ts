@@ -1,4 +1,4 @@
-
+// glossary-ignore: host, run
 /** One mail as a Mail source listed it. A native `SourceReading` mail entry satisfies this shape. */
 export interface MailSourceItem {
 	readonly id: string;

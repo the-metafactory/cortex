@@ -24,4 +24,4 @@ const HEADER = `// =============================================================
 
 runSdkDts({ entry: "src/desk-sdk/index.ts", artifact: "src/desk-sdk/generated/desk-sdk.d.ts", label: "desk", header: HEADER });
 
-runSdkDts({ entry: "src/desk-adapter-sdk/conformance.ts", artifact: "src/desk-adapter-sdk/generated/desk-adapter-conformance.d.ts", label: "desk", header: "" });
+runSdkDts({ entry: "src/desk-adapter-sdk/conformance.ts", artifact: "src/desk-adapter-sdk/generated/desk-adapter-conformance.d.ts", label: "desk", header: "// glossary-ignore: host, run" });
