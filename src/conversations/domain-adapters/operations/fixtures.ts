@@ -38,9 +38,9 @@ export function resultFixture(approval: Approval, attempt: Attempt, kind: "accep
     result: kind === "accepted" ? { kind, ownerRequestId: approval.ownerRequestId, receipt: { ticket: "ticket-example", nested: [false, null, 1] } } : { kind, output: { ref: objectRef("balance", "task", "task-example") }, evidence: { kind: "effect", evidenceId: "evidence-example", observedAt: AT, ownerRequestId: approval.ownerRequestId, receipt: { committed: true }, refs: [objectRef("balance", "task", "task-example")] } },
   };
 }
-export async function openJournalFixture(path: string): Promise<{ engine: Harness; journal: OperationJournalStore; close: () => Promise<void> }> {
+export async function openJournalFixture(path: string, registry: DomainAdapterRegistry = registryFixture()): Promise<{ engine: Harness; journal: OperationJournalStore; close: () => Promise<void> }> {
   const engine = await Harness.open(await openNodeSqliteStorage(path), { registry: createRegistry(), models: createModels() }, BACKGROUND_CONTEXT);
-  return { engine, journal: new OperationJournalStore(engine, registryFixture()), close: () => engine.close(BACKGROUND_CONTEXT) };
+  return { engine, journal: new OperationJournalStore(engine, registry), close: () => engine.close(BACKGROUND_CONTEXT) };
 }
 
 export async function prepareOperationFixture(journal: OperationJournalStore) {
