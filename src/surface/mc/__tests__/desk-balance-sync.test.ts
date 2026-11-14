@@ -163,4 +163,35 @@ describe("Balance owner sync and pure My Day reads", () => {
     expect((await response.json() as { myDay: { studioTasks: unknown[] } }).myDay.studioTasks).toHaveLength(1);
     expect(loadMeta(stack.db).studio).toHaveLength(1);
   });
+
+  test("records touchTrackingSince once and leaves rows the machine changes untouched", async () => {
+    const state = syncFixtureState();
+    const area = findNode(state.outline, "area:work");
+    const task = findNode(state.outline, "task");
+    const repeat = findNode(state.outline, "repeat");
+    if (!area || !task || !repeat) throw new Error("Missing fixture");
+    area.touchedAt = "2026-10-19";
+    task.touchedAt = "2026-10-20";
+    repeat.touchedAt = "2026-10-21";
+    saveBalanceState(stack.db, state);
+    const labeled = stack.runtime.options.areas[0];
+    if (!labeled) throw new Error("Missing area");
+    const label = labeled.label;
+    labeled.label = "Work renamed";
+    try {
+      const day = await stack.read();
+      expect(day.touchTrackingSince).toBe(SYNC_DATE);
+      expect(loadMeta(stack.db).touchTrackingSince).toBe(SYNC_DATE);
+      expect(findNode(day.outline, "task")?.createdAt).toBeUndefined();
+      expect(findNode(day.outline, "task")?.touchedAt).toBe("2026-10-20");
+      const saved = loadBalanceState(stack.db);
+      if (!saved) throw new Error("Missing saved state");
+      expect(findNode(saved.outline, "area:work")).toMatchObject({ title: "Work renamed", touchedAt: "2026-10-19" });
+      expect(findNode(saved.outline, "repeat")).toMatchObject({ done: false, touchedAt: "2026-10-21" });
+      stack.setNow(SYNC_NOW + 86_400_000);
+      expect((await stack.read()).touchTrackingSince).toBe(SYNC_DATE);
+    } finally {
+      labeled.label = label;
+    }
+  });
 });

@@ -10,6 +10,7 @@ import { initDatabase } from "../db/init";
 import { HandledLedger } from "../desk/actions";
 import { balanceDetails, type BalanceCommand } from "../desk/balance-command";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
+import { loadMeta, saveMeta } from "../desk/balance-sync";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import { localDay, readMyDay, type MyDayView } from "../desk/my-day";
 import { syncStudioBalance } from "../desk/studio-my-day";
@@ -395,5 +396,76 @@ describe("Balance through the real My day owner", () => {
       expect(JSON.stringify(loadBalanceState(db))).toBe(before);
       expect(required(view(), "first").note).toBe("Saved from the Day page");
     } finally { globalThis.fetch = original; }
+  });
+
+  const earlier = "2026-10-20";
+  const stampEveryRow = (): void => {
+    const state = loadBalanceState(db);
+    if (!state) throw new Error("Missing state");
+    const walk = (node: OutlineNode): void => { node.createdAt = "2026-10-19"; node.touchedAt = earlier; node.children.forEach(walk); };
+    walk(state.outline);
+    saveBalanceState(db, state);
+  };
+  const reset = (): void => { saveBalanceState(db, seed()); stampEveryRow(); };
+  const savedRow = (id: string): OutlineNode => {
+    const state = loadBalanceState(db);
+    const node = state ? findNode(state.outline, id) : null;
+    if (!node) throw new Error(`Missing saved row ${id}`);
+    return node;
+  };
+  const expectUntouched = (ids: string[]): void => { for (const id of ids) expect(savedRow(id)).toMatchObject({ createdAt: "2026-10-19", touchedAt: earlier }); };
+
+  test("editing, moving, filing, completing, reopening and done each touch one row and no ancestor or sibling", async () => {
+    reset();
+    const edited = await change(edit(view(), "second", { title: "Second renamed" }));
+    expect(savedRow("second")).toMatchObject({ createdAt: "2026-10-19", touchedAt: DATE });
+    expectUntouched(["first", "standalone", "project", "area:work"]);
+    expect(edited.view.touchTrackingSince).toBe(DATE);
+
+    reset();
+    await change({ op: "outline-move", id: "second", parent: "area:personal", revision: view().revision });
+    expect(savedRow("second")).toMatchObject({ createdAt: "2026-10-19", touchedAt: DATE });
+    expectUntouched(["first", "project", "area:work", "area:personal"]);
+
+    reset();
+    await change({ op: "outline-move", id: "second", parent: "project", index: 0, revision: view().revision });
+    expect(savedRow("second")).toMatchObject({ createdAt: "2026-10-19", touchedAt: DATE });
+    expectUntouched(["first", "project", "area:work"]);
+
+    reset();
+    const meta = loadMeta(db);
+    meta.inbox.push({ id: "inbox:legacy", title: "Inbox item", weight: 50, ordering: "parallel", children: [], effort: 1, note: "", createdAt: "2026-10-19", touchedAt: earlier });
+    saveMeta(db, meta);
+    await change({ op: "outline-file", id: "inbox:legacy", parent: "area:work", revision: view().revision });
+    expect(savedRow("inbox:legacy")).toMatchObject({ createdAt: "2026-10-19", touchedAt: DATE });
+    expectUntouched(["first", "project", "area:work"]);
+
+    reset();
+    await change({ op: "outline-complete", id: "second", confirm: true, revision: view().revision });
+    expect(savedRow("second")).toMatchObject({ done: true, touchedAt: DATE });
+    expectUntouched(["first", "project", "area:work"]);
+
+    reset();
+    await change({ op: "outline-complete", id: "second", confirm: true, revision: view().revision });
+    const completed = loadBalanceState(db);
+    if (!completed) throw new Error("Missing state");
+    const reopened = findNode(completed.outline, "second");
+    if (!reopened) throw new Error("Missing row");
+    reopened.touchedAt = earlier;
+    saveBalanceState(db, completed);
+    await change({ op: "outline-reopen", id: "second", confirm: true, revision: view().revision });
+    expect(savedRow("second")).toMatchObject({ touchedAt: DATE });
+    expect(savedRow("second").done).toBeUndefined();
+
+    reset();
+    expect((await post({ op: "start", ids: ["standalone"] })).status).toBe(200);
+    expect((await post({ op: "done", id: "standalone" })).status).toBe(200);
+    expect(savedRow("standalone")).toMatchObject({ touchedAt: DATE });
+    expectUntouched(["first", "project", "area:work"]);
+
+    reset();
+    const added = await change({ op: "outline-add", revision: view().revision, parent: "area:work", title: "A new task" });
+    expect(savedRow(added.outlineId ?? "")).toMatchObject({ createdAt: DATE, touchedAt: DATE });
+    expectUntouched(["area:work", "first", "project"]);
   });
 });
