@@ -7,7 +7,7 @@ import { AT, openJournalFixture } from "../operations/fixtures";
 import type { DispatchRequest, OwnerResult } from "../operations/types";
 import type { OperationIndex } from "./legacy-move";
 import { mailMoveDeclaration } from "./move-contract";
-import { fixtureAuthority, prepareDispatch } from "./host-fixtures";
+import { deliver, fixtureAuthority, prepareDispatch } from "./host-fixtures";
 import { mailUnsubscribeDeclaration } from "./unsubscribe-contract";
 import { MailUnsubscribeHost, type UnsubscribeOutcome } from "./unsubscribe-host";
 
@@ -51,10 +51,9 @@ export async function openMailUnsubscribeRig(options: { declaresUnsubscribe?: bo
     return { kind: "succeeded", output: { ref: message, host }, evidence: { kind: "effect", evidenceId: `effect:${request.attemptId}`, observedAt: AT, ownerRequestId: request.ownerRequestId, receipt: { unsubscribed: host }, refs: [message] } };
   };
   const dispatch = async (operationId: string): Promise<void> => {
-    const { request, at, revision } = await prepareDispatch(fixture.journal, operationId, { connectionId: UNSUBSCRIBE_BINDING.connectionId, declarationId: "mail-unsubscribe-owner", expected: "an unsubscribe", now });
-    calls.push(request);
-    const result = binding(request);
-    await fixture.journal.receive(operationId, revision, { lifecycleVersion: "1.0.0", operationId, attemptId: request.attemptId, snapshotDigest: request.snapshot.digest, resultId: `result:${request.attemptId}`, reportedAt: at, result }, at);
+    const prepared = await prepareDispatch(fixture.journal, operationId, { connectionId: UNSUBSCRIBE_BINDING.connectionId, declarationId: "mail-unsubscribe-owner", expected: "an unsubscribe", now });
+    calls.push(prepared.request);
+    await deliver(fixture.journal, prepared, binding(prepared.request));
   };
   const makeHost = (account: string) => new MailUnsubscribeHost({ ...UNSUBSCRIBE_BINDING, account, journal: fixture.journal, index, authority: auth.port, capability: id => registry.capability(id), dispatch, now: () => now });
   let host = makeHost(UNSUBSCRIBE_BINDING.account);

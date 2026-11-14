@@ -72,6 +72,15 @@ export type UndoOutcome =
   | { kind: "denied"; reason: BoundaryError }
   | { kind: "receipt"; receipt: MailMoveReceipt; original: MailMoveReceipt };
 
+export type GrantMoveRequest =
+  | { action: "move"; messageId: string; target: MailMoveTarget; provenance: Provenance; grantId: string }
+  | { action: "trash"; messageId: string; provenance: Provenance; grantId: string };
+
+export type GrantMoveOutcome =
+  | { kind: "unavailable"; reason: BoundaryError }
+  | { kind: "denied"; reason: BoundaryError }
+  | { kind: "receipt"; receipt: MailMoveReceipt };
+
 const FOLDER_LABEL: Record<string, string> = { archive: "Archive", junk: "Junk", trash: "Trash" };
 const DONE_MESSAGE: Record<string, string> = { archive: "Archived.", junk: "Moved to Junk.", trash: "Moved to Trash." };
 const reason = (code: string, message: string): BoundaryError => ({ code, message });
@@ -129,6 +138,17 @@ export class MailMoveHost {
     }
     const input: MailMoveInput = request.action === "move" ? { action: "move", message: this.message(request.messageId), target: request.target } : { action: "trash", message: this.message(request.messageId) };
     return this.run(input, request.provenance, grantId, undefined);
+  }
+
+  async move(request: GrantMoveRequest): Promise<GrantMoveOutcome> {
+    const { action } = request;
+    if (!this.available(action)) return { kind: "unavailable", reason: UNAVAILABLE_ACTION(action) };
+    const input: MailMoveInput = action === "move"
+      ? { action: "move", message: this.message(request.messageId), target: request.target }
+      : { action: "trash", message: this.message(request.messageId) };
+    const outcome = await this.run(input, request.provenance, request.grantId, undefined);
+    if (outcome.kind === "receipt" || outcome.kind === "denied" || outcome.kind === "unavailable") return outcome;
+    return { kind: "denied", reason: reason("authority_denied", "The standing permission does not run this move without asking.") };
   }
 
   async undo(operationId: string, provenance: Provenance): Promise<UndoOutcome> {

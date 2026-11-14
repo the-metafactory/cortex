@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { authority, attemptFixture, eventFixture } from "../operations/fixtures";
 import type { OperationJournalStore } from "../operations/journal";
-import type { DispatchRequest, OwnerSupport } from "../operations/types";
+import type { DispatchRequest, OwnerResult, OwnerSupport } from "../operations/types";
 import type { MailMoveAuthority } from "./move-host";
 
 export interface FixtureGrant {
@@ -38,6 +38,11 @@ export interface PreparedDispatch {
   support: OwnerSupport;
   at: string;
   revision: number;
+}
+
+export async function deliver(journal: OperationJournalStore, prepared: PreparedDispatch, result: OwnerResult["result"]): Promise<void> {
+  const { request, at, revision } = prepared;
+  await journal.receive(request.operationId, revision, { lifecycleVersion: "1.0.0", operationId: request.operationId, attemptId: request.attemptId, snapshotDigest: request.snapshot.digest, resultId: `result:${request.attemptId}`, reportedAt: at, result }, at);
 }
 
 /** Reads one approved operation, appends its first attempt and returns the exact dispatch request the binding must answer. */
