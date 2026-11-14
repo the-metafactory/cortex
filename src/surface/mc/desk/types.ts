@@ -189,6 +189,7 @@ export interface DeskEvent {
   url?: string;
   online?: boolean;
   source?: string;
+  links?: import("./links").EventLink[];
 }
 
 export interface DeskGoal {

@@ -19,6 +19,7 @@ export const LINKS_SQL = [
     updated_at INTEGER NOT NULL
   )`,
   "CREATE UNIQUE INDEX IF NOT EXISTS desk_links_one_mail ON desk_links (from_key) WHERE from_kind = 'mail' AND state = 'linked'",
+  "CREATE UNIQUE INDEX IF NOT EXISTS desk_links_one_pair ON desk_links (from_kind, from_key, to_kind, to_key) WHERE state = 'linked'",
   "CREATE INDEX IF NOT EXISTS desk_links_from ON desk_links (from_kind, from_key, state)",
   "CREATE INDEX IF NOT EXISTS desk_links_to ON desk_links (to_kind, to_key, state)",
 ];
@@ -65,7 +66,7 @@ export interface LinkRow {
 export interface LinkReceipt {
   id: string;
   from: { kind: LinkFromKind; key: string; title: string };
-  to: { kind: LinkToKind; key: string; title: string };
+  to: { kind: LinkToKind; key: string; title: string; at?: number; end?: number };
   origin: LinkOrigin;
   at: number;
 }

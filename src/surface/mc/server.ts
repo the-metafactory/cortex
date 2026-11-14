@@ -95,6 +95,7 @@ import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskTaskHandoff } from "./api/desk-task-handoff";
 import type { TaskDispatchBus } from "./desk/task-handoff";
+import { handleDeskLinks } from "./api/desk-links";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
 import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
 import { handleDeskBalanceSurfaces } from "./api/desk-balance-surfaces";
@@ -643,6 +644,7 @@ async function handleApi(
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk);
 
   if (pathname === "/api/desk/task-handoff") return handleDeskTaskHandoff(req, db, desk);
+  if (pathname === "/api/desk/links") return handleDeskLinks(req, db, desk);
 
   if (pathname === "/api/desk/mail/rules") return handleDeskMailRules(req, db, desk);
 

@@ -23,9 +23,9 @@ import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import { approveHandoff, discardHandoff, handMailToIvy, HANDOFF_OPS, handoffIdOf, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
 import { handoffReady } from "../desk/compose";
 import { closeHandoffTask } from "../desk/mail-handoff-close";
-import { cancelSnooze, snoozeMail, SNOOZE_TIMES } from "../desk/mail-snooze";
+import { cancelSnooze, readingEvents, snoozeMail, SNOOZE_TIMES } from "../desk/mail-snooze";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
-import { attachMail, taskTarget, undoAttach } from "../desk/links";
+import { attachMail, meetingTarget, taskTarget, undoAttach, type LinkTarget } from "../desk/links";
 import { readMyDay } from "../desk/my-day";
 import { withSyncedBalance } from "../desk/studio-my-day";
 import { undoStudioCapture } from "../desk/studio/capture";
@@ -38,15 +38,18 @@ const waitingOp = (action: string): WaitingOp | null => {
 
 const HANDOFF_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
+export const MeetingChoiceSchema = z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict();
+
 const SnoozeChoiceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.enum(SNOOZE_TIMES) }).strict(),
   z.object({ kind: z.literal("date"), date: z.string().max(10) }).strict(),
-  z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict(),
+  MeetingChoiceSchema,
   z.object({ kind: z.literal("person"), address: z.string().min(3).max(320) }).strict(),
 ]);
 
 const AttachTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("task"), id: z.string().min(1).max(200) }).strict(),
+  MeetingChoiceSchema,
 ]);
 
 const MailRequestSchema = z.discriminatedUnion("action", [
@@ -94,7 +97,7 @@ export interface DeskMailDeps {
  * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "unsubscribe", key} sends the list's One-Click
  * unsubscribe after the principal confirmed it; {action: "unsubscribe.rule", key} then adds an archive rule for the list. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said, correction?} logs a per-mail correction and, for archive, spam and delete, moves the mail; with `correction` it retries only the move of that logged correction. {action: "undo" | "block", move} undoes a logged move,
  * or blocks the domain of a mail moved to Junk. {action: "snooze", key, until} hides one mail until a time, a meeting or a
- * person writes; {action: "snooze.cancel", key} ends the snooze. {action: "attach", key, requestId, to: {kind: "task", id}} attaches the mail to a task as material and takes the card off the Desk while the mailbox stays as it is; {action: "attach.undo", link} ends that link and brings the card back. {action: "not-phishing", key} waives a flagged mail's
+ * person writes; {action: "snooze.cancel", key} ends the snooze. {action: "attach", key, requestId, to: {kind: "task", id} | {kind: "meeting", event}} attaches the mail to a task or a meeting and takes the card off the Desk while the mailbox stays as it is; {action: "attach.undo", link} ends that link and brings the card back. {action: "not-phishing", key} waives a flagged mail's
  * suspicion reasons (see mail-trust.ts); {action: "not-phishing.undo", trust} takes that back, and
  * {action: "not-phishing.remove", sender} forgets every dismissal for one sender address. {action: "opened", key} logs that
  * the principal opened the mail on the Desk (once until the next decision on it). The rebind and identity gates in
@@ -133,7 +136,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (body.action === "opened") return Response.json({ ok: true, recorded: recordMailOpened(db, mail, now) }, { headers: noStore });
   if (body.action === "not-phishing") return answer(dismissSuspicion(db, mail, mailSuspicion(db, mail, runtime.options.mailOwnDomains), now, deps.newId));
   if (body.action === "snooze") return answer(snoozeMail(db, mail, body.until, { now, readings: runtime.sourceCache?.cached() ?? [] }));
-  if (body.action === "attach") return answer(await attachToTask(db, runtime, mail, body, now, deps.newId ?? (() => crypto.randomUUID())));
+  if (body.action === "attach") return answer(await attachToTarget(db, runtime, mail, body, now, deps.newId ?? (() => crypto.randomUUID())));
   if (decision && !mail.invitation && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
   if (body.action === "ivy.hand") {
     const worker = runtime.mailHandoff;
@@ -184,14 +187,21 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
 
 type AttachBody = Extract<z.infer<typeof MailRequestSchema>, { action: "attach" }>;
 
-async function attachToTask(db: Database, runtime: DeskRuntime, mail: ListedMail, body: AttachBody, now: number, newId: () => string): Promise<ReturnType<typeof attachMail>> {
+const TASK_GONE = "That task no longer exists or is done. Pick another one.";
+
+async function attachTarget(db: Database, runtime: DeskRuntime, to: AttachBody["to"], now: number): Promise<LinkTarget | string> {
   const desk = runtime.options;
-  if (!desk) return { ok: false, status: 409, error: "The Desk is turned off on this stack." };
+  if (!desk) return "The Desk is turned off on this stack.";
+  if (to.kind === "meeting") return meetingTarget(readingEvents(runtime.sourceCache?.cached() ?? []), to.event, { upcoming: true, now });
   const day = await withSyncedBalance(db, desk, now, (source) => readMyDay(db, desk, now, source));
-  return attachMail(db, mail, taskTarget(day, body.to.id), { id: newId(), requestId: body.requestId, origin: "desk", now });
+  return taskTarget(day, to.id) ?? TASK_GONE;
 }
 
-function undoAttachDeps(db: Database, runtime: DeskRuntime, now: number): Parameters<typeof undoAttach>[2] {
+async function attachToTarget(db: Database, runtime: DeskRuntime, mail: ListedMail, body: AttachBody, now: number, newId: () => string): Promise<ReturnType<typeof attachMail>> {
+  return attachMail(db, mail, await attachTarget(db, runtime, body.to, now), { id: newId(), requestId: body.requestId, origin: "desk", now });
+}
+
+export function undoAttachDeps(db: Database, runtime: DeskRuntime, now: number): Parameters<typeof undoAttach>[2] {
   const readings = runtime.sourceCache?.cached() ?? [];
   const desk = runtime.options;
   const studio = desk?.studio;

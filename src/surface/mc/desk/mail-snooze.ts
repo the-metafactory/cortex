@@ -5,6 +5,7 @@ import { logMailDecision, mailFeatures } from "./mail-log";
 import { snoozeAt, snoozeWhen, type SnoozeChoice } from "./mail-snooze-schema";
 import type { SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
+import { sightEvent, type EventFacts, type FollowedEvent } from "./event-follow";
 import type { DeskItem } from "./types";
 
 export { SNOOZE_MORNING_HOUR, SNOOZE_SQL, SNOOZE_TIMES, snoozeAt, snoozeWhen, type SnoozeChoice, type SnoozeTime } from "./mail-snooze-schema";
@@ -31,15 +32,9 @@ export interface SnoozeRow {
   createdAt: number;
 }
 
-export interface SnoozeEvent {
-  title: string;
-  at: number;
-  end: number;
-}
+export type SnoozeEvent = FollowedEvent;
 
-export interface WakeFacts {
-  events: ReadonlyMap<string, SnoozeEvent>;
-  covered: (eventKey: string, at: number) => boolean;
+export interface WakeFacts extends EventFacts {
   wrote: (person: string, since: number, except: string) => { name?: string; subject?: string } | null;
 }
 
@@ -66,14 +61,14 @@ export function wakeOf(row: SnoozeRow, facts: WakeFacts, now: number): WakeDecis
   }
   const title = row.eventTitle ?? "the meeting";
   const key = row.eventKey;
-  const seen = key ? facts.events.get(key) : undefined;
-  if (seen) {
-    if (now >= seen.end) return { kind: "back", reason: `${quoted(seen.title)} has ended` };
-    return seen.at !== row.eventStart || seen.end !== row.untilAt || seen.title !== row.eventTitle ? { kind: "moved", event: seen } : { kind: "wait" };
+  const sighting = key ? sightEvent(facts, key, { title: row.eventTitle, at: row.eventStart, end: row.untilAt }) : null;
+  if (sighting?.kind === "seen") {
+    if (now >= sighting.event.end) return { kind: "back", reason: `${quoted(sighting.event.title)} has ended` };
+    return sighting.moved ? { kind: "moved", event: sighting.event } : { kind: "wait" };
   }
   if (row.untilAt !== null && now >= row.untilAt) return { kind: "back", reason: `${quoted(title)} has ended` };
   if (!key || row.eventStart === null) return { kind: "back", reason: `the Desk lost track of ${quoted(title)}` };
-  return facts.covered(key, row.eventStart) ? { kind: "back", reason: `${quoted(title)} was cancelled` } : { kind: "wait" };
+  return sighting?.kind === "cancelled" ? { kind: "back", reason: `${quoted(title)} was cancelled` } : { kind: "wait" };
 }
 
 /** The line a returned card leads with. A time snooze names the time it was snoozed until. */
