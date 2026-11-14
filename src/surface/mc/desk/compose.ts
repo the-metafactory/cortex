@@ -28,7 +28,7 @@ import { listKey, offerContext, unsubscribeOffers, unsubscribeView, type Unsubsc
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
 import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
-import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
+import { AHEAD_DAYS, TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
@@ -329,7 +329,7 @@ export async function composeDesk(
   const sod = startOfDay(now);
   const linksByEvent = meetingLinks(db, sod);
   const todayCalendar = withEventLinks(calendarEvents(calendar, sod, sod + DAY_MS), linksByEvent);
-  const aheadCalendar = withEventLinks(calendarEvents(calendar, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS), linksByEvent);
+  const aheadCalendar = withEventLinks(calendarEvents(calendar, sod + DAY_MS, sod + AHEAD_DAYS * DAY_MS), linksByEvent);
   const deskCalendar = calendarEvents(calendar, sod, sod + TIMELINE_DAYS * DAY_MS);
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
   const interruptSwitches = readSwitches(db);
@@ -403,7 +403,7 @@ export async function composeDesk(
     ].sort((a, b) => a.at - b.at),
     ahead: [
       ...aheadCalendar,
-      ...reminderEvents(reminders, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS),
+      ...reminderEvents(reminders, sod + DAY_MS, sod + AHEAD_DAYS * DAY_MS),
     ].sort((a, b) => a.at - b.at),
     vips: vips.map(({ address, label }) => ({ address, label })),
     agents: buildAgents(ranger, items, now, desk.dispatch ? workingHandoffs(taskHandoffs, desk.dispatch, now) : []),

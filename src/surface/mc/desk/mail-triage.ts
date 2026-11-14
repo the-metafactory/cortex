@@ -7,6 +7,7 @@ export interface EvidenceLinks {
 }
 
 export const TIMELINE_DAYS = 5;
+export const AHEAD_DAYS = 7;
 
 const SUGGESTIONS: Partial<Record<string, string>> = {
   reply: "Suggested: reply",
