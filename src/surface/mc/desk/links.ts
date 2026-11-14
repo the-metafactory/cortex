@@ -161,7 +161,7 @@ export function meetingTarget(events: EventFacts["events"], key: string, when: {
   return { kind: "meeting", key, title: event.title, at: event.at, end: event.end };
 }
 
-const quoted = (title: string): string => `“${title}”`;
+export const quoted = (title: string): string => `“${title}”`;
 
 interface LinkFailure { ok: false; status: number; error: string }
 const refuse = (status: number, error: string): LinkFailure => ({ ok: false, status, error });

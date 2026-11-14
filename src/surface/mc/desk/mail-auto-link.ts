@@ -2,10 +2,10 @@ import type { Database } from "bun:sqlite";
 import { listGrants } from "./autonomy";
 import type { MailClassification } from "./classify";
 import type { EventFacts } from "./event-follow";
-import { attachMail, AUTO_LINK_DONE, autoLinkDoneKey, meetingTarget, offDeskIds, type LinkReceipt } from "./links";
+import { attachMail, AUTO_LINK_DONE, autoLinkDoneKey, meetingTarget, offDeskIds, quoted, type LinkReceipt } from "./links";
 import type { ListedMail } from "./mail-actions";
 
-export const AUTO_LINK_GRANT = "mail.link-meeting";
+export const AUTO_LINK_GRANT = "mail.link-meeting" as const;
 
 export interface AutoLinkContext {
   db: Database;
@@ -15,7 +15,6 @@ export interface AutoLinkContext {
   newId?: () => string;
 }
 
-const quoted = (title: string): string => `“${title}”`;
 
 const wasEverLinked = (db: Database, messageId: string): boolean =>
   (db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM desk_links WHERE from_kind = 'mail' AND from_key = ?").get(`mail:${messageId}`)?.n ?? 0) > 0;

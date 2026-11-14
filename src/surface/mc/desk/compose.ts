@@ -49,7 +49,7 @@ import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
-import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
+import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry, type PromotableAction } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
 import { listReasons, readFeedback, readSwitches } from "./interrupt-switches";
 import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type ClassifierMail, type MailClassification, type MailClassifier, type ModelConfig } from "./classify";
@@ -410,7 +410,7 @@ export async function composeDesk(
     voice: voiceView(desk.voice),
     chime: rules.chime,
     notifications: rules.notifications,
-    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove, Boolean(desk.routines?.capabilityBuild?.install), Boolean(desk.mailClassifier)),
+    autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: Boolean(desk.mailClassifier) }),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),
     mailHidden: hiddenMail(db),
@@ -515,12 +515,27 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
 
 const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep", AUTO_LINK_DONE, TRUST_DONE, "capability.install"];
 
-function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean, canInstall: boolean, classifier: boolean): DeskView["autonomy"] {
+interface AutonomyCaps {
+  rangerActions: boolean;
+  studio: boolean;
+  canMove: boolean;
+  canInstall: boolean;
+  classifier: boolean;
+}
+
+function buildAutonomy(db: Database, done: DoneEntry[], caps: AutonomyCaps): DeskView["autonomy"] {
   const grants = listGrants(db);
   const shown = done.filter((d) => d.status !== "running").slice(0, 10);
   const ruleOf = rulesOfRuns(db, shown.filter((d) => d.action.startsWith("mail.rule")).map((d) => d.itemKey));
   const on = new Set(listRules(db).filter((r) => r.on).map((r) => r.id));
-  const ready = (a: string): boolean => a === "capability.install" ? canInstall : a === "studio.capture" ? studio : a === "mail.rules" ? canMove && (grants.has(a) || on.size > 0) : a === AUTO_LINK_GRANT ? classifier || grants.has(a) : rangerActions;
+  const readiness: Record<PromotableAction, () => boolean> = {
+    "ranger.retry": () => caps.rangerActions,
+    "studio.capture": () => caps.studio,
+    "mail.rules": () => caps.canMove && (grants.has("mail.rules") || on.size > 0),
+    [AUTO_LINK_GRANT]: () => caps.classifier || grants.has(AUTO_LINK_GRANT),
+    "capability.install": () => caps.canInstall,
+  };
+  const ready = (a: PromotableAction): boolean => readiness[a]();
   return {
     types: PROMOTABLE.filter(ready).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
     done: shown.map((d) => {
