@@ -6,7 +6,7 @@ Select a routine, then select a step to inspect it. Nested bodies and named bran
 
 Choose **Edit step parameters** where the flow owner declares editable fields. Enter values, then choose **Save parameters**. Invalid values and failed saves retain the draft. If another writer changes the routine, refresh before applying a new edit.
 
-Use **Ask Ivy to change this routine** to prepare parameter changes with the configured `mc.desk.routines.composer` command. Review the before-and-after values, revise or cancel the proposal, then choose **Apply proposed changes**. Preparing a proposal does not write or run a routine. Direct and AI edits preserve schedules, policies and unrelated steps.
+Use **Ask (the assistant) to change this routine** to prepare parameter changes with the configured `mc.desk.routines.composer` command. Review the before-and-after values, revise or cancel the proposal, then choose **Apply proposed changes**. Preparing a proposal does not write or run a routine. Direct and AI edits preserve schedules, policies and unrelated steps.
 
 ## Owner setup
 

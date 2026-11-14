@@ -334,7 +334,7 @@ describe("Balance Inbox writer for conversation proposals", () => {
     expect((await r.confirm(id, await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task"))).body.proposal.feedback).toBe("created");
     expect(mailRows(r)).toEqual([CONVERSATION_TODO]);
     const [row] = queryMailLog(r.db);
-    expect(row ? historySentence(row, row.at) : "").toMatch(/^You made it a to-do in an Ivy conversation \(today at \d\d:\d\d\)\.$/);
+    expect(row ? historySentence(row, row.at) : "").toMatch(/^You made it a to-do in a conversation \(today at \d\d:\d\d\)\.$/);
   });
 
   test("a conversation to-do already logged for the mail is not logged again", async () => {

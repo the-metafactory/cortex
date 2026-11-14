@@ -89,7 +89,7 @@ export function piArguments(settings: PiSettings, request: Pick<TurnRequest, "ro
 }
 
 const fence = (tag: string, body: string): string => `<${tag}>\n${body.replaceAll(`</${tag}>`, `<\\/${tag}>`)}\n</${tag}>`;
-const transcript = (history: ChatTurn[]): string => history.map(turn => `${turn.role === "assistant" ? "Ivy" : "Principal"}: ${turn.content}`).join("\n\n");
+const transcript = (history: ChatTurn[]): string => history.map(turn => `${turn.role === "assistant" ? "Assistant" : "Principal"}: ${turn.content}`).join("\n\n");
 
 export function piPrompt(request: Pick<TurnRequest, "prompt" | "linked" | "history">, resumed: boolean): string {
   const parts: string[] = [];

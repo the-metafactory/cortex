@@ -83,6 +83,7 @@ export interface CaptureInput {
   options: StudioOptions;
   areas: readonly StudioArea[];
   requestId: string;
+  assistantName: string;
   text: string;
   db: Database;
   now?: Date;

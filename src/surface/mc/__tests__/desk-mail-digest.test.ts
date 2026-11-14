@@ -90,8 +90,8 @@ describe("flags", () => {
     expect(flagged.flags).toEqual([{ key: "mail:a", line: "It covers the adapter contract. (your Studio thread “Desk routing”)" }]);
     expect(flagged.mails.map((m) => [m.key, m.url])).toEqual([["mail:a", "message://%3Ca%3E"], ["mail:b", "message://%3Cb%3E"]]);
     expect(digestView(group, { stamp: "s", flags: [] }).why).toBe("Nothing in them touches your Studio threads, focus projects or goals.");
-    expect(digestView(group, { stamp: "local-only", flags: [], skipped: "local-only" }).why).toBe("Ivy did not read them: this area allows only a local model, and none is set up.");
-    expect(digestView(group, undefined).why).toBe("Ivy has not read them yet.");
+    expect(digestView(group, { stamp: "local-only", flags: [], skipped: "local-only" }).why).toBe("The Desk did not read them: this area allows only a local model, and none is set up.");
+    expect(digestView(group, undefined).why).toBe("The Desk has not read them yet.");
     expect(digestView(group, null).why).toBe("No model is set up to flag items worth reading.");
   });
 

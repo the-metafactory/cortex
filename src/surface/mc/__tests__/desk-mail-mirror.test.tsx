@@ -59,14 +59,14 @@ describe("mail in the weekly mirror", () => {
     expect(m.byWhere).toEqual(direct("origin") as typeof m.byWhere);
   });
 
-  it("counts a to-do made in an Ivy conversation as the principal's own decision (PRINCIPAL, ACTED)", () => {
+  it("counts a to-do made in a conversation as the principal's own decision (PRINCIPAL, ACTED)", () => {
     log("c1", "ada@people.example", "opened", "desk", WEEK.start + HOUR);
     log("c1", "ada@people.example", "todo", "conversation", WEEK.start + HOUR + 10 * 60_000);
     const m = readMailMirror(db, WEEK);
     expect(m.byWhere).toEqual([{ key: "conversation", count: 1 }]);
     expect(m.senders).toEqual([{ kind: "sender", value: "ada@people.example", decisions: 1 }]);
     expect(m.time).toEqual({ mails: 1, totalMs: 600_000, medianMs: 600_000, capped: 0, untimed: 0, capMs: 900_000 });
-    expect(renderToStaticMarkup(createElement(MirrorMail, { mail: m, dmarc: null }))).toContain("In an Ivy conversation");
+    expect(renderToStaticMarkup(createElement(MirrorMail, { mail: m, dmarc: null }))).toContain("In a conversation");
   });
 
   it("invents no time: time appears only for mails the log saw opened and then acted on", () => {

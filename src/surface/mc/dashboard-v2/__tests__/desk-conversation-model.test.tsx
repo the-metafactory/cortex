@@ -32,6 +32,6 @@ describe("the conversation's cloud model", () => {
 
   it("shows which model answered a turn and which one failed", () => {
     expect(entryViews({ id: "1", kind: "message", role: "assistant", text: "hi", model: "anthropic/claude-test" })).toEqual([{ kind: "message", who: "ivy", text: "hi", note: "anthropic/claude-test" }]);
-    expect(entryViews({ id: "2", kind: "message", role: "assistant", error: "not signed in", model: "anthropic/claude-test" })).toEqual([{ kind: "failure", text: "Ivy could not answer on anthropic/claude-test: not signed in" }]);
+    expect(entryViews({ id: "2", kind: "message", role: "assistant", error: "not signed in", model: "anthropic/claude-test" })).toEqual([{ kind: "failure", text: "No answer on anthropic/claude-test: not signed in" }]);
   });
 });

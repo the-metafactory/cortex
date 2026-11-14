@@ -53,7 +53,7 @@ describe("graph node update writers", () => {
     expect(call?.argv.slice(0, 4)).toEqual([SOMA, "graph", "rule", "31"]);
     expect(call?.argv.slice(6)).toEqual(["--repo", REPO, "--json"]);
     expect(call?.file).toContain("D1 Use SQLite.\nD2 Keep Redis out.");
-    expect(call?.file).toContain("Ivy conversation conv-9, operation op-1");
+    expect(call?.file).toContain("conversation conv-9, operation op-1");
   });
 
   test("a close runs soma graph close with the resolution file and the gist, and never passes --json", async () => {
@@ -86,7 +86,7 @@ describe("graph node update writers", () => {
     const { ruling, close, calls } = rig(argv => argv[2] === "node" ? { code: 0, stdout: JSON.stringify({ status, body }), stderr: "" } : { code: 0, stdout: "{}", stderr: "" });
     await ruling.create(request({ node: "example/app#31", text: "D1" }, "op-r"));
     expect(await ruling.readback(operation("op-r"))).toEqual({ found: false });
-    body += "- 2026-11-09 (jc): earlier\n  Filed from Ivy conversation conv-8, operation op-r2.\n";
+    body += "- 2026-11-09 (jc): earlier\n  Filed from conversation conv-8, operation op-r2.\n";
     expect(await ruling.readback(operation("op-r"))).toEqual({ found: false });
     const sent = calls.find(c => c.argv[2] === "rule")?.file ?? "";
     const [first = "", ...rest] = sent.trimEnd().split("\n");

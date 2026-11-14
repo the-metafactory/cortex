@@ -117,7 +117,7 @@ describe("Desk saved flows", () => {
 
   it("renders the empty state only after a successful empty list", async () => {
     const state = await loadSavedFlows(new AbortController().signal, apiRead(runner({ status: "ok", flows: [] }).run));
-    expect(renderToStaticMarkup(<DeskSavedFlows state={shown(state)} />)).toContain("No saved flows yet. Ask Ivy to make a flow in a conversation.");
+    expect(renderToStaticMarkup(<DeskSavedFlows state={shown(state)} />)).toContain("No saved flows yet. Ask Assistant to make a flow in a conversation.");
   });
 
   it("returns 404 without configuration, hides the tab, and does not call Pulse", async () => {

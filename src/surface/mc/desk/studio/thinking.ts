@@ -42,7 +42,7 @@ export async function withThinking(studio: StudioView, dir: string, cli: RangerC
   return withThreadThinking({ ...studio, thinking: await readThinking(dir, cli, run) });
 }
 
-export async function enqueueSparring(input: { studio: StudioView; dir: string; cli: RangerCli | undefined; act: Extract<StudioAct, { act: "spar" }>; requestId: string; run?: RangerRunner }): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {
+export async function enqueueSparring(input: { studio: StudioView; dir: string; cli: RangerCli | undefined; act: Extract<StudioAct, { act: "spar" }>; requestId: string; assistantName: string; run?: RangerRunner }): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {
   const { act, studio, cli } = input;
   const thread = [...studio.active, ...studio.parked, ...studio.closed].find(t => t.slug === act.thread);
   if (!thread) return { ok: false, status: 404, error: "This thread is not in the Studio." };
@@ -56,7 +56,7 @@ export async function enqueueSparring(input: { studio: StudioView; dir: string; 
     const result = await (input.run ?? nativeRun)(command(cli, ["enqueue", "ivy-think", "--param", `thread=${act.thread}`, "--param", `mode=${act.mode}`, "--param", `trigger=You asked: ${act.mode}`, "--param", `requestId=${input.requestId}`]));
     if (result.code !== 0) return { ok: false, status: 503, error: "Ranger did not confirm this request. Retry uses the same request id." };
     z.object({ runId: z.number().int().positive(), queued: z.boolean() }).parse(JSON.parse(result.stdout));
-    return { ok: true, message: `Asked Ivy: ${act.mode.replaceAll("-", " ")}. The note will appear here when it lands.` };
+    return { ok: true, message: `Asked ${input.assistantName}: ${act.mode.replaceAll("-", " ")}. The note will appear here when it lands.` };
   } catch {
     return { ok: false, status: 503, error: "The queue receipt was not received. Retry uses the same request id." };
   }

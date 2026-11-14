@@ -214,3 +214,60 @@ describe("an auto-link in the classifier pass", () => {
     expect(proposeRules(db, NOW + 60_000)).toEqual([]);
   });
 });
+
+describe("an auto-link to a meeting with an attendee list", () => {
+  beforeEach(() => setGrant(db, "mail.link-meeting", true, NOW - 1000));
+  const LISTED: SourceEvent = { ...MEETING, organizer: { address: "grace@example.org" }, attendees: [{ name: "Ada Lovelace", address: "ada@example.org" }, { address: "bob@example.org" }] };
+
+  it("refuses a sender who is neither the organizer nor an attendee, and leaves the mail on the Desk without a Done for you entry", async () => {
+    const s = deskWithClassifier([mail("m1", { from: { name: "Mallory", address: "mallory@example.net" } })], [LISTED, PAST]);
+    s.answers.set("m1", LINK_MEETING);
+    await s.compose();
+    expect(linksCount()).toBe(0);
+    expect(doneRows()).toEqual([]);
+    expect(queryMailLog(db, {})).toEqual([]);
+    expect(mailKeys(await s.compose())).toEqual(["mail:m1"]);
+  });
+
+  it("links a mail from an attendee or the organizer, comparing addresses without regard to case", async () => {
+    const s = deskWithClassifier([
+      mail("m1", { from: { address: "BOB@example.ORG" } }),
+      mail("m2", { from: { name: "Grace Hopper", address: "Grace@Example.org" } }),
+    ], [{ ...LISTED, organizer: { address: "GRACE@example.org" } }, PAST]);
+    s.answers.set("m1", LINK_MEETING);
+    s.answers.set("m2", LINK_MEETING);
+    await s.compose();
+    expect(activeMailLink(db, "m1")).toMatchObject({ origin: "auto", toKey: MEETING_KEY });
+    expect(activeMailLink(db, "m2")).toMatchObject({ origin: "auto", toKey: MEETING_KEY });
+  });
+
+  it("counts a meeting whose only listed person is its organizer as having an attendee list", async () => {
+    const s = deskWithClassifier([mail("m1")], [{ ...MEETING, organizer: { address: "grace@example.org" } }, PAST]);
+    s.answers.set("m1", LINK_MEETING);
+    await s.compose();
+    expect(linksCount()).toBe(0);
+  });
+
+  it("refuses every sender when the source listed people the Desk cannot read", async () => {
+    const unreadable = { ...MEETING, organizer: { address: "nobody" }, attendees: [{ address: "not an address" }] };
+    const s = deskWithClassifier([mail("m1")], [unreadable, PAST]);
+    s.answers.set("m1", LINK_MEETING);
+    await s.compose();
+    expect(linksCount()).toBe(0);
+  });
+
+  it("links any sender when the meeting lists no attendees", async () => {
+    const s = deskWithClassifier([mail("m1", { from: { address: "someone@example.net" } })], [{ ...MEETING, attendees: [] }, PAST]);
+    s.answers.set("m1", LINK_MEETING);
+    await s.compose();
+    expect(activeMailLink(db, "m1")).toMatchObject({ origin: "auto" });
+  });
+
+  it("leaves linking by hand unchanged for a sender who is not an attendee", async () => {
+    const s = deskWithClassifier([mail("m1", { from: { address: "mallory@example.net" } })], [LISTED, PAST]);
+    await s.rt.sourceCache?.read(DESK.sources, NOW);
+    const attach = await handleDeskMail(post("http://localhost/api/desk/mail", { action: "attach", key: "mail:m1", requestId: "4d2b7e10-8a3c-4f6e-b1d9-2c5a7e9f0b13", to: { kind: "meeting", event: MEETING_KEY } }), db, s.rt, { now: () => NOW, newId: () => "hand-1" });
+    expect(attach.status).toBe(200);
+    expect(activeMailLink(db, "m1")).toMatchObject({ origin: "desk", toKey: MEETING_KEY });
+  });
+});

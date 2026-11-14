@@ -65,11 +65,11 @@ export interface Digests {
 const TOPIC_WORDS: Record<DigestTopicKind, string> = { thread: "Studio thread", focus: "focus project", goal: "goal" };
 const NO_FLAG = "Nothing in them touches your Studio threads, focus projects or goals.";
 const NO_MODEL = "No model is set up to flag items worth reading.";
-const UNREAD = "Ivy has not read them yet.";
+const UNREAD = "The Desk has not read them yet.";
 export type FlagSkip = "no-topics" | "local-only";
 const SKIPPED: Record<FlagSkip, string> = {
-  "no-topics": "Ivy did not read them: there are no active Studio threads, focus projects or goals to match.",
-  "local-only": "Ivy did not read them: this area allows only a local model, and none is set up.",
+  "no-topics": "The Desk did not read them: there are no active Studio threads, focus projects or goals to match.",
+  "local-only": "The Desk did not read them: this area allows only a local model, and none is set up.",
 };
 
 /** A newsletter: mail an approved rule keeps for the digest, or bulk mail with a List-Id. DMARC reports are handled by I1, not here. */

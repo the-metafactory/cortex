@@ -1,5 +1,6 @@
 import type { ThreadPage } from "../../desk/studio/page";
 import type { StudioActs } from "../hooks/use-studio-act";
+import { useAssistantName } from "../lib/assistant-name";
 
 const MODES = [
   { mode: "think", label: "Think now" },
@@ -12,14 +13,15 @@ const MODES = [
 const BUTTON_SUFFIX = { spent: "budget spent", off: "turned off" } as const;
 
 export function Sparring({ page, acts }: { page: ThreadPage; acts?: StudioActs }) {
+  const name = useAssistantName();
   if (page.thread.state === "closed") return null;
   const thinking = page.thinking;
   const budget = thinking.kind === "ready" ? thinking.budget : "open";
   const blocked = thinking.reason;
   const modes = [...MODES, ...page.personas.map(({ name }) => ({ mode: `persona:${name}`, label: `What would ${name} say?` }))];
   return (
-    <section className="dst-sparring" aria-label="Think with Ivy">
-      <h4 className="dst-h">Think with Ivy <span className="n">lands as a note</span></h4>
+    <section className="dst-sparring" aria-label={`Think with ${name}`}>
+      <h4 className="dst-h">Think with {name} <span className="n">lands as a note</span></h4>
       {blocked && <p className="dst-none" role="status">{blocked}</p>}
       <div className="dst-acts">
         {modes.map(({ mode, label }) => <button key={mode} type="button" className="desk-btn ghost" disabled={!acts || acts.pending || blocked !== null} title={blocked ?? undefined} onClick={() => void acts?.send({ act: "spar", thread: page.thread.slug, mode })}>{budget === "open" ? label : `${label} · ${BUTTON_SUFFIX[budget]}`}</button>)}

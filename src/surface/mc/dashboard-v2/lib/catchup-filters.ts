@@ -8,7 +8,7 @@ export const CARD_KIND_LABELS: Record<DeskItemKind, string> = {
   "agent-blocked": "Blocked agents", decision: "Decisions", grilling: "Grilling",
   escalation: "Escalations", mail: "Mail", reminder: "Reminders", meeting: "Meetings",
   "mail-rule": "Mail rules", dmarc: "Mail reports", "mail-waiting": "Waiting for replies",
-  "mail-handoff": "Mail handed to Ivy",
+  "mail-handoff": "Mail you handed off",
   "task-handoff": "Tasks handed to an agent",
 };
 export function readCatchupKind(value: string | null): CatchupKind {

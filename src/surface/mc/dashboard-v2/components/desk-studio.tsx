@@ -11,6 +11,7 @@ import { OpenSheet, type OpenRequest } from "./desk-studio-acts";
 import { AreaChips, ModelBadge, dayMonthTime, hhmm } from "./desk-studio-parts";
 import { ThreadMissing, ThreadPageView, useThreadZoom } from "./desk-studio-thread";
 import "./desk-studio.css";
+import { useAssistantName } from "../lib/assistant-name";
 
 const LAST_LOOK_KEY = "desk.studio.lastLook";
 
@@ -67,7 +68,8 @@ export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDi
   const bringBack = useCallback((slug: string, question: string) => setSheet({ kind: "unpark", slug, question }), []);
   const now = useMemo(() => at ?? Date.now(), [at, studio]);
   const [lastLook] = useState(() => takeLastLook(browserStore(), now));
-  const board = useMemo(() => buildBoard(studio, { now, startOfToday: startOfDay(now), lastLook }), [studio, now, lastLook]);
+  const name = useAssistantName();
+  const board = useMemo(() => buildBoard(studio, { now, startOfToday: startOfDay(now), lastLook }, name), [studio, now, lastLook, name]);
   const root = useRef<HTMLDivElement>(null);
   const zoom = useThreadZoom(thread, root);
   const context = useMemo<RelatesContext>(() => (day ? relatesContext(day) : { ...NO_CONTEXT, now }), [day, now]);
@@ -98,6 +100,7 @@ export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDi
 }
 
 function StudioBoard({ board, now, onOpen, onSheet, acts }: { board: Board; now: number; onOpen: (slug: string) => void; onSheet: (r: OpenRequest) => void; acts: StudioActs }) {
+  const name = useAssistantName();
   const ref = useRef<HTMLElement>(null);
   const lines = useBoardLines(ref, board);
   const startOfToday = startOfDay(now);
@@ -124,12 +127,12 @@ function StudioBoard({ board, now, onOpen, onSheet, acts }: { board: Board; now:
       <div className="dst-slots">
         {board.places.map((p) => (p.kind === "thread" ? <Card key={p.place} card={p} startOfToday={startOfToday} onOpen={onOpen} /> : <Free key={p.place} free={p} />))}
       </div>
-      <aside className="dst-edge right" aria-label="Ivy proposes">
-        <h4 className="dst-h">Ivy proposes</h4>
-        {board.proposals.length ? board.proposals.map((p) => <Proposal key={p.id} item={p} onSheet={onSheet} acts={acts} />) : <p className="dst-none">No proposal right now. Ivy proposes a thread when a theme keeps coming back.</p>}
+      <aside className="dst-edge right" aria-label={`${name} proposes`}>
+        <h4 className="dst-h">{name} proposes</h4>
+        {board.proposals.length ? board.proposals.map((p) => <Proposal key={p.id} item={p} onSheet={onSheet} acts={acts} />) : <p className="dst-none">No proposal right now. {name} proposes a thread when a theme keeps coming back.</p>}
         <div className="dst-legend">
           <span><i />Two threads share a source</span>
-          <span><i className="dotted" />Where Ivy would file it (hover for why)</span>
+          <span><i className="dotted" />Where {name} would file it (hover for why)</span>
         </div>
       </aside>
     </section>
@@ -137,22 +140,23 @@ function StudioBoard({ board, now, onOpen, onSheet, acts }: { board: Board; now:
 }
 
 function Card({ card, startOfToday, onOpen }: { card: BoardCard; startOfToday: number; onOpen: (slug: string) => void }) {
+  const name = useAssistantName();
   const t = card.thread;
   return (
     <div className="dst-slot">
       <button type="button" className={card.waitsOnYou ? "dst-card waits" : "dst-card"} data-card={t.slug} data-open={t.slug} aria-label={`Open: ${t.question}`} onClick={() => onOpen(t.slug)}>
-        <span className="hd"><span className="dst-type">{TYPE_LABEL[t.type]}</span>{card.waitsOnYou && <span className="dst-badge">Ivy waits on you</span>}</span>
+        <span className="hd"><span className="dst-type">{TYPE_LABEL[t.type]}</span>{card.waitsOnYou && <span className="dst-badge">{name} waits on you</span>}</span>
         <span className="dst-q">{t.question}</span>
         {card.stand && <span className="dst-stand"><b>Where I stand</b>{card.stand}</span>}
         {card.shared.map((s) => (
           <span key={s.slug} className="dst-sharedtxt">Shares a source with “{clip(plainQuestion(s.question), 40)}”: {s.label}.</span>
         ))}
         <span className="dst-act">
-          <b className="k">Ivy's latest</b>
+          <b className="k">{name}'s latest</b>
           {card.latest
-            ? <><span className="who">Ivy wrote {wroteWhen(card.latest.at, startOfToday)}.</span> {clip(card.latest.trigger, 78)}</>
-            : <><span className="who quiet">Ivy has not written here yet.</span> Opened {dayMonth(t.opened)}.</>}
-          {t.thinkTonight && <span className="tn"> On Ivy's list for tonight.</span>}
+            ? <><span className="who">{name} wrote {wroteWhen(card.latest.at, startOfToday)}.</span> {clip(card.latest.trigger, 78)}</>
+            : <><span className="who quiet">{name} has not written here yet.</span> Opened {dayMonth(t.opened)}.</>}
+          {t.thinkTonight && <span className="tn"> On {name}'s list for tonight.</span>}
         </span>
         <span className="dst-meta"><AreaChips areas={card.areas} /><ModelBadge policy={t.policy} /><span className="dst-pnum">Place {card.place}</span></span>
       </button>
@@ -161,11 +165,12 @@ function Card({ card, startOfToday, onOpen }: { card: BoardCard; startOfToday: n
 }
 
 function Free({ free }: { free: BoardFree }) {
+  const name = useAssistantName();
   return (
     <div className="dst-slot">
       <div className={free.incoming.length ? "dst-free target" : "dst-free"} data-free={free.place}>
         <b>Place {free.place} is free</b>
-        {free.incoming.length ? `Ivy would put ${free.incoming.join(" or ")} here.` : "Accept a proposal or turn a capture into a thread."}
+        {free.incoming.length ? `${name} would put ${free.incoming.join(" or ")} here.` : "Accept a proposal or turn a capture into a thread."}
       </div>
     </div>
   );

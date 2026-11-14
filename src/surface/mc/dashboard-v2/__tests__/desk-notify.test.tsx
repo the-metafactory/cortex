@@ -20,6 +20,7 @@ const item = (n: number, interrupting: boolean): DeskItem => ({
 
 const view = (items: DeskItem[], notifications = true): DeskView => ({
   generatedAt: 0,
+  assistantName: "Assistant",
   voice: { enabled: true, input: "browser", output: "browser" },
   displayName: null,
   topN: 5,

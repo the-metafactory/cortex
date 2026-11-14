@@ -86,7 +86,7 @@ describe("Balance owner sync and pure My Day reads", () => {
     await stack.note();
     const day = await stack.read();
     expect(day.studioStatus).toBe("synced");
-    expect(day.items.map(item => item.task.title)).toContain("Respond to Ivy on Which sketch?");
+    expect(day.items.map(item => item.task.title)).toContain("Respond to the note on Which sketch?");
     expect(findNode(loadBalanceState(stack.db)!.outline, "repeat")).toMatchObject({ done: false, dueDate: SYNC_DATE });
     const saved = stack.bytes();
     expect((await stack.read()).revision).toBe(day.revision);

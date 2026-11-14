@@ -124,7 +124,7 @@ test("the real session transport declares no tools and sends only its explicit s
     const body = await req.json(); expect(body.tools).toBeUndefined(); expect(body.messages).toHaveLength(2); expect(body.messages[1].content).toContain("paper glider");
     return Response.json({ choices: [{ message: { content: JSON.stringify(result) } }] });
   } });
-  try { expect(await sessionModel({ baseUrl: `http://127.0.0.1:${server.port}/v1`, model: "test", timeoutSeconds: 2, maxPerPass: 1 }, { question: "paper glider", stand: "", subject: "fold", context: "", exchange: [] }, NOT_LOCAL_CONTENT)).toEqual(result); }
+  try { expect(await sessionModel({ baseUrl: `http://127.0.0.1:${server.port}/v1`, model: "test", timeoutSeconds: 2, maxPerPass: 1 }, { question: "paper glider", stand: "", subject: "fold", context: "", exchange: [] }, NOT_LOCAL_CONTENT, "Assistant")).toEqual(result); }
   finally { server.stop(true); }
 });
 

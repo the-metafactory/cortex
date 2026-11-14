@@ -2,6 +2,7 @@ export interface FollowedEvent {
   title: string;
   at: number;
   end: number;
+  organizerAndAttendees?: ReadonlySet<string>;
 }
 
 export interface EventFacts {

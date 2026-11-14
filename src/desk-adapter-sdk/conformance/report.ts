@@ -1,5 +1,5 @@
 export type Verdict = "conformant" | "refused" | "not-run";
-export type ProbeKind = "destinations" | "query" | "observation" | "draft" | "action" | "readback";
+export type ProbeKind = "destinations" | "query" | "observation" | "draft" | "action" | "readback" | "cloud-reader";
 
 export interface CapabilityReport {
   capabilityId: string;

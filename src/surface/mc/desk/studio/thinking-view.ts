@@ -28,7 +28,7 @@ export function threadThinking(studio: StudioView, thread: StudioThreadView, now
       id: run.runUuid,
       mode: run.params.mode ?? "think",
       status: run.status === "failed" ? "failed" : "pending",
-      reason: run.reason ?? (run.status === "running" ? "Ivy is thinking. The note will appear here." : run.status === "succeeded" ? "The run finished; waiting for its note to appear." : "Queued. Ivy is waiting to start."),
+      reason: run.reason ?? (run.status === "running" ? "Thinking. The note will appear here." : run.status === "succeeded" ? "The run finished; waiting for its note to appear." : "Queued. Waiting to start."),
     })),
   };
 }

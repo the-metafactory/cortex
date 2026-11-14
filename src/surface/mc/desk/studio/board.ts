@@ -151,7 +151,7 @@ function placesSentence(used: number, max: number, waiting: number): string {
 
 const viaName = (via: string): string => (via === "voice" ? "the voice note" : via === "mail" ? "the forwarded mail" : "a capture");
 
-export function buildBoard(studio: StudioView, clock: BoardClock): Board {
+export function buildBoard(studio: StudioView, clock: BoardClock, name: string): Board {
   const area = areaLookup(studio.areas);
   const placed = studio.active.filter((t): t is StudioThreadView & { place: number } => t.place !== undefined);
   const pairs = sharedPairs(placed);
@@ -169,16 +169,16 @@ export function buildBoard(studio: StudioView, clock: BoardClock): Board {
   };
 
   const looseSentence = (target: StudioTarget | undefined, resolved: BoardTarget | null, proposal: boolean): string => {
-    if (!target) return "Ivy has no place for it yet.";
+    if (!target) return `${name} has no place for it yet.`;
     if (resolved?.kind === "thread") {
       const t = bySlug.get(resolved.slug);
-      return `Ivy would file it into “${clip(plainQuestion(t?.question ?? resolved.slug), 40)}”, place ${resolved.place}.`;
+      return `${name} would file it into “${clip(plainQuestion(t?.question ?? resolved.slug), 40)}”, place ${resolved.place}.`;
     }
     if (resolved?.kind === "free") {
       const under = target.area ? `, under ${area(target.area).label}` : "";
-      return proposal ? `Ivy would put it in place ${resolved.place}${under}.` : `Ivy would make it a thread in place ${resolved.place}${under}.`;
+      return proposal ? `${name} would put it in place ${resolved.place}${under}.` : `${name} would make it a thread in place ${resolved.place}${under}.`;
     }
-    if (target.thread !== undefined) return "Ivy would file it into a thread that is not on the board.";
+    if (target.thread !== undefined) return `${name} would file it into a thread that is not on the board.`;
     return "Every place is taken, so opening it would park a thread.";
   };
 
@@ -200,7 +200,7 @@ export function buildBoard(studio: StudioView, clock: BoardClock): Board {
 
   const incoming = (place: number): string[] => [
     ...inbox.filter((c) => c.target?.kind === "free" && c.target.place === place).map((c) => viaName(c.capture.via)),
-    ...proposals.filter((p) => p.target?.kind === "free" && p.target.place === place).map(() => "Ivy's proposed thread"),
+    ...proposals.filter((p) => p.target?.kind === "free" && p.target.place === place).map(() => `${name}'s proposed thread`),
   ];
 
   const places: BoardPlace[] = Array.from({ length: studio.maxActive }, (_, i) => {

@@ -59,11 +59,11 @@ describe("the Studio board", () => {
     expect([...html.matchAll(/data-card="([^"]+)"/g)].map((m) => m[1])).toEqual(["one", "two"]);
     expect(html).toContain('data-free="3"');
     expect(html).toContain("Place 3 is free");
-    expect(html).toContain("Ivy waits on you");
+    expect(html).toContain("Assistant waits on you");
   });
 
   it("writes each line as a sentence too, for the phone layout", () => {
-    expect(html).toContain("Ivy would make it a thread in place 3.");
+    expect(html).toContain("Assistant would make it a thread in place 3.");
     expect(html).toContain("Why: It matches no thread.");
     expect(html).toContain("Shares a source with “What about two”: Shared brief.");
   });
@@ -151,7 +151,7 @@ describe("the Studio board", () => {
     const rel = { at: "2026-10-31T05:00:00+01:00", trigger: "Shared theme", model: "cloud", kind: "relation" as const, status: "open" as const, sample: false, relates: { kind: "goal", label: "G5: one post a week" }, text: "It feeds the weekly post." };
     const studio: StudioView = { ...STUDIO, active: [thread("one", 1, { notes: [rel] }), thread("two", 2)] };
     const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
-    expect(html).toContain("Ivy proposes</h5>");
+    expect(html).toContain("Assistant proposes</h5>");
     expect(html).toContain("goal: G5: one post a week");
     expect(html).toContain("It feeds the weekly post.");
   });
@@ -292,7 +292,7 @@ it("keeps the response form available after Keep or Dismiss without changing the
     expect(waitsOnYou(subject)).toBe(false);
     const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="owned" onOpenThread={() => {}} at={AT} />);
     expect(html).toContain("Send my response");
-    expect(html).not.toContain("Ivy waits on you: answer the note");
+    expect(html).not.toContain("Assistant waits on you: answer the note");
     const closed: StudioView = { ...studio, active: [], closed: [{ ...subject, state: "closed", outcome: "shipped" }] };
     expect(renderToStaticMarkup(<DeskStudio studio={closed} thread="owned" onOpenThread={() => {}} at={AT} />)).not.toContain("Send my response");
   }

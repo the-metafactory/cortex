@@ -176,7 +176,7 @@ function decisionRelations(thread: StudioThreadView, studio: StudioView): Relati
     });
 }
 
-export const KEPT_WHY = "Ivy proposed it and you kept it.";
+export const KEPT_WHY = "It was proposed in a note and you kept it.";
 
 function keptRelations(thread: Pick<StudioThread, "notes">, known: ReadonlyMap<string, StudioThreadView>): Relation[] {
   return thread.notes.flatMap((n): Relation[] => {

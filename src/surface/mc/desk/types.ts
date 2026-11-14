@@ -214,6 +214,7 @@ export interface DeskView {
   calendars?: DeskCalendar[];
   generatedAt: number;
   displayName: string | null;
+  assistantName: string;
   topN: number;
   areas: DeskArea[];
   items: DeskItem[];

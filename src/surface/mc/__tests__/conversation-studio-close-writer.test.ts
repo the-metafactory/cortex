@@ -28,7 +28,7 @@ describe("Studio close writer", () => {
       const operation = r.created(reply);
       const t = r.parsed("alpha");
       expect(t).toMatchObject({ state: "closed", outcome: "decided", expect: "Twelve people sign up.", reviewOn, outcomeText: "Run it in spring." });
-      expect(t.log.at(-1)?.text).toBe(`Closed as decided from Ivy conversation ?desk=conversation&conversation=${r.id}`);
+      expect(t.log.at(-1)?.text).toBe(`Closed as decided from conversation ?desk=conversation&conversation=${r.id}`);
 
       await r.confirmedAgain(view, operation);
       expect(r.parsed("alpha").log.filter(l => l.text.startsWith("Closed as"))).toHaveLength(1);
@@ -77,7 +77,7 @@ describe("Studio close writer", () => {
     const r = await rig();
     try {
       expect(await r.writer().create(directRequest("studio-close", { thread: "alpha", outcome: " ", text: "Gone." }))).toEqual({ state: "failed", error: "The outcome is missing; use decided, shipped or dropped. Nothing was created." });
-      const closed = await runStudioAct({ options: { dir: r.repo.dir, maxActive: 5 }, areas: [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "local" }], requestId: "studio-act-close-xyz", act: { act: "close", thread: "beta", outcome: "dropped", text: "Not now." } });
+      const closed = await runStudioAct({ options: { dir: r.repo.dir, maxActive: 5 }, areas: [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "local" }], assistantName: "Assistant", requestId: "studio-act-close-xyz", act: { act: "close", thread: "beta", outcome: "dropped", text: "Not now." } });
       expect(closed).toMatchObject({ ok: true });
       expect(r.parsed("beta").log.at(-1)?.text).toBe("Closed as dropped");
     } finally { r.repo.clean(); }

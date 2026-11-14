@@ -28,7 +28,7 @@ export const graphFailed = (sentence: string): CreateResult => ({ state: "failed
 
 export const graphMarker = (operationId: string): string => `<!-- conversation-operation ${studioRequestId(operationId)} -->`;
 
-export const provenanceLine = (provenance: Provenance): string => `Filed from Ivy conversation ${provenance.conversationId}, operation ${provenance.operationId}.`;
+export const provenanceLine = (provenance: Provenance): string => `Filed from conversation ${provenance.conversationId}, operation ${provenance.operationId}.`;
 
 export const graphBody = (body: string | undefined, provenance: Provenance): string => [body?.trim(), provenanceLine(provenance)].filter(Boolean).join("\n\n");
 

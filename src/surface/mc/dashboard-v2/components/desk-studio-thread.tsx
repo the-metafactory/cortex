@@ -17,6 +17,7 @@ const STACKED = "(max-width: 1100px)";
 const GROW = { duration: 340, easing: "cubic-bezier(.2,.85,.25,1)" };
 const SHRINK = { duration: 240, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" as const };
 import type { StartDiscussion } from "./desk-studio-session";
+import { useAssistantName } from "../lib/assistant-name";
 const NO_WRITES = "The Studio cannot write from here.";
 
 interface DocRect {
@@ -215,6 +216,7 @@ function GhostActions({ keep, note, acting, discuss = true }: { keep: string; no
 }
 
 function ThreadActions({ page, acting, onBringBack }: { page: ThreadPage; acting: Acting; onBringBack?: (slug: string, question: string) => void }) {
+  const name = useAssistantName();
   const { acts, slug } = acting;
   const t = page.thread;
   if (t.state === "closed") return null;
@@ -232,7 +234,7 @@ function ThreadActions({ page, acting, onBringBack }: { page: ThreadPage; acting
         {page.choices.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.policy}</option>)}
       </select>
       <button type="button" className="desk-btn ghost" aria-pressed={t.thinkTonight} disabled={off} onClick={() => void acts?.send({ act: "think", thread: slug, on: !t.thinkTonight })}>
-        {t.thinkTonight ? "On Ivy's list tonight" : "Think tonight"}
+        {t.thinkTonight ? `On ${name}'s list tonight` : "Think tonight"}
       </button>
       {t.state === "active"
         ? <button type="button" className="desk-btn ghost" disabled={off} onClick={() => void acts?.send({ act: "park", thread: slug })}>Park</button>
@@ -283,6 +285,7 @@ function ProposedRelation({ note, acting }: { note: IvyNote; acting: Acting }) {
 }
 
 function RelatesTo({ page, onOpen, acting }: { page: ThreadPage; onOpen: (slug: string) => void; acting: Acting }) {
+  const name = useAssistantName();
   const r = page.relations;
   const groups: [string, Relation[]][] = [
     ["Threads", r.threads],
@@ -297,7 +300,7 @@ function RelatesTo({ page, onOpen, acting }: { page: ThreadPage; onOpen: (slug: 
       <h4 className="dst-h">Relates to <span className="n">derived from the files and your calendar</span></h4>
       {page.proposedRelations.length > 0 && (
         <div className="dst-relgrp">
-          <h5>Ivy proposes</h5>
+          <h5>{name} proposes</h5>
           {page.proposedRelations.map((n) => <ProposedRelation key={n.at} note={n} acting={acting} />)}
         </div>
       )}
@@ -348,6 +351,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
   onDiscuss?: StartDiscussion;
   onConversation?: (id: string) => void;
 }) {
+  const name = useAssistantName();
   const ref = useRef<HTMLElement>(null);
   const t = page.thread;
   useZoomMotion(ref, t.slug, zoom);
@@ -370,7 +374,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
             {page.policy === "local" && <div className="dst-modelnote">A local area keeps this thread on the local model.</div>}
           </div>
           {page.standProposal && (
-            <NoteCard note={page.standProposal} id="stand" label="Ivy proposes a new stand" className="dst-n ghost" ghost="stand" wire={false}>
+            <NoteCard note={page.standProposal} id="stand" label={`${name} proposes a new stand`} className="dst-n ghost" ghost="stand" wire={false}>
               <GhostActions keep="Keep it as my stand" note={page.standProposal} acting={acting} />
             </NoteCard>
           )}
@@ -400,12 +404,12 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
           </details>
         </div>
         <div className="dst-col right">
-          <h4 className="dst-h">Ivy's notes <span className="n">dated, append-only</span></h4>
+          <h4 className="dst-h">{name}'s notes <span className="n">dated, append-only</span></h4>
           {(page.waitsOnYou || page.needsResponse) && (acts
-            ? <RespondBox slug={t.slug} label={page.waitsOnYou ? `Ivy waits on you: answer the note from ${page.latest ? dayMonthTime(new Date(page.latest.at)) : "Ivy"}.` : "Respond to Ivy"} acts={acts} />
-            : <p className="dst-waits">{page.waitsOnYou ? "Ivy waits on you: the latest note has no answer yet." : "This note has no saved response."}</p>)}
+            ? <RespondBox slug={t.slug} label={page.waitsOnYou ? `${name} waits on you: answer the note from ${page.latest ? dayMonthTime(new Date(page.latest.at)) : name}.` : `Respond to ${name}`} acts={acts} />
+            : <p className="dst-waits">{page.waitsOnYou ? `${name} waits on you: the latest note has no answer yet.` : "This note has no saved response."}</p>)}
           {page.ideas.map((n, i) => (
-            <NoteCard key={`i-${i}-${n.at}`} id={`i-${i}-${n.at}`} note={n} label="Ivy's idea" className="dst-n ghost" ghost="idea">
+            <NoteCard key={`i-${i}-${n.at}`} id={`i-${i}-${n.at}`} note={n} label={`${name}'s idea`} className="dst-n ghost" ghost="idea">
               <GhostActions keep="Keep" note={n} acting={acting} />
             </NoteCard>
           ))}
@@ -417,7 +421,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
               {r.text}
             </div>
           ))}
-          {page.ideas.length === 0 && page.notes.length === 0 && !page.standProposal && <p className="dst-none">Ivy has not written here yet.</p>}
+          {page.ideas.length === 0 && page.notes.length === 0 && !page.standProposal && <p className="dst-none">{name} has not written here yet.</p>}
         </div>
       </div>
     </section>

@@ -10,6 +10,7 @@ import { ConversationDestination } from "./desk-conversation-destination";
 import { GRAPH_TYPES, GraphDatalists, graphListFor, prefillFields, recallGraphDestination, rememberGraphDestination, useGraphChoices } from "./desk-conversation-graph-fields";
 import { ConversationBalanceTask } from "./desk-conversation-balance-task";
 import { SavedFlowCard, useSavedFlowCard } from "./desk-conversation-saved-flow";
+import { useAssistantName } from "../lib/assistant-name";
 
 const QUICK = ["graph-node", "balance-task", "routine", "flow"] as const;
 const SETTLING_MS = 3_000;
@@ -55,6 +56,7 @@ export function CreationPanel({ id, archived, revision, seed }: { id: string; ar
 }
 
 export function CreationSection({ id, archived, types, view, error, busy, seed, act }: { id: string; archived: boolean; types: Capability[]; view: CreationView | null; error: string | null; busy: boolean; seed: CreationSeed; act: Act }) {
+  const name = useAssistantName();
   const byType = useMemo(() => new Map(types.map(t => [t.type, t])), [types]);
   const creatable = types.filter(t => t.status !== "unsupported");
   const start = (type: string | null): void => {
@@ -84,7 +86,7 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     </div>}
     <div className="dcv-grants" aria-label="Standing creation permissions">
       <h4>Standing creation permissions</h4>
-      {active.length === 0 && <p className="dcv-quiet">None. Ivy asks before every creation.</p>}
+      {active.length === 0 && <p className="dcv-quiet">None. {name} asks before every creation.</p>}
       {renewal.map(g => <p key={g.grantId} data-renewal="needed" role="status">{g.renewal ? <>{byType.get(g.type)?.label ?? g.type} · {where(g)} · needs renewal before the next creation. {g.renewal.reason}</> : active.some(current => current.type === g.type && current.binding) ? `Previous ${byType.get(g.type)?.label ?? g.type} permission lapsed at cutover. Its renewed save permission is listed below.` : `${byType.get(g.type)?.label ?? g.type} permission needs renewal. Approve the next save to this connection and choose whether to allow future saves.`}</p>)}
       <ul>{active.map(g => <li key={g.grantId} data-renewal="none"><span>{byType.get(g.type)?.label ?? g.type} · {where(g)}</span>
         <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => void act(() => revoke(g.grantId), "The permission was not revoked. Try again.")}>Revoke</button></li>)}</ul>

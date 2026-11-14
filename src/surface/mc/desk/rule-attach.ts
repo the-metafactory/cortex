@@ -9,6 +9,7 @@ import type { SourceReading } from "./sources/command";
 import { captureId, undoStudioCapture } from "./studio/capture";
 import { oneLine } from "./studio/edit";
 import { withSyncedBalance } from "./studio-my-day";
+import { assistantNameOf } from "./assistant-name";
 
 const NO_STUDIO = { ok: false as const, status: 409, error: "The Studio is not set up on this stack." };
 
@@ -38,14 +39,14 @@ export function ruleAttach(db: Database, desk: DeskOptions, readings: () => read
       const studio = desk.studio;
       if (!studio) return { ...NO_STUDIO, gone: false };
       if ((await ruleTargetOf(db, desk, { kind: "thread", slug }, now())) === "is closed") return { ok: false, status: 409, error: "That thread is no longer active.", gone: true };
-      const added = await addMailToStudio(mailForStudio(db, readings(), mail), { requestId: runId, thread: slug, includeText: false, ruleRun: runId }, { localSources: sourceBoundary(desk), options: studio, areas: desk.areas, db, now: new Date(now()) });
+      const added = await addMailToStudio(mailForStudio(db, readings(), mail), { requestId: runId, thread: slug, includeText: false, ruleRun: runId }, { localSources: sourceBoundary(desk), options: studio, assistantName: assistantNameOf(desk), areas: desk.areas, db, now: new Date(now()) });
       return added.ok ? { ok: true } : { ok: false, status: added.status, error: added.error, gone: false };
     },
     undoThread: async (runId) => {
       const studio = desk.studio;
       if (!studio) return NO_STUDIO;
       const id = captureId(runId);
-      const undone = await undoStudioCapture({ options: studio, areas: desk.areas, requestId: `undo-${id}`, id, db, now: new Date(now()) });
+      const undone = await undoStudioCapture({ options: studio, areas: desk.areas, assistantName: assistantNameOf(desk), requestId: `undo-${id}`, id, db, now: new Date(now()) });
       return undone.ok ? { ok: true } : { ok: false, status: undone.status, error: undone.error };
     },
   };

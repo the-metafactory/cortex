@@ -22,7 +22,7 @@ export interface VoiceOptions {
 
 export type DeskVoice = Omit<VoiceOptions, "elevenlabs">;
 
-export const voiceView = (v: VoiceOptions | undefined): DeskVoice => ({ enabled: v?.enabled ?? true, input: v?.input ?? "browser", output: v?.output ?? "browser", ...(v?.wake ? { wake: v.wake } : {}) });
+export const voiceView = (v: VoiceOptions | undefined, assistantName: string): DeskVoice => ({ enabled: v?.enabled ?? true, input: v?.input ?? "browser", output: v?.output ?? "browser", ...(v?.wake ? { wake: { ...v.wake, assistantName: v.wake.assistantName ?? assistantName } } : {}) });
 
 export function resolveVoice(voice: VoiceOptions, expand: (path: string) => string): VoiceOptions {
   const el = voice.elevenlabs;

@@ -90,7 +90,10 @@ export function readingEvents(readings: readonly SourceReading[]): Map<string, S
   for (const r of readings) {
     for (const e of r.events) {
       const at = Date.parse(e.start);
-      if (Number.isFinite(at)) out.set(`cal:${r.id}:${e.id}`, { title: e.title, at, end: eventEnd(at, e.end, e.allDay) });
+      if (!Number.isFinite(at)) continue;
+      const listed = e.organizer !== undefined || e.attendees !== undefined;
+      const people = new Set([...(e.organizer ? [e.organizer.address] : []), ...(e.attendees ?? []).map((a) => a.address)]);
+      out.set(`cal:${r.id}:${e.id}`, { title: e.title, at, end: eventEnd(at, e.end, e.allDay), ...(listed ? { organizerAndAttendees: people } : {}) });
     }
   }
   return out;

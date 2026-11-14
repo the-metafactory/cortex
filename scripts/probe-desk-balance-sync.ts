@@ -28,7 +28,7 @@ try {
   await syncStudioBalance(stack.db, stack.runtime.options, SYNC_NOW);
   const day = await get();
   assert.equal(day.studioTasks.length, 1);
-  assert.ok(day.items.some(item => item.task.title === "Respond to Ivy on Which sketch?"));
+  assert.ok(day.items.some(item => item.task.title === "Respond to the note on Which sketch?"));
   assert.equal(findNode(loadBalanceState(stack.db)!.outline, "repeat")?.done, false);
   assert.equal(loadMeta(stack.db).draft, null);
   const before = stack.bytes();
