@@ -10,7 +10,7 @@ import { OperationJournalStore } from "../operations/journal";
 import type { DispatchRequest, OwnerResult } from "../operations/types";
 import type { OperationIndex } from "./legacy-move";
 import { mailMoveDeclaration } from "./move-contract";
-import { MailMoveHost, type MailMoveReceipt } from "./move-host";
+import { MailMoveHost, type MailMoveAuthority, type MailMoveReceipt } from "./move-host";
 import { deliver, fixtureAuthority, prepareDispatch, type FixtureGrant } from "./host-fixtures";
 import { MailLoopHost } from "./loop-host";
 import { DeskMailLoopGrants } from "./loop-grant-store";
@@ -34,6 +34,8 @@ export interface MailLoopRig {
   readonly folders: Map<string, string>;
   readonly calls: DispatchRequest[];
   readonly authorityGrants: FixtureGrant[];
+  readonly authority: MailMoveAuthority;
+  readonly now: () => number;
   grant(loop: MailLoopKind, actions: readonly MailLoopAction[], selection: MailLoopSelection): Promise<MailLoopGrant>;
   revoke(grantId: string): boolean;
   pause(loop: MailLoopKind): void;
@@ -118,7 +120,7 @@ export async function openMailLoopRig(): Promise<MailLoopRig> {
 
   return {
     get loop() { return loop; }, get moves() { return moves; }, get journal() { return fixture.journal; }, get db() { return db; },
-    folders, calls, authorityGrants: auth.grants,
+    folders, calls, authorityGrants: auth.grants, authority: auth.port, now: () => now,
     grant: (kind, actions, selection) => loop.grant({ loop: kind, actions, selection }).then(grant => {
       if (!grant) throw new Error("The fake authority refused the standing Mail grant.");
       return grant;

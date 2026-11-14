@@ -2,30 +2,24 @@ import { z } from "zod";
 import { isDmarcReportMail } from "../../../surface/mc/desk/mail-dmarc";
 import { matchesRule } from "../../../surface/mc/desk/mail-rules";
 import { RULE_MATCHES } from "../../../surface/mc/desk/mail-rules-schema";
-import { MAIL_ACTION_CAPABILITY, MAIL_MOVE_TARGETS, MAIL_RESTORE_CAPABILITY } from "./move-contract";
+import { MailStandingGrantBaseSchema } from "./grant-primitives";
+import { MAIL_ACTIONS, type MailAction, type MailTarget } from "./move-contract";
 
 export const MAIL_LOOP_KINDS = ["rule", "dmarc"] as const;
 export type MailLoopKind = (typeof MAIL_LOOP_KINDS)[number];
 
-export const MAIL_LOOP_ACTIONS = ["move", "trash"] as const;
-export type MailLoopAction = (typeof MAIL_LOOP_ACTIONS)[number];
+export const MAIL_LOOP_ACTIONS = MAIL_ACTIONS;
+export type MailLoopAction = MailAction;
 
 export const MailRuleSelectionSchema = z.object({ kind: z.literal("rule"), ruleId: z.string().min(1), match: z.enum(RULE_MATCHES), value: z.string().min(1).max(200) }).strict();
 export const MailDmarcSelectionSchema = z.object({ kind: z.literal("dmarc"), ruleIds: z.array(z.string().min(1)).min(1).max(20) }).strict();
 export const MailLoopSelectionSchema = z.discriminatedUnion("kind", [MailRuleSelectionSchema, MailDmarcSelectionSchema]);
 export type MailLoopSelection = z.infer<typeof MailLoopSelectionSchema>;
 
-export const MailLoopGrantSchema = z.object({
-  grantId: z.string().min(1),
-  adapterId: z.string().min(1),
-  connectionId: z.string().min(1),
+export const MailLoopGrantSchema = MailStandingGrantBaseSchema.extend({
   loop: z.enum(MAIL_LOOP_KINDS),
   actions: z.array(z.enum(MAIL_LOOP_ACTIONS)).min(1).max(MAIL_LOOP_ACTIONS.length),
   selection: MailLoopSelectionSchema,
-  authorityGrantId: z.string().min(1).nullable(),
-  status: z.enum(["active", "revoked"]),
-  createdAt: z.iso.datetime(),
-  revokedAt: z.iso.datetime().nullable(),
 }).strict();
 export type MailLoopGrant = z.infer<typeof MailLoopGrantSchema>;
 
@@ -39,14 +33,7 @@ export interface LoopMail {
   heldBy?: string | null;
 }
 
-export const MAIL_LOOP_TARGETS = [...MAIL_MOVE_TARGETS, "trash"] as const;
-export type MailLoopTarget = (typeof MAIL_LOOP_TARGETS)[number];
-
-export const loopActionOf = (target: MailLoopTarget): MailLoopAction => (target === "trash" ? "trash" : "move");
-
-/** The connection capabilities a standing grant must name for the given loop actions, including their Undo. */
-export const loopCapabilityIds = (actions: readonly MailLoopAction[]): string[] =>
-  [...new Set([...actions.map(action => MAIL_ACTION_CAPABILITY[action]), MAIL_RESTORE_CAPABILITY])];
+export type MailLoopTarget = MailTarget;
 
 export const loopSelectionFits = (loop: MailLoopKind, selection: MailLoopSelection): boolean => (loop === "rule" ? selection.kind === "rule" : selection.kind === "dmarc");
 

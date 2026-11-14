@@ -15,6 +15,21 @@ export type MailMoveTarget = (typeof MAIL_MOVE_TARGETS)[number];
 
 export const MAIL_ACTION_CAPABILITY: Record<MailMoveAction, string> = { move: MAIL_MOVE_CAPABILITY, trash: MAIL_TRASH_CAPABILITY, restore: MAIL_RESTORE_CAPABILITY };
 
+export const MAIL_TARGETS = [...MAIL_MOVE_TARGETS, "trash"] as const;
+export type MailTarget = (typeof MAIL_TARGETS)[number];
+
+export const MAIL_ACTIONS = ["move", "trash"] as const;
+export type MailAction = (typeof MAIL_ACTIONS)[number];
+
+export const mailActionForTarget = (target: MailTarget): MailAction => (target === "trash" ? "trash" : "move");
+
+/** The connection capabilities a standing permission must name to run these actions and their Undo. */
+export const mailActionCapabilityIds = (actions: readonly MailAction[]): string[] =>
+  [...new Set([...actions.map(action => MAIL_ACTION_CAPABILITY[action]), MAIL_RESTORE_CAPABILITY])];
+
+export const mailTargetFolder = (target: string): string => (target === "junk" ? "Junk" : target === "trash" ? "Trash" : "Archive");
+export const mailTargetDone = (target: string): string => (target === "junk" ? "Moved to Junk" : target === "trash" ? "Moved to Trash" : "Archived");
+
 export const MAIL_MESSAGE_TYPE = "message";
 export const MAIL_ACCOUNT_TYPE = "account";
 
