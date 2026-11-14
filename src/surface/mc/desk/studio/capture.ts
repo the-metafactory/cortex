@@ -8,7 +8,7 @@ import type { StudioOptions } from "../types";
 import type { ActContext, ActPlan, ActRefusal } from "./acts";
 import { appendEntry, appendLog, localTime, oneLine } from "./edit";
 import { spawnGit } from "./git";
-import { STUDIO_SLUG } from "./format";
+import { entryBlock, STUDIO_SLUG } from "./format";
 import { runStudioTransaction, type ActResult } from "./writer";
 import { endLink } from "../links";
 import type { StudioArea, StudioThreadView } from "./view";
@@ -52,14 +52,6 @@ export async function askFiler(config: ClassifierConfig | undefined, threads: re
   } catch {
     return { answer: null, reason: "The filer did not answer; saved in the Studio inbox." };
   }
-}
-
-const continuation = (line: string | undefined): boolean => line !== undefined && line.startsWith("  ") && line.trim() !== "";
-
-function entryBlock(lines: readonly string[], at: number): string[] {
-  let end = at + 1;
-  while (continuation(lines[end])) end++;
-  return lines.slice(at, end);
 }
 
 export function captureInThread(ctx: ActContext, thread: StudioThreadView, id: string, entry: readonly string[], log: string, message: string): ActPlan | ActRefusal {

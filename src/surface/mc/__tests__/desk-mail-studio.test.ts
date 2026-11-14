@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { gitIn, seedStudioRepo } from "./__fixtures__/studio-git";
 import { initDatabase } from "../db/init";
 import { handleDeskMail } from "../api/desk-mail";
+import { handleGetDeskStudio } from "../api/desk-studio";
 import { handleDeskCaptureUndo } from "../api/desk-ask";
 import { HandledLedger } from "../desk/actions";
 import { readDone } from "../desk/autonomy";
@@ -173,6 +174,14 @@ describe("Add a mail to a Studio thread", () => {
     expect(await act({ action: "attach.undo", link: id })).toEqual({ status: 200, json: { ok: true, message: "“Engines w1” is back on the Desk.", restored: "mail:w1" } });
     expect(readThread("engines")).not.toContain("capture:");
     expect(readDone(db, NOW)[0]?.action).toBe("studio.capture.undone");
+  });
+
+  it("serves a mail filed with its text as the capture item's untrusted text", async () => {
+    await act({ action: "studio.add", key: "mail:w1", requestId: "req-text-1", thread: "engines", includeText: true });
+    const body = await (await handleGetDeskStudio(runtime)).json() as { materialText: string; studio: { active: { slug: string; material: { kind: string; text?: string }[] }[] } };
+    expect(body.materialText).toBe("untrusted");
+    const material = body.studio.active.find((t) => t.slug === "engines")?.material ?? [];
+    expect(material.map((m) => [m.kind, m.text ?? null])).toEqual([["link", null], ["capture", "The analytical engine could weave patterns.\nSecond line of the body."]]);
   });
 
   it("refuses a mail the Desk does not list, an inactive thread and a stack without a Studio", async () => {

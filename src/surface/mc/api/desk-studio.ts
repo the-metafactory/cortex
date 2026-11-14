@@ -10,5 +10,5 @@ export async function handleGetDeskStudio(runtime: DeskRuntime | undefined, run?
   const desk = runtime?.options;
   if (!desk?.enabled || !desk.studio) return Response.json({ studio: null }, { headers: noStore });
   const { files, problems } = await readStudioFiles(desk.studio.dir);
-  return Response.json({ directory: desk.studio.dir, studio: await withThinking(buildStudioView(files, desk.studio, desk.areas, problems), desk.studio.dir, desk.rangerCli, run) }, { headers: noStore });
+  return Response.json({ directory: desk.studio.dir, studio: await withThinking(buildStudioView(files, desk.studio, desk.areas, problems), desk.studio.dir, desk.rangerCli, run), materialText: "untrusted" }, { headers: noStore });
 }
