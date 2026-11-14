@@ -77,7 +77,7 @@ describe("Studio close writer", () => {
     const r = await rig();
     try {
       expect(await r.writer().create(directRequest("studio-close", { thread: "alpha", outcome: " ", text: "Gone." }))).toEqual({ state: "failed", error: "The outcome is missing; use decided, shipped or dropped. Nothing was created." });
-      const closed = await runStudioAct({ options: { dir: r.repo.dir, maxActive: 5 }, areas: [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "local" }], requestId: "studio-act-close-xyz", act: { act: "close", thread: "beta", outcome: "dropped", text: "Not now." } });
+      const closed = await runStudioAct({ options: { dir: r.repo.dir, maxActive: 5 }, areas: [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "local" }], assistantName: "Assistant", requestId: "studio-act-close-xyz", act: { act: "close", thread: "beta", outcome: "dropped", text: "Not now." } });
       expect(closed).toMatchObject({ ok: true });
       expect(r.parsed("beta").log.at(-1)?.text).toBe("Closed as dropped");
     } finally { r.repo.clean(); }

@@ -6,7 +6,7 @@ import { failureOf, studioConversationRig } from "./studio-conversation-rig";
 const rig = studioConversationRig("conversation-studio-note-", "studio-note", { alpha: "active", gamma: "parked", omega: "closed" });
 const AREAS = [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "local" as const }];
 let acts = 0;
-const act = (dir: string, studioAct: StudioAct) => runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, requestId: `studio-act-${++acts}-xyz`, act: studioAct });
+const act = (dir: string, studioAct: StudioAct) => runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, assistantName: "Assistant", requestId: `studio-act-${++acts}-xyz`, act: studioAct });
 
 describe("Studio note writer", () => {
   test("adds an open stand as Ivy's proposal, leaves Where I stand alone, and Keep in Studio makes it the stand", async () => {

@@ -226,7 +226,7 @@ describe("mail hand-off and Studio", () => {
   it("tells work mail it has nowhere to go when only cloud threads are active, without asking a model", async () => {
     let asked = 0;
     const proposed = await proposeMailThread(item("work-mail", "office"), {
-      localSources: boundary, options: { dir: seedStudioRepo("desk-source-guard-studio-", { garden: "---\ntype: question\nareas: [home]\nstate: active\nopened: 2026-10-31\n---\n\n## Question\n\nWhat grows?\n\n## Where I stand\n\nStill deciding.\n" }), maxActive: 5, filer: { ...codexModel(), maxPerPass: 1 } }, areas: AREAS, db,
+      localSources: boundary, assistantName: "Assistant", options: { dir: seedStudioRepo("desk-source-guard-studio-", { garden: "---\ntype: question\nareas: [home]\nstate: active\nopened: 2026-10-31\n---\n\n## Question\n\nWhat grows?\n\n## Where I stand\n\nStill deciding.\n" }), maxActive: 5, filer: { ...codexModel(), maxPerPass: 1 } }, areas: AREAS, db,
       model: () => { asked += 1; return Promise.resolve({ thread: null, match: false, reason: "no" }); },
     });
     expect(proposed).toMatchObject({ thread: null, threads: [], reason: WORK_MAIL_NO_THREAD });

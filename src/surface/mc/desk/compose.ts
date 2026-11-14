@@ -205,6 +205,7 @@ export async function composeDesk(
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
+  const assistantName = assistantNameOf(desk);
   if (desk.dispatch) expireTaskHandoffs(db, desk.dispatch, now);
   const taskHandoffs = desk.dispatch ? openTaskHandoffs(db) : [];
   const routineRead = desk.routines ? deps.routineRead ? Promise.resolve(deps.routineRead.read(db, desk.routines, now)) : readRoutines(db, desk.routines, deps.runRoutine) : Promise.resolve(undefined);
@@ -361,13 +362,13 @@ export async function composeDesk(
   sources.push(...adapters.sources);
   const corrected = applyCorrections(quietAdapterInterrupts([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set(deskCalendar.map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), assistantName: assistantNameOf(desk), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantNameOf(desk)), snoozeBack.get(mailIdOf(item.key)))),
+    ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set(deskCalendar.map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), assistantName: assistantName, ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
     ...meetingItems(deskCalendar, now, rules.meetingMinutes),
     ...ruleCards,
     ...dmarcCards,
     ...waitingCards,
-    ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantNameOf(desk)),
+    ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantName),
     ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
   ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections);
@@ -388,10 +389,10 @@ export async function composeDesk(
     myDay,
     mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source), dmarc, mail: readMailMirror(db, mirrorWeek(now), { ...(desk.mailMirror ? { config: desk.mailMirror } : {}), offers: mirrorOffers(offerable, unsubscribe) }) }),
     calendars: [...calendars.values()],
-    studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now, assistantNameOf(desk)) : null,
+    studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now, assistantName) : null,
     generatedAt: now,
     displayName: desk.displayName || null,
-    assistantName: assistantNameOf(desk),
+    assistantName,
     topN: myDay.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items: dayItems,
@@ -411,7 +412,7 @@ export async function composeDesk(
     ask: { kinds: [...writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)), ...(desk.routines ? ["routine"] : [])], maps: desk.ask?.taskMaps ?? [] },
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE]), ...activeCorrections.filter((c) => c.kind === "mail").map((c) => staleMailCorrection(c.source))],
     sources,
-    voice: voiceView(desk.voice, assistantNameOf(desk)),
+    voice: voiceView(desk.voice, assistantName),
     chime: rules.chime,
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier) }),

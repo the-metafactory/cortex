@@ -46,6 +46,7 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
   }
   const result = await runStudioAct({
     options: desk.studio,
+    assistantName: assistantNameOf(desk),
     areas: desk.areas,
     requestId: body.requestId,
     act: parsed.data,

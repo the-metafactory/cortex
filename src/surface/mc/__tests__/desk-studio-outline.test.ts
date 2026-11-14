@@ -165,7 +165,7 @@ test("a committed response before projection recovery earns credit once after re
   const path = join(directory, "projection.sqlite");
   const db = initDatabase(path);
   await readSyncedMyDay(db, repo.options, now);
-  const result = await runStudioAct({ options: repo.options.studio, areas: desk.areas, requestId: "crash-fixture-response", act: { act: "respond", thread: "design", text: "The smaller sketch." }, now: new Date(responseAt) });
+  const result = await runStudioAct({ options: repo.options.studio, areas: desk.areas, assistantName: "Assistant", requestId: "crash-fixture-response", act: { act: "respond", thread: "design", text: "The smaller sketch." }, now: new Date(responseAt) });
   expect(result.ok).toBe(true);
   expect(loadBalanceState(db)?.log).toHaveLength(0);
   db.close();
@@ -282,9 +282,9 @@ test("an unreadable different source does not block parking a healthy thread", a
   try {
     await writeFile(join(repo.dir, "threads/broken.md"), "A malformed unrelated source.");
     await git(repo.dir, "add", "."); await git(repo.dir, "commit", "-m", "Malformed fixture");
-    const prior = await runStudioAct({ options: repo.options.studio, areas: desk.areas, requestId: "direct-prior-healthy-park", act: { act: "park", thread: "design" } });
+    const prior = await runStudioAct({ options: repo.options.studio, areas: desk.areas, assistantName: "Assistant", requestId: "direct-prior-healthy-park", act: { act: "park", thread: "design" } });
     expect(prior.ok).toBe(true);
-    const reset = await runStudioAct({ options: repo.options.studio, areas: desk.areas, requestId: "direct-healthy-unpark", act: { act: "unpark", thread: "design" } });
+    const reset = await runStudioAct({ options: repo.options.studio, areas: desk.areas, assistantName: "Assistant", requestId: "direct-healthy-unpark", act: { act: "unpark", thread: "design" } });
     expect(reset.ok).toBe(true);
     const response = await handleDeskStudioAct(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ act: "park", thread: "design", requestId: "healthy-park-fixture" }) }), { options: repo.options, ledger: new HandledLedger() }, { db });
     expect(response.status).toBe(200);

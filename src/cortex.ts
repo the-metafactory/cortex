@@ -5010,7 +5010,7 @@ export async function startCortex(
           },
           somaBin: config.mc.desk.soma.bin ? expandTilde(config.mc.desk.soma.bin) : "",
           areas: config.mc.desk.areas,
-          ...(config.mc.desk.studio ? { studio: { ...resolveStudio(config.mc.desk.studio, expandTilde), assistantName: config.mc.desk.assistantName } } : {}),
+          ...(config.mc.desk.studio ? { studio: resolveStudio(config.mc.desk.studio, expandTilde) } : {}),
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
           ...(config.mc.desk.routines ? { routines: config.mc.desk.routines } : {}),

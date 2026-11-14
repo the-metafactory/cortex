@@ -120,7 +120,7 @@ function seed(active = 2): void {
 }
 
 const run = (act: StudioAct, requestId = rid(), maxActive = 5) =>
-  runStudioAct({ options: { dir, maxActive }, areas: AREAS, requestId, act, now: NOW, lock: new StudioWriteLock() });
+  runStudioAct({ options: { dir, maxActive }, areas: AREAS, assistantName: "Assistant", requestId, act, now: NOW, lock: new StudioWriteLock() });
 
 const read = (path: string): string => readFileSync(join(dir, path), "utf8");
 const parsed = (slug: string) => {
@@ -157,7 +157,7 @@ describe("Studio writer acts", () => {
 
   it("names the configured assistant in the act's message, log line and commit", async () => {
     seed();
-    const r = await runStudioAct({ options: { dir, maxActive: 5, assistantName: "Mira" }, areas: AREAS, requestId: rid(), act: { act: "think", thread: "alpha", on: true }, now: NOW, lock: new StudioWriteLock() });
+    const r = await runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, assistantName: "Mira", requestId: rid(), act: { act: "think", thread: "alpha", on: true }, now: NOW, lock: new StudioWriteLock() });
     expect(r).toMatchObject({ ok: true, message: "Mira thinks about it tonight." });
     expect(parsed("alpha").log.at(-1)?.text).toBe("Asked Mira to think tonight");
     expect(read("threads/alpha.md")).not.toContain("Asked Ivy");
@@ -361,7 +361,7 @@ describe("Studio writer safety", () => {
     seed();
     const lock = new StudioWriteLock();
     lock.claim(dir);
-    const r = await runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, requestId: rid(), act: { act: "park", thread: "alpha" }, now: NOW, lock });
+    const r = await runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, assistantName: "Assistant", requestId: rid(), act: { act: "park", thread: "alpha" }, now: NOW, lock });
     expect(r).toMatchObject({ ok: false, status: 409 });
   });
 
@@ -373,7 +373,7 @@ describe("Studio writer safety", () => {
       const r = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
       return { code: r.exitCode, stdout: r.stdout.toString(), stderr: r.stderr.toString() };
     };
-    const r = await runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, requestId: rid(), act: { act: "open", from: "capture", id: "lecture", area: "lab" }, now: NOW, git: failing, lock: new StudioWriteLock() });
+    const r = await runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, assistantName: "Assistant", requestId: rid(), act: { act: "open", from: "capture", id: "lecture", area: "lab" }, now: NOW, git: failing, lock: new StudioWriteLock() });
     expect(r).toMatchObject({ ok: false, status: 500 });
     expect(read("threads/alpha.md")).toBe(before);
     expect(existsSync(join(dir, "inbox/lecture.md"))).toBe(true);

@@ -118,7 +118,7 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
   try {
     const now = (deps.now ?? Date.now)();
     if (card.kind === "capture" && desk.studio) {
-      const filed = await fileStudioCapture({ options: desk.studio, areas: desk.areas, requestId, text: card.fields.text, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) });
+      const filed = await fileStudioCapture({ options: desk.studio, areas: desk.areas, assistantName: assistantNameOf(desk), requestId, text: card.fields.text, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) });
       return Response.json(filed, { status: filed.ok ? 200 : filed.status, headers: noStore });
     }
     const created = await createFromCard(card, {
@@ -156,6 +156,6 @@ export async function handleDeskCaptureUndo(req: Request, db: Database, runtime:
   if (!desk?.enabled || !desk.studio) return fail(409, "The Studio is not set up on this stack.");
   const parsed = CaptureUndoSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return fail(400, "A capture id and request id are required.");
-  const result = await undoStudioCapture({ options: desk.studio, areas: desk.areas, requestId: parsed.data.requestId, id: parsed.data.id, db });
+  const result = await undoStudioCapture({ options: desk.studio, areas: desk.areas, assistantName: assistantNameOf(desk), requestId: parsed.data.requestId, id: parsed.data.id, db });
   return Response.json(result, { status: result.ok ? 200 : result.status, headers: noStore });
 }

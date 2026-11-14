@@ -12,6 +12,7 @@ import { THREAD_OUTCOMES, type ThreadOutcome } from "./studio/format";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView } from "./studio/view";
 import { runStudioTransaction } from "./studio/writer";
+import { assistantNameOf } from "./assistant-name";
 
 export interface StudioWriterDeps {
   db: Database;
@@ -65,7 +66,7 @@ export function studioConversationWriter(deps: StudioWriterDeps, spec: StudioWri
     const planner = await spec.prepare(request, desk);
     if (typeof planner === "string") return studioFailed(planner);
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before the Studio was called.");
-    const result = await runStudioTransaction({ options: studio, areas: desk.areas, requestId: studioRequestId(request.operationId), now: new Date(clock()), ...(deps.git ? { git: deps.git } : {}) }, planner);
+    const result = await runStudioTransaction({ options: studio, areas: desk.areas, assistantName: assistantNameOf(desk), requestId: studioRequestId(request.operationId), now: new Date(clock()), ...(deps.git ? { git: deps.git } : {}) }, planner);
     if (!result.ok) {
       if (result.status >= 500) throw new Error(result.error);
       return studioFailed(result.error);

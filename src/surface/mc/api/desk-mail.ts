@@ -160,7 +160,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const studio = runtime.options.studio;
     if (!studio) return fail(409, "The Studio is not set up on this stack.");
     const item = mailForStudio(db, runtime.sourceCache?.cached() ?? [], mail);
-    const studioDeps = { localSources: sourceBoundary(runtime.options), options: studio, areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
+    const studioDeps = { localSources: sourceBoundary(runtime.options), options: studio, assistantName: assistantNameOf(runtime.options), areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
     if (body.action === "studio.propose") return Response.json({ ok: true, proposal: await proposeMailThread(item, studioDeps) }, { headers: noStore });
     const { requestId, thread, reason, includeText } = body;
     const added = await addMailToStudio(item, { requestId, thread, includeText, ...(reason ? { reason } : {}) }, studioDeps);
@@ -212,7 +212,7 @@ export function undoAttachDeps(db: Database, runtime: DeskRuntime, now: number):
   const studio = desk?.studio;
   const listed = (key: string): boolean => resolveListedMail(readings, key).ok;
   if (!desk || !studio) return { now, listed };
-  return { now, listed, undoCapture: (id) => undoStudioCapture({ options: studio, areas: desk.areas, requestId: `undo-${id}`, id, db, now: new Date(now) }) };
+  return { now, listed, undoCapture: (id) => undoStudioCapture({ options: studio, areas: desk.areas, assistantName: assistantNameOf(desk), requestId: `undo-${id}`, id, db, now: new Date(now) }) };
 }
 
 const mailSuspicion = (db: Database, mail: ListedMail, ownDomains: readonly string[] | undefined): SuspicionReason[] =>

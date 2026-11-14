@@ -23,7 +23,6 @@ export interface StudioOptions {
   maxActive: number;
   yesFilter?: string[];
   personas?: string[];
-  assistantName?: string;
 }
 
 export interface DeskArea {

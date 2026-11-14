@@ -33,7 +33,7 @@ Mission Control serves `/` and `/index.html` from this directory with the Desk's
 |---|---|---|
 | `enabled` | `true` | Enables the Desk API and view. |
 | `displayName` | `""` | Name used in the greeting. |
-| `assistantName` | `Assistant` | The assistant's name: 1 to 60 characters on one line. `GET /api/desk` returns it as `assistantName`, and every Desk message, model prompt and the bundled Desk use it. |
+| `assistantName` | `Assistant` | The name the Desk shows for the assistant, a display label not tied to a configured agent: 1 to 60 characters on one line. `GET /api/desk` returns it as `assistantName`; the text the Desk composes, its model prompts and the bundled Desk use it. |
 | `topN` | `5` | Integer from 1 to 10. Number of ranked items shown before the rest fold away. |
 | `ranger.url` | `""` | Ranger API base URL. Empty disables Ranger readings. |
 | `ranger.bin` | `""` | Ranger CLI executable for actions. Empty disables those actions. |
@@ -71,7 +71,7 @@ The first Desk request waits for the first read. Later requests use the cached r
 | `parser` | `[]` | Argument array for an optional text parser. Empty uses the built-in rules. |
 | `timeoutSeconds` | `30` | Integer from 1 to 120. Timeout for the parser and writers. |
 | `routing` | absent | Optional `{ permitted: [claude, codex, pi] }`. Enables required version 1 routing metadata. Request and area restrictions narrow this list before selection. |
-| `writers` | `{}` | Optional commands keyed by `calendar`, `task`, `goal`, `note`, or `reminder`. Each is a nonempty argument array, or `{ command, owner }` where `command` is that array and `owner` names the system the writer saves to, in lowercase letters, digits and dashes. An Ivy conversation adds Tana notes only when the `note` writer declares `owner: tana`. |
+| `writers` | `{}` | Optional commands keyed by `calendar`, `task`, `goal`, `note`, or `reminder`. Each is a nonempty argument array, or `{ command, owner }` where `command` is that array and `owner` names the system the writer saves to, in lowercase letters, digits and dashes. An the assistant conversation adds Tana notes only when the `note` writer declares `owner: tana`. |
 | `taskMaps` | `[]` | Allowed task destinations, each with `ref` and `label`. A ref has the form `owner/repo#123`. |
 
 Notes and reminders stay in the Mission Control database when no writer is configured for their kind. A configured writer replaces that local storage. Calendar entries, tasks, and goal drafts need writers. Legacy parser failure falls back to the built-in rules. Routed parser failure returns an unavailable explanation. See [Parsers and writers](commands.md#parsers-and-writers).
@@ -338,9 +338,9 @@ Sending, inviting or changing data stays with the creation tools: `creation_prop
 
 <!-- glossary-ignore: run -->
 <!-- glossary-ignore: body -->
-The same lanes and pi settings run **Hand to** (the assistant's name) on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. Ivy then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on the default `cloud` lane, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
+The same lanes and pi settings run **Hand to** (the assistant's name) on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. the assistant then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on the default `cloud` lane, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
 
-While the assistant works, the mail card shows "With" and its name, "since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask Ivy again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
+While the assistant works, the mail card shows "With" and its name, "since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask (the assistant's name) again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
 
 ### Hand a task to an agent
 

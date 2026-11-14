@@ -72,7 +72,7 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
       const hash = createHash("sha256").update(JSON.stringify([session.id, session.thread, request.text])).digest("hex").slice(0, 56);
       try { await syncStudioBalance(db, desk, deps.now?.().getTime() ?? Date.now(), true); }
       catch { return fail(409, "Studio is busy or unreadable. Nothing was written; retry when its files are ready.", session); }
-      const result = await runStudioAct({ options, areas: desk.areas, requestId: `late-${hash}`, act: { act: "respond", thread: session.thread, text: request.text }, ...(deps.now ? { now: deps.now() } : {}) });
+      const result = await runStudioAct({ options, areas: desk.areas, assistantName: assistantNameOf(desk), requestId: `late-${hash}`, act: { act: "respond", thread: session.thread, text: request.text }, ...(deps.now ? { now: deps.now() } : {}) });
       if (!result.ok) return fail(result.status, result.error, session);
       try { await syncStudioBalance(db, desk, deps.now?.().getTime() ?? Date.now()); }
       catch { return answer(200, { ok: true, session, commit: result.commit, message: result.message, projection: "pending" }); }
@@ -85,7 +85,7 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
       session.phase = { kind: "ending", outcome: request.outcome };
       save(db, dir, session);
       const ending = session;
-      const result = await runStudioTransaction({ options, areas: desk.areas, requestId: `session-${session.id}`, ...(deps.now ? { now: deps.now() } : {}) }, ctx => planSessionEnd(ctx, ending, request.outcome));
+      const result = await runStudioTransaction({ options, areas: desk.areas, assistantName: assistantNameOf(desk), requestId: `session-${session.id}`, ...(deps.now ? { now: deps.now() } : {}) }, ctx => planSessionEnd(ctx, ending, request.outcome));
       if (!result.ok) {
         session.phase = { kind: "open" }; save(db, dir, session);
         return fail(result.status, result.error, session);
