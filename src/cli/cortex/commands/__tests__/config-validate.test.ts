@@ -19,7 +19,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { stringify } from "yaml";
@@ -282,5 +282,44 @@ describe("cortex config validate — CLI grammar", () => {
     const result = await dispatchConfig(["--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("cortex config validate");
+  });
+});
+
+describe("cortex config validate — mc.desk.dispatch targets from inline agents and agents.d", () => {
+  function withDispatch(ids: string[]): string {
+    const cfg = validConfig();
+    cfg.mc = { desk: { dispatch: { agents: ids.map((id) => ({ id, policy: "cloud" })) } } };
+    return writeConfig(cfg);
+  }
+
+  function writeFragment(id: string): void {
+    const dir = join(testDir, "agents.d");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${id}.md`), `---\ndisplayName: ${id}\n---\n`);
+    writeFileSync(join(dir, `${id}.yaml`), `id: ${id}\ndisplayName: ${id}\npersona: ${join(dir, `${id}.md`)}\npresence: {}\n`);
+  }
+
+  test("accepts a target defined only as an agents.d fragment", async () => {
+    writeFragment("gorse");
+    const result = await dispatchConfig(["validate", "--config", withDispatch(["luna", "gorse"])]);
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("rejects a target that names no agent, inline or in agents.d", async () => {
+    writeFragment("gorse");
+    const result = await dispatchConfig(["validate", "--config", withDispatch(["gorse", "ghost"]), "--json"]);
+    expect(result.exitCode).toBe(1);
+    expect(JSON.parse(result.stderr).errors).toEqual(['mc.desk.dispatch.agents.1.id: names "ghost", but no agent with that id is declared in agents[] or agents.d']);
+  });
+
+  test("names the agents.d load failure next to the rejected target", async () => {
+    mkdirSync(join(testDir, "agents.d"), { recursive: true });
+    writeFileSync(join(testDir, "agents.d", "gorse.yaml"), "id: [not, an, id]\n");
+    const result = await dispatchConfig(["validate", "--config", withDispatch(["gorse"]), "--json"]);
+    expect(result.exitCode).toBe(1);
+    const errors = JSON.parse(result.stderr).errors as string[];
+    expect(errors[0]).toContain('names "gorse"');
+    expect(errors.some((e) => e.startsWith("NOTE agents.d: fragment"))).toBe(true);
   });
 });

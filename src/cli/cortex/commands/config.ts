@@ -45,7 +45,8 @@
  *             · 2 CLI usage error (bad subcommand / unknown flag).
  */
 
-import { loadConfigWithAgents, expandTilde } from "../../../common/config/loader";
+import { loadConfigWithAgents, expandTilde, loadAgentsDirectory, FragmentLoadError, agentsDirBeside, mergeAgents } from "../../../common/config/loader";
+import { unknownDispatchAgentError, unknownDispatchAgents } from "../../../common/types/desk-dispatch";
 import { formatConfigLoadError } from "../../../common/config/validate-on-write";
 import { loadConfig as loadMcConfig } from "../../../surface/mc/config";
 import { DEFAULT_CONFIG } from "../../../common/pidfile";
@@ -117,6 +118,9 @@ function runValidate(flags: FlagMap, json: boolean): ExitResult {
     // `CortexConfigSchema`. No NATS, no adapters, no MC, no daemon — this is a
     // pure parse+validate of the same object the daemon would load.
     const loaded = loadConfigWithAgents(resolvedPath);
+    const warnings: string[] = [];
+    const dispatchErrors = unknownDispatchTargets(loaded.config.mc, loaded.inlineAgents, resolvedPath, warnings);
+    if (dispatchErrors.length > 0) return invalid(resolvedPath, [...dispatchErrors, ...warnings], json);
 
     // A single loaded config resolves to exactly one merged stack identity when
     // a `stack:` block is present (cortex-shape). Legacy bot.yaml input yields
@@ -134,7 +138,6 @@ function runValidate(flags: FlagMap, json: boolean): ExitResult {
     // for an unrelated `validate` (it would make the finding environment-
     // dependent). Warning-level: it never flips exit code (the cortex config is
     // valid); it is a heads-up, not a rejection.
-    const warnings: string[] = [];
     const mcConfigPath = loaded.config.mc.configPath.trim();
     if (loaded.config.mc.enabled && mcConfigPath !== "") {
       try {
@@ -174,18 +177,33 @@ function runValidate(flags: FlagMap, json: boolean): ExitResult {
       stderr: warnStderr,
     };
   } catch (err) {
-    const errors = formatConfigLoadError(err);
-    if (json) {
-      const payload = { ok: false, path: resolvedPath, errors };
-      return { exitCode: 1, stdout: "", stderr: JSON.stringify(payload) + "\n" };
-    }
-    const body = errors.map((e) => `  ${e}`).join("\n");
-    return {
-      exitCode: 1,
-      stdout: "",
-      stderr: `✗ config invalid: ${resolvedPath}\n${body}\n`,
-    };
+    return invalid(resolvedPath, formatConfigLoadError(err), json);
   }
+}
+
+function invalid(resolvedPath: string, errors: string[], json: boolean): ExitResult {
+  if (json) {
+    const payload = { ok: false, path: resolvedPath, errors };
+    return { exitCode: 1, stdout: "", stderr: JSON.stringify(payload) + "\n" };
+  }
+  const body = errors.map((e) => `  ${e}`).join("\n");
+  return {
+    exitCode: 1,
+    stdout: "",
+    stderr: `✗ config invalid: ${resolvedPath}\n${body}\n`,
+  };
+}
+
+function unknownDispatchTargets(mc: unknown, inlineAgents: readonly { id: string }[], configPath: string, warnings: string[]): string[] {
+  let fragments: { id: string }[] = [];
+  try {
+    fragments = loadAgentsDirectory(agentsDirBeside(configPath));
+  } catch (err) {
+    if (!(err instanceof FragmentLoadError)) throw err;
+    warnings.push(`NOTE agents.d: ${err.message}`);
+  }
+  const agentIds = new Set(mergeAgents(inlineAgents, fragments).map((agent) => agent.id));
+  return unknownDispatchAgents(mc, agentIds).map(unknownDispatchAgentError);
 }
 
 // =============================================================================

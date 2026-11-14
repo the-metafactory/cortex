@@ -66,7 +66,6 @@ import {
   SecurityPostureSchema,
 } from "./config";
 import { SubstratesSchema } from "../substrates/config-home";
-import { unknownDispatchAgents } from "./desk-dispatch";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
 import { LETTER_PREFIX_ID_REGEX } from "./id";
@@ -3619,12 +3618,6 @@ export const CortexConfigSchema = z.object({
   },
   { message: "agent ids must be unique", path: ["agents"] },
 )
-  .superRefine((config, ctx) => {
-    const agentIds = new Set(config.agents.map((a) => a.id));
-    for (const { index, id } of unknownDispatchAgents(config.mc, agentIds)) {
-      ctx.addIssue({ code: "custom", path: ["mc", "desk", "dispatch", "agents", index, "id"], message: `mc.desk.dispatch.agents names "${id}", but no agent with that id is declared in agents[]` });
-    }
-  })
   // IAW Phase A.6.3 — capability catalog invariants.
   //
   // Three document-level cross-field checks, each with a pointed error

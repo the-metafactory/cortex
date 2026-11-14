@@ -1410,6 +1410,17 @@ export function linkedPackDir(filePath: string): string | undefined {
   }
 }
 
+/** The agents.d directory the daemon reads fragments from for the config at `configPath`. */
+export function agentsDirBeside(configPath: string): string {
+  return join(dirname(expandTilde(configPath)), "agents.d");
+}
+
+/** The stack's agents: every inline agent, then each fragment whose id no inline agent already uses (inline wins on a conflict). */
+export function mergeAgents<A extends { id: string }>(inline: readonly A[], fragments: readonly A[]): A[] {
+  const inlineIds = new Set(inline.map((agent) => agent.id));
+  return [...inline, ...fragments.filter((agent) => !inlineIds.has(agent.id))];
+}
+
 export function loadAgentsDirectory(dir: string, warnings?: SurfaceTokenWarning[]): Agent[] {
   const expandedDir = expandTilde(dir);
 

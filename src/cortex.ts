@@ -40,6 +40,8 @@ import { parse as parseYaml } from "yaml";
 import {
   loadConfigWithAgents,
   loadAgentsDirectory,
+  agentsDirBeside,
+  mergeAgents,
   expandTilde,
   FragmentLoadError,
   flattenDiscordPresences,
@@ -269,6 +271,7 @@ import { confidentialityPosture } from "./common/crypto/network-encryption-polic
 // MC-I1.S4 (ADR-0005 §4) — bus→MC dispatch-lifecycle projection renderer.
 import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispatch-lifecycle-renderer";
 import { deskDispatchOptions } from "./surface/mc/desk/task-handoff-store";
+import { unknownDispatchAgentError } from "./common/types/desk-dispatch";
 // P-14 U2.1 (#934) — bus→MC observability projection renderer (signal's four
 // system.* families). Own renderer, own subjects; registered beside the dispatch
 // renderer, no edit to surface-router.ts.
@@ -1429,7 +1432,7 @@ export async function startCortex(
     // ~/.config/cortex. `agents.d/` is config-class (identity fragments) and is
     // carried with the config move — distinct from the state-class `agents/`
     // (per-agent state.sqlite, G-15) the migrator excludes.
-    ?? (options.configPath ? join(dirname(expandedConfigPath), "agents.d") : join(resolveConfigDir(), "agents.d"));
+    ?? (options.configPath ? agentsDirBeside(expandedConfigPath) : join(resolveConfigDir(), "agents.d"));
   let fragmentAgents: Agent[] = [];
   // cortex#1217 — collect fail-soft disabled-surface warnings from agents.d/
   // fragments (vega ships its Discord token as a fragment placeholder). These
@@ -1483,7 +1486,7 @@ export async function startCortex(
   // out inline-shadowed ids here is what keeps the append from double-counting an
   // agent that is both inline and a fragment (inline wins; fragment shadowed).
   const fragmentOnlyAgents = fragmentAgents.filter((a) => !inlineIds.has(a.id));
-  const mergedAgents: Agent[] = [...inlineAgents, ...fragmentOnlyAgents];
+  const mergedAgents: Agent[] = mergeAgents(inlineAgents, fragmentAgents);
   // cortex#1167 — ids of agents flagged `openOnboarding`. Threaded into the
   // policy engine so the single synthetic `public` principal is granted exactly
   // `dispatch.<id>` for each (and nothing else). Boot snapshot; an agents.d
@@ -4953,6 +4956,11 @@ export async function startCortex(
         }
       }
       const conversationAccess = Object.assign((): HostStatus | null => conversationStatus, { discord: () => conversationDiscord });
+      const resolvedDispatch = config.mc.desk.dispatch ? deskDispatchOptions(config.mc.desk.dispatch, mergedAgents) : undefined;
+      const deskDispatch = resolvedDispatch?.options;
+      if (resolvedDispatch && resolvedDispatch.unknown.length > 0) {
+        for (const unknown of resolvedDispatch.unknown) console.warn(`cortex: ${unknownDispatchAgentError(unknown)}; the Desk does not offer it as a hand-off target`);
+      }
       mcHandle = await startMissionControl({
         conversations: conversationAccess,
         ...(config.nats
@@ -5035,7 +5043,7 @@ export async function startCortex(
                 },
               }
             : {}),
-          ...(config.mc.desk.dispatch ? { dispatch: deskDispatchOptions(config.mc.desk.dispatch, mergedAgents) } : {}),
+          ...(deskDispatch ? { dispatch: deskDispatch } : {}),
           mailOwnDomains: config.mc.desk.mail.suspicion?.ownDomains ?? config.mc.desk.mail.dmarc?.domains ?? [],
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
           ...(config.mc.desk.ruling?.explainer

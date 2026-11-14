@@ -19,8 +19,24 @@ export type DeskDispatchConfig = z.infer<typeof DeskDispatchSchema>;
 
 const ParsedMcDispatch = z.object({ desk: z.object({ dispatch: DeskDispatchSchema }) });
 
-/** The ids under `mc.desk.dispatch.agents` that name no agent in the stack's `agents` list. A block that failed its own parse reports nothing here. */
-export function unknownDispatchAgents(mc: unknown, agentIds: ReadonlySet<string>): { index: number; id: string }[] {
+/**
+ * The ids under `mc.desk.dispatch.agents` that name no agent of the stack. `agentIds` must be the merged list, inline `agents[]` plus the
+ * agents.d fragments: the schema parse sees only the inline list, so this check runs after the merge, not as a schema refinement (cortex#1770).
+ * A block that failed its own parse reports nothing here.
+ */
+export function unknownDispatchAgents(mc: unknown, agentIds: ReadonlySet<string>): UnknownDispatchAgent[] {
   const parsed = ParsedMcDispatch.safeParse(mc);
-  return parsed.success ? parsed.data.desk.dispatch.agents.flatMap((agent, index) => (agentIds.has(agent.id) ? [] : [{ index, id: agent.id }])) : [];
+  return parsed.success ? unknownTargets(parsed.data.desk.dispatch, agentIds) : [];
+}
+
+export interface UnknownDispatchAgent { index: number; id: string }
+
+/** The targets in a parsed `mc.desk.dispatch` whose id is not in `agentIds`, with their index under `agents`. */
+export function unknownTargets(dispatch: DeskDispatchConfig, agentIds: ReadonlySet<string>): UnknownDispatchAgent[] {
+  return dispatch.agents.flatMap((agent, index) => (agentIds.has(agent.id) ? [] : [{ index, id: agent.id }]));
+}
+
+/** The validate error for one unknown hand-off target, in the field-pathed shape `cortex config validate` prints. */
+export function unknownDispatchAgentError({ index, id }: UnknownDispatchAgent): string {
+  return `mc.desk.dispatch.agents.${index}.id: names "${id}", but no agent with that id is declared in agents[] or agents.d`;
 }
