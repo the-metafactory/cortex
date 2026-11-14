@@ -498,11 +498,11 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "invite.accept" || a.id === "invite.decline") answerInvite(item, a.id === "invite.accept" ? "accept" : "decline");
     else if (a.id === "invite.propose") proposeTimes(item);
     else if (a.id === "mail.studio") openStudioPick(item);
-    else if (a.id === "mail.ivy") openHandoff(item);
+    else if (a.id === "mail.assistant") openHandoff(item);
     else if (a.id === "mail.snooze") openSnooze(item);
-    else if (a.id === "ivy.edit" && item.reply) openReply(item);
-    else if (a.id === "ivy.discard") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "ivy.discard", key: handoffKeyFor(item, a.target) }) }));
-    else if (a.id === "ivy.approve" || a.id === "ivy.retry") { const action = a.id; void send(item, a, { request: () => submitMailAction({ action, key: handoffKeyFor(item, a.target) }), keepVisible: action === "ivy.retry" && item.kind === "mail" }); }
+    else if (a.id === "assistant.edit" && item.reply) openReply(item);
+    else if (a.id === "assistant.discard") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "assistant.discard", key: handoffKeyFor(item, a.target) }) }));
+    else if (a.id === "assistant.approve" || a.id === "assistant.retry") { const action = a.id; void send(item, a, { request: () => submitMailAction({ action, key: handoffKeyFor(item, a.target) }), keepVisible: action === "assistant.retry" && item.kind === "mail" }); }
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "mail.trust") confirmFirst(item, a, () => void send(item, a, { request: async () => { const r = await submitMailAction({ action: "not-phishing", key: item.key }); return r.ok && r.undo ? { ...r, undoKind: "trust" } : r; }, keepVisible: true }));
     else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
@@ -643,7 +643,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const confirmHandoff = (item: DeskItem, ask: HandoffAsk): void => {
-    const hand: DeskAction = { id: "mail.ivy", label: `Hand to ${view.assistantName}`, role: "secondary", wired: true };
+    const hand: DeskAction = { id: "mail.assistant", label: `Hand to ${view.assistantName}`, role: "secondary", wired: true };
     void send(item, hand, {
       keepVisible: true,
       request: async () => {
@@ -1032,7 +1032,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             {handoffAsk?.key === detailItem.key && (
               <MailHandoffBox
                 ask={handoffAsk}
-                sending={busyWith(detailItem) === "mail.ivy"}
+                sending={busyWith(detailItem) === "mail.assistant"}
                 onChange={(instruction) => { setHandoffAsk((h) => (h?.key === detailItem.key ? { ...h, instruction } : h)); }}
                 onConfirm={() => { confirmHandoff(detailItem, handoffAsk); }}
                 onCancel={() => { setHandoffAsk(null); }}
@@ -1389,7 +1389,7 @@ const CHECK_POLL_MS = 3000;
 
 const isWaitingAction = (id: string): id is `waiting.${WaitingOp}` => WAITING_OPS.some((op) => id === `waiting.${op}`);
 
-const BUSY_LABEL: Record<string, string> = { "ranger.grill": "Opening…", "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.trust": "Saving…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "mail.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "ranger.grill": "Opening…", "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.trust": "Saving…", "mail.studio": "Adding…", "mail.assistant": "Handing over…", "assistant.approve": "Saving draft…", "assistant.discard": "Discarding…", "assistant.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "mail.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trust": "Yes, it is not phishing", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };

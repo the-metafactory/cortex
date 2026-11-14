@@ -2,6 +2,7 @@ import type { DeskItem } from "../../desk/types";
 import { MAX_INSTRUCTION } from "../../desk/mail-handoff-schema";
 import "./desk-mail-draft.css";
 import { useAssistantName } from "../lib/assistant-name";
+import { handoffKey } from "../../desk/handoff";
 
 export interface HandoffAsk {
   key: string;
@@ -12,11 +13,11 @@ export interface HandoffAsk {
 
 export const newHandoffAsk = (key: string): HandoffAsk => ({ key, requestId: crypto.randomUUID(), instruction: "", note: null });
 
-export const handoffBody = (ask: HandoffAsk): { action: "ivy.hand"; key: string; requestId: string; instruction?: string } => ({
-  action: "ivy.hand", key: ask.key, requestId: ask.requestId, ...(ask.instruction.trim() ? { instruction: ask.instruction.trim() } : {}),
+export const handoffBody = (ask: HandoffAsk): { action: "assistant.hand"; key: string; requestId: string; instruction?: string } => ({
+  action: "assistant.hand", key: ask.key, requestId: ask.requestId, ...(ask.instruction.trim() ? { instruction: ask.instruction.trim() } : {}),
 });
 
-export const handoffKeyFor = (item: DeskItem, target: string | undefined): string => (target ? `ivy:${target}` : item.key);
+export const handoffKeyFor = (item: DeskItem, target: string | undefined): string => (target ? handoffKey(target) : item.key);
 
 export function MailHandoffBox({ ask, sending, onChange, onConfirm, onCancel }: {
   ask: HandoffAsk;

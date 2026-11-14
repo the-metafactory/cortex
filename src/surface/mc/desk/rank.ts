@@ -341,7 +341,7 @@ export interface MailInput {
   suspicion?: SuspicionContext;
   report?: boolean;
   studio?: boolean;
-  ivy?: boolean;
+  handoff?: boolean;
   assistantName?: string;
   unsubscribe?: ReadonlyMap<string, UnsubscribeOffer>;
   invitations?: ReadonlyMap<string, InvitationView>;
@@ -405,7 +405,7 @@ const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true)
 const REPORT = action("mail.report", "Report", "secondary", true);
 const NOT_PHISHING = action("mail.trust", "Not phishing", "secondary", true);
 const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
-const toAssistant = (name: string): DeskAction => action("mail.ivy", `Hand to ${name}`, "secondary", true);
+const toAssistant = (name: string): DeskAction => action("mail.assistant", `Hand to ${name}`, "secondary", true);
 const SNOOZE = action("mail.snooze", "Snooze", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
 const ACCEPT = action("invite.accept", "Accept", "primary", true);
@@ -446,7 +446,7 @@ const unsubscribeLine = (offer: UnsubscribeOffer, now: number): string => {
 const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
 
 export function mailItems(input: MailInput): DeskItem[] {
-  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>(), report = false, studio = false, ivy = false } = input;
+  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>(), report = false, studio = false, handoff = false } = input;
   const suspicion = input.suspicion ?? { vips, vipNames: new Map<string, string>(), ownDomains: [] };
   return mail.map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
@@ -486,7 +486,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && !trashFirst && !seenFirst ? [DELETE] : []), ...(spam && !spamFirst ? [SPAM] : [])];
     const invite = input.invitations?.get(m.id);
     const inviting = inviteLead(invite, triage?.commitment === "invitation", canDraft);
-    const rest = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), ...(ivy ? [toAssistant(assistantNameOf(input))] : []), SNOOZE];
+    const rest = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), ...(handoff ? [toAssistant(assistantNameOf(input))] : []), SNOOZE];
     const offered = inviting.length > 0 ? [...inviting, ...rest.map((a) => ({ ...a, role: "secondary" as const }))] : rest;
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     const deadline = m.dueAt ? { dueAt: m.dueAt, dueFrom: "source" as const } : triage?.deadline ? { dueAt: triage.deadline, dueFrom: "classifier" as const } : null;

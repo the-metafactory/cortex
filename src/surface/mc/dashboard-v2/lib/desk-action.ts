@@ -63,13 +63,13 @@ export type MailActionBody =
   | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection; correction?: number }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }
   | { action: "studio.add"; key: string; requestId: string; thread: string | null; reason?: string; includeText: boolean }
-  | { action: "ivy.hand"; key: string; requestId: string; instruction?: string }
+  | { action: "assistant.hand"; key: string; requestId: string; instruction?: string }
   | { action: "snooze"; key: string; until: import("../../desk/mail-snooze-schema").SnoozeChoice }
   | { action: "snooze.cancel"; key: string }
   | { action: "not-phishing"; key: string }
   | { action: "not-phishing.undo"; trust: string }
   | { action: "not-phishing.remove"; sender: string }
-  | { action: "ivy.approve" | "ivy.discard" | "ivy.retry"; key: string }
+  | { action: "assistant.approve" | "assistant.discard" | "assistant.retry"; key: string }
   | { action: "invite.reply"; key: string; reply: import("../../desk/mail-invitation-schema").InviteReply; requestId: string; commitment: import("../../desk/mail-yes-filter").Commitment | null; confirmed: boolean };
 
 export type InviteProposalOutcome = { ok: true; body: string; note: string | null } | { ok: false; text: string };

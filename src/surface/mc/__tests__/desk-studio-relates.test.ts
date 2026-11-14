@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { studioNote, studioThread } from "./__fixtures__/studio";
-import type { IvyNote, MaterialLink } from "../desk/studio/format";
+import type { AssistantNote, MaterialLink } from "../desk/studio/format";
 import { buildThreadPage } from "../desk/studio/page";
 import { mailHeader, openInMail } from "../desk/studio/mail-header";
 import { relatesTo, relationCount, type RelatesContext } from "../desk/studio/relates";

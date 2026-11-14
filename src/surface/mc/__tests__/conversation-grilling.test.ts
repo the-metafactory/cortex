@@ -69,7 +69,7 @@ test("the guarded route keeps untrusted node context separate from principal inp
   expect(rendered.some(view => view.kind === "message" && view.text.includes("linked Ranger question"))).toBe(true);
   expect(JSON.stringify(rendered)).not.toContain("earlier Studio session");
   expect(await status.host.sourcesOf([SOURCE])).toMatchObject([{ state: "available", title: TITLE, context: `${BODY}\n\nSource: ${NODE_URL}` }]);
-  expect(rendered.some(view => view.kind === "message" && view.who === "ivy" && view.text === "Let's compare them.")).toBe(true);
+  expect(rendered.some(view => view.kind === "message" && view.who === "assistant" && view.text === "Let's compare them.")).toBe(true);
   await status.host.close(); statuses.splice(statuses.indexOf(status), 1);
   status = await boot();
   const again = await call("/api/conversations/starts", { ...start(), source: { ...SOURCE, id: `github:github.com/${SOURCE.id}` } });

@@ -27,3 +27,17 @@ export function handoffWhen(at: number, now: number): string {
 }
 
 export const handoffAction = (id: string, label: string, role: DeskAction["role"], target?: string): DeskAction => ({ id, label, role, wired: true, ...(target ? { target } : {}) });
+
+export const HANDOFF_KEY_PREFIX = "assistant:";
+export const handoffKey = (id: string): string => `${HANDOFF_KEY_PREFIX}${id}`;
+
+export const LEGACY_KEY_PREFIX = "ivy:";
+
+export const LEGACY_ACTION_IDS: Readonly<Record<string, string>> = {
+  "ivy.hand": "assistant.hand",
+  "ivy.approve": "assistant.approve",
+  "ivy.discard": "assistant.discard",
+  "ivy.retry": "assistant.retry",
+  "ivy.edit": "assistant.edit",
+  "mail.ivy": "mail.assistant",
+};

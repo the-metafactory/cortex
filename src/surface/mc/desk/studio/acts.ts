@@ -3,7 +3,8 @@ import { z } from "zod";
 import { clip, latestNote, plainQuestion } from "./board";
 import { appendEntry, appendLog, localTime, oneLine, safeBody, setFront, setNoteStatus, setSection } from "./edit";
 import { localDate, YES_ANSWERS } from "./labels";
-import { AREA_ID, ISO_DATE, STUDIO_SLUG, THREAD_OUTCOMES, validDate, type IvyNote, type StudioCapture, type ThreadType } from "./format";
+import { AREA_ID, ISO_DATE, STUDIO_SLUG, THREAD_OUTCOMES, validDate, type AssistantNote, type StudioCapture, type ThreadType } from "./format";
+import { CONVERSATION_MATERIAL } from "./assistant-keys";
 import type { StudioFile, StudioFiles, StudioProposalView, StudioThreadView, StudioView } from "./view";
 
 export const MAX_RESPONSE = 4000;
@@ -120,9 +121,9 @@ function respond(ctx: Ctx, act: Extract<StudioAct, { act: "respond" }>, { thread
   return plan([edited(thread.path, out)], `Answer ${ctx.assistantName} on ${thread.slug}`, `Your answer is in ${quoted(thread.question)}.`);
 }
 
-const GHOST_NAME: Record<IvyNote["kind"], string> = { stand: "stand", idea: "idea", relation: "relation", note: "note" };
+const GHOST_NAME: Record<AssistantNote["kind"], string> = { stand: "stand", idea: "idea", relation: "relation", note: "note" };
 
-function relationName(note: IvyNote): string {
+function relationName(note: AssistantNote): string {
   const r = note.relates;
   return r ? ` to ${r.kind}: ${r.label}` : "";
 }
@@ -275,7 +276,7 @@ function yesSection(ctx: Ctx, answers: Record<string, string> | undefined): { li
 type OpenAct = Extract<StudioAct, { act: "open" }>;
 
 function fromConversation(act: Extract<OpenAct, { from: "conversation" }>, name: string): OpenSource {
-  return { path: "", type: "question", areas: [act.area], question: oneLine(act.question), material: [`Ivy conversation: ${act.link}`], log: `Opened from a conversation with ${name}: ${act.link}` };
+  return { path: "", type: "question", areas: [act.area], question: oneLine(act.question), material: [`${CONVERSATION_MATERIAL}: ${act.link}`], log: `Opened from a conversation with ${name}: ${act.link}` };
 }
 
 function openSource(ctx: Ctx, act: OpenAct): OpenSource | ActRefusal {

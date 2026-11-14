@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { studioNote, studioThread } from "./__fixtures__/studio";
 import { buildBoard, normaliseLabel, sharedPairs, type BoardCard, type BoardClock, type BoardFree } from "../desk/studio/board";
-import type { IvyNote, MaterialLink, StudioCapture } from "../desk/studio/format";
+import type { AssistantNote, MaterialLink, StudioCapture } from "../desk/studio/format";
 import type { StudioProposalView, StudioThreadView, StudioView } from "../desk/studio/view";
 
 const NOW = Date.parse("2026-10-31T09:00:00+01:00");

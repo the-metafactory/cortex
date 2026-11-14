@@ -2,7 +2,7 @@
 
 The deterministic [Balance engine](../src/balance/README.md) supplies the scheduling core. The balance concept originates with **Life Balance, Llamagraphics, 1996–2016**. Cortex distributes this implementation under AGPL-3.0-only. The core has its own entry point and no Cortex dependencies; Mission Control stores validated state in its stack database. The engine slice adds storage and scheduling, with UI in a later slice.
 
-The Desk Studio is a directory of Markdown files that holds the threads you think through with Ivy. Mission Control reads the directory on every request to `GET /api/desk/studio` and caches nothing. The files are the source of truth, so any tool that writes Markdown can read and append to them.
+The Desk Studio is a directory of Markdown files that holds the threads you think through with the assistant. Mission Control reads the directory on every request to `GET /api/desk/studio` and caches nothing. The files are the source of truth, so any tool that writes Markdown can read and append to them.
 
 ## Configuration
 
@@ -38,7 +38,7 @@ A thread's **effective policy** is the strictest policy of its areas: if any are
 <dir>/
   threads/<slug>.md      one file per thread
   inbox/<id>.md          captures that match no thread yet
-  proposals/<id>.md      threads Ivy proposes
+  proposals/<id>.md      threads the assistant proposes
 ```
 
 A slug or id is lowercase letters, digits and hyphens, and is the file name without `.md`. Mission Control ignores files that do not end in `.md` and files larger than 1 MB.
@@ -66,7 +66,7 @@ How does the Desk become useful to someone else?
 
 Only the built-in sources count.
 
-## Ivy's notes
+## Assistant's notes
 
 ### 2026-10-31T03:12:00+01:00
 trigger: Stale thread: unchanged for 6 days
@@ -107,7 +107,7 @@ Rules:
 
 - Front matter is YAML between two `---` lines. Unknown keys are ignored.
 - `## Question` is required. The other H2 sections are optional, appear at most once, and may come in any order. Other H2 sections are ignored.
-- **Ivy's notes** are append-only H3 entries. The heading is an ISO time with a zone. Below it come metadata lines, then a blank line and the note text:
+- **Assistant's notes** are append-only H3 entries. Older files may head the section `## Ivy's notes`; the parser reads both, and a file with both headings reads the notes of each. The heading is an ISO time with a zone. Below it come metadata lines, then a blank line and the note text:
   - `trigger:` (required) names what started the note.
   - `model:` (required) names the model policy or model that wrote it.
   - `mode:` names the thinking mode; `run:` identifies the native Ranger job that wrote the note. Both are optional for older or manually written notes.
@@ -116,9 +116,9 @@ Rules:
   - `because:` gives the reason for a `stand` proposal.
   - `relates:` (required for `relation`) names what the thread relates to, in the material item syntax: `thread: <slug>`, `goal: G5: one post a week`, `person: Ana`, or `link: [label](href)`. The note text says why.
   - `sample: true` marks an example note that no model wrote.
-- **Responses** are your answers to Ivy, as H3 entries headed by an ISO time with a zone. An optional first line `re: <time>` names the note answered; the rest is the text. **Ivy waits on you** while Ivy's latest note has `status: open` and no response is dated at or after it.
+- **Responses** are your answers to the assistant, as H3 entries headed by an ISO time with a zone. An optional first line `re: <time>` names the note answered; the rest is the text. **the assistant waits on you** while the assistant's latest note has `status: open` and no response is dated at or after it.
 - **Material** and **Log** are bullet lists. A material item is `kind: [label](href)` or `kind: label`; without a kind it is a `link`. A log item may start with an ISO date.
-- Lines indented by two spaces under a material bullet are that item's **text**, with a leading `> ` removed; a blank line ends the text, so a paragraph break inside it is written as an indented `>` line, as the mail filer does: a mail filed with its text writes its first paragraph there, and you or Ivy can paste an excerpt under any item. Capture undo removes the bullet with these lines. Cortex never fetches a material link to get text.
+- Lines indented by two spaces under a material bullet are that item's **text**, with a leading `> ` removed; a blank line ends the text, so a paragraph break inside it is written as an indented `>` line, as the mail filer does: a mail filed with its text writes its first paragraph there, and you or the assistant can paste an excerpt under any item. Capture undo removes the bullet with these lines. Cortex never fetches a material link to get text.
 
 ## Inbox file
 
@@ -126,7 +126,7 @@ Rules:
 ---
 at: 2026-10-30T18:20:00+01:00
 via: voice
-target:                 # optional: where Ivy would file it
+target:                 # optional: where the assistant would file it
   thread: open-source-desk
   reason: It is about newcomers to the Desk.
 ---
@@ -191,7 +191,7 @@ A material item carries `text` when the file holds indented lines under its bull
 
 ## Thread page
 
-Opening a thread on the board zooms the card into its thread page; `?desk=studio&thread=<slug>` holds the open thread, so reload and the browser's back button work. With `prefers-reduced-motion`, the page opens and closes without animation. Keep, Dismiss, Close with an outcome, Park, Bring back, Think tonight and the response box write to the files (see Changes). Discuss stays disabled until live sessions with Ivy arrive.
+Opening a thread on the board zooms the card into its thread page; `?desk=studio&thread=<slug>` holds the open thread, so reload and the browser's back button work. With `prefers-reduced-motion`, the page opens and closes without animation. Keep, Dismiss, Close with an outcome, Park, Bring back, Think tonight and the response box write to the files (see Changes). Discuss stays disabled until live sessions with the assistant arrive.
 
 **Relates to** is derived on every render, never stored. The page and `GET /api/desk/studio/relations` share one rule and one context builder (the Desk's goals and its today and coming events):
 
@@ -201,7 +201,7 @@ Opening a thread on the board zooms the card into its thread page; `?desk=studio
 - **People**: material items of kind `person`, `people` or `contact`. Free text is never searched for names.
   A mail filed into a thread with Add to thread (or an attach rule) writes `- person: <display name>` under its capture line. Nothing is written for a mail without a display name, or with an address as its name, or when the thread already names that person: a `person`, `people` or `contact` item, or a kept person relation, whose label equals the name after lowercasing and folding punctuation and spaces. The address is not compared.
 - **Decision journal**: closed threads that share a material item, or that share an area and a rare word in the question, expectation or outcome. A word counts when it has at least 4 letters, is not a common English or German word, and appears in no more than a quarter of the Studio's threads (at least two). A decision opens in place.
-- **Ivy proposes**: open `relation` notes, each with Keep and Dismiss. A kept relation joins its group (`thread`, `goal`, `person`/`people`/`contact`) or **Also related** for any other kind; a dismissed one disappears.
+- **the assistant proposes**: open `relation` notes, each with Keep and Dismiss. A kept relation joins its group (`thread`, `goal`, `person`/`people`/`contact`) or **Also related** for any other kind; a dismissed one disappears.
 
 Goals, events and people link to their `href` when the material or the event has one.
 
@@ -212,7 +212,7 @@ Goals, events and people link to their `href` when the material or the event has
 | act | fields | writes |
 | --- | --- | --- |
 | `spar` | `thread`, `mode` | enqueues native `ivy-think`; its eventual note is a separate git commit |
-| `respond` | `thread`, `text` | a Responses entry; clears "Ivy waits on you" |
+| `respond` | `thread`, `text` | a Responses entry; clears "(name) waits on you" |
 | `keep`, `dismiss` | `thread`, `note` (the note's heading time) | the note's `status:`; keeping a `stand` also replaces "Where I stand" |
 | `park` | `thread` | `state: parked` |
 | `unpark` | `thread`, `park` when every place is in use | `state: active` |
@@ -222,7 +222,7 @@ Goals, events and people link to their `href` when the material or the event has
 
 Rules:
 
-- Each file-writing act changes the files and makes one commit whose subject names the act (`Studio: Answer Ivy on desk-open-source`) and whose body carries `Desk-Request: <requestId>`. Each changed thread's Log gains one line.
+- Each file-writing act changes the files and makes one commit whose subject names the act (`Studio: Answer Mira on desk-open-source`, with the configured `mc.desk.assistantName`) and whose body carries `Desk-Request: <requestId>`. Each changed thread's Log gains one line.
 - A request id that is already in the history is answered with that commit, and nothing is written again, also after a restart.
 - A directory that is not a git working tree, or that has uncommitted changes, is refused with a 409 and a clear error; nothing is written. A failed commit puts the files back.
 - Opening or bringing back a thread while `maxActive` threads are active needs `park`, an active thread to park; without it the answer is a 409 with `needsPark: true`.
@@ -288,3 +288,13 @@ Mission Control stores turns before calling the model. A failed call retains the
 Session requests can include a `draft` composer snapshot. Omitting the field preserves retained unsent text. An empty string clears it, and replacement text becomes the current draft. Submitting that same text as a turn consumes the draft while retaining the turn. Recovery uses a browser draft for the same session when present, including an intentionally empty draft. Otherwise it restores retained server text. Once an ending is chosen, the composer is read-only until the save finishes or refuses.
 
 If another tab saves the exchange while this tab still has a newer message, the newer text remains in the panel and its own browser cache. Save remaining message explicitly appends it through the existing response writer for that session's Studio and thread. Retrying returns the same response commit. The original ending stays unchanged. If the thread is closed or unavailable, the draft remains selectable for Copy message and close. A failed clipboard write keeps the panel and text.
+
+## Renamed keys and the startup migration
+
+Studio files used to name the assistant "Ivy". The Desk now shows the name configured in `mc.desk.assistantName` wherever this page says "the assistant". When Mission Control starts with `mc.desk.studio` set, it renames those keys in every thread file:
+
+- `## Ivy's notes` becomes `## Assistant's notes`, and a second notes section, under either heading, moves into the first.
+- `trigger: Ivy conversation` becomes `trigger: Conversation`.
+- A material line `- Ivy conversation: <link>` becomes `- Conversation: <link>`.
+
+It writes the change as one commit in the Studio repository, titled `Studio: Rename the old assistant keys to neutral names: …`, so `git revert` undoes it. A start that finds no old key commits nothing. While the Studio has uncommitted changes the migration writes nothing, and the next start tries again. Until then the parser and the Desk acts read the old keys. Log lines and note text keep their wording.

@@ -12,7 +12,7 @@ import { seedStudioRepo } from "./__fixtures__/studio-git";
 import { chatClassifier, classifierRunner, classifierStatus, commandClassifier, MailClassifier, modelJson, readClassifications, type ClassifierRequest, type CommandConfig, type CommandRunner } from "../desk/classify";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import { chatFlagRunner, DigestFlagger, readDigestFlags } from "../desk/mail-digest";
-import { handMailToIvy, piHandoffOwner, workMailNoHandoff } from "../desk/mail-handoff";
+import { handMailToAssistant, piHandoffOwner, workMailNoHandoff } from "../desk/mail-handoff";
 import { EMBEDDER_LOCAL_NOTE, MailSimilarity } from "../desk/mail-similar";
 import { proposeMailThread, WORK_MAIL_NO_THREAD, type MailForStudio } from "../desk/mail-studio";
 import type { SweepGroup, SweepMember } from "../desk/mail-sweep";
@@ -208,7 +208,7 @@ describe("mail hand-off and Studio", () => {
 
   it("refuses to hand work mail to the assistant and files no task", async () => {
     let writes = 0;
-    const result = await handMailToIvy(item("work-mail", "office"), { requestId: "req-000000000001", instruction: null, suspicious: false }, {
+    const result = await handMailToAssistant(item("work-mail", "office"), { requestId: "req-000000000001", instruction: null, suspicious: false }, {
       localSources: boundary, db, writers: { task: ["task-writer"] }, maps: [{ ref: "owner/repo#1", label: "Tasks" }], lanes: { cloud: { provider: "p", model: "m" } },
       run: async () => { writes += 1; return { code: 0, stdout: "{}", stderr: "" }; }, now: NOW, timeoutMs: 1000, assistantName: "Assistant",
     });

@@ -48,7 +48,7 @@ const compose = async (): Promise<DeskItem[]> => (await composeDesk(db, options,
 const offered = (item: DeskItem | undefined): string[] => [...(item?.actions ?? []), ...(item?.more ?? [])].map((a) => a.id);
 const settle = async (): Promise<void> => { await runtime.mailHandoff?.kick(db, () => NOW + 60_000); };
 const writes = (name: string): { argv: string[]; stdin: Record<string, unknown> }[] => commands.filter((c) => c.argv[0] === name);
-const hand = (key: string, requestId = "hand-req-0001", instruction?: string) => act({ action: "ivy.hand", key, requestId, ...(instruction ? { instruction } : {}) });
+const hand = (key: string, requestId = "hand-req-0001", instruction?: string) => act({ action: "assistant.hand", key, requestId, ...(instruction ? { instruction } : {}) });
 
 beforeEach(async () => {
   db = initDatabase(":memory:");
@@ -72,9 +72,9 @@ afterEach(() => { db.close(); });
 
 describe("Hand a mail to Ivy", () => {
   it("offers Hand to Ivy on mail cards only when the task writer, a task map, the draft command and a lane are set up", async () => {
-    expect(offered((await compose()).find((i) => i.key === "mail:w1"))).toContain("mail.ivy");
+    expect(offered((await compose()).find((i) => i.key === "mail:w1"))).toContain("mail.assistant");
     options.mailHandoff = { lanes: {}, pi: PI };
-    expect(offered((await compose()).find((i) => i.key === "mail:w1"))).not.toContain("mail.ivy");
+    expect(offered((await compose()).find((i) => i.key === "mail:w1"))).not.toContain("mail.assistant");
   });
 
   it("files the task on the private map with summary, sender, link and instruction, never the mail body", async () => {
@@ -89,7 +89,7 @@ describe("Hand a mail to Ivy", () => {
     expect(details).toContain("Link: message://%3cw1%3e");
     expect(details).toContain("Instruction: Check my calendar for Friday");
     expect(details).not.toContain("Second line of the body");
-    expect(queryMailLog(db, { actions: ["ivy"] })).toHaveLength(1);
+    expect(queryMailLog(db, { actions: ["assistant"] })).toHaveLength(1);
   });
 
   it("answers a repeated request with the first hand-off and files the task once", async () => {
@@ -111,14 +111,14 @@ describe("Hand a mail to Ivy", () => {
     await hand("mail:w1");
     const card = (await compose()).find((i) => i.key === "mail:w1");
     expect(card?.handoff?.line).toMatch(/^With Assistant since \d{2}:\d{2}$/);
-    expect(offered(card)).not.toContain("mail.ivy");
+    expect(offered(card)).not.toContain("mail.assistant");
     expect((await compose()).some((i) => i.kind === "mail-handoff")).toBe(false);
   });
 
   it("names the configured assistant in the receipt, the refusal, the card label and the status line", async () => {
     options.assistantName = "Mira";
     const offeredCard = (await compose()).find((i) => i.key === "mail:w1");
-    expect([...(offeredCard?.actions ?? []), ...(offeredCard?.more ?? [])].find((a) => a.id === "mail.ivy")?.label).toBe("Hand to Mira");
+    expect([...(offeredCard?.actions ?? []), ...(offeredCard?.more ?? [])].find((a) => a.id === "mail.assistant")?.label).toBe("Hand to Mira");
     owner = () => new Promise(() => undefined);
     const first = await hand("mail:w1");
     expect(String(first.json.message)).toMatch(/^Handed to Mira as owner\/desk#9 on Desk tasks\. Mira's findings/);
@@ -127,6 +127,14 @@ describe("Hand a mail to Ivy", () => {
     const card = (await compose()).find((i) => i.key === "mail:w1");
     expect(card?.handoff?.line).toMatch(/^With Mira since \d{2}:\d{2}$/);
     expect(JSON.stringify(card)).not.toContain("Ivy");
+  });
+
+  it("still accepts the old ivy.* action ids and ivy: keys for one version", async () => {
+    owner = async () => ({ findings: ["x"], reply: "Dear Ada", model: "m" });
+    const handed = await act({ action: "ivy.hand", key: "mail:w1", requestId: "hand-req-0001" });
+    expect(handed.status).toBe(200);
+    await runtime.mailHandoff?.kick(db);
+    expect((await act({ action: "ivy.discard", key: "ivy:hand-req-0001" })).status).toBe(200);
   });
 
   it("refuses suspicious mail without filing anything", async () => {
@@ -168,10 +176,10 @@ describe("Ivy's result card", () => {
     await settle();
     expect(jobs[0]).toMatchObject({ route: "local", instruction: "Say yes", task: "owner/desk#9", summary: "Ada asks for a review of the engine notes by Friday." });
     const card = (await compose()).find((i) => i.kind === "mail-handoff");
-    expect(card?.key).toBe("ivy:hand-req-0001");
+    expect(card?.key).toBe("assistant:hand-req-0001");
     expect(card?.handoff?.findings).toEqual(["Ada asked for a review by Friday.", "You have Friday afternoon free."]);
     expect(card?.excerpt).toContain("I will send my notes on Friday.");
-    expect(card?.actions.map((a) => a.id)).toEqual(["ivy.approve", "ivy.edit", "ivy.discard"]);
+    expect(card?.actions.map((a) => a.id)).toEqual(["assistant.approve", "assistant.edit", "assistant.discard"]);
     expect(card?.reply).toEqual({ to: "Ada Lovelace <ada@example.org>", subject: "Re: Engines w1" });
     expect((await compose()).find((i) => i.key === "mail:w1")?.handoff?.state).toBe("ready");
     expect(writes("draft-cmd")).toHaveLength(0);
@@ -183,43 +191,43 @@ describe("Ivy's result card", () => {
     await hand("mail:w1");
     await settle();
     const card = (await composeDesk(db, options, undefined, { now: NOW + 600_000, handled: runtime.ledger, ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}), ...(runtime.mailHandoff ? { mailHandoff: runtime.mailHandoff } : {}) })).items.find((i) => i.kind === "mail-handoff");
-    expect(card?.actions.map((a) => a.id)).toEqual(["ivy.discard"]);
+    expect(card?.actions.map((a) => a.id)).toEqual(["assistant.discard"]);
     expect(card?.reply).toBeUndefined();
   });
 
   it("Approve saves Ivy's draft through the draft contract and closes the card", async () => {
     await hand("mail:w1");
     await settle();
-    const { status, json } = await act({ action: "ivy.approve", key: "ivy:hand-req-0001" });
+    const { status, json } = await act({ action: "assistant.approve", key: "assistant:hand-req-0001" });
     expect(status).toBe(200);
     expect(json.message).toBe("Reply saved in your work Drafts.");
     expect(writes("draft-cmd")[0]?.stdin).toEqual({ action: "draft", account: "work", messageId: "w1", to: "ada@example.org", subject: "Re: Engines w1", body: "Dear Ada,\n\nI will send my notes on Friday.\n\nJens" });
     expect(readHandoff(db, "hand-req-0001")?.state).toBe("approved");
     expect((await compose()).some((i) => i.kind === "mail-handoff")).toBe(false);
-    expect((await act({ action: "ivy.approve", key: "ivy:hand-req-0001" })).status).toBe(409);
+    expect((await act({ action: "assistant.approve", key: "assistant:hand-req-0001" })).status).toBe(409);
     expect(writes("draft-cmd")).toHaveLength(1);
   });
 
   it("Edit saves the principal's version of the draft", async () => {
     await hand("mail:w1");
     await settle();
-    expect((await act({ action: "draft", key: "ivy:hand-req-0001", body: "Dear Ada, yes. Jens" })).status).toBe(200);
+    expect((await act({ action: "draft", key: "assistant:hand-req-0001", body: "Dear Ada, yes. Jens" })).status).toBe(200);
     expect(writes("draft-cmd")[0]?.stdin.body).toBe("Dear Ada, yes. Jens");
   });
 
   it("Discard closes the card without saving a draft", async () => {
     await hand("mail:w1");
     await settle();
-    expect((await act({ action: "ivy.discard", key: "ivy:hand-req-0001" })).status).toBe(200);
+    expect((await act({ action: "assistant.discard", key: "assistant:hand-req-0001" })).status).toBe(200);
     expect(writes("draft-cmd")).toHaveLength(0);
     expect((await compose()).some((i) => i.kind === "mail-handoff")).toBe(false);
-    expect((await act({ action: "ivy.approve", key: "ivy:hand-req-0001" })).status).toBe(409);
+    expect((await act({ action: "assistant.approve", key: "assistant:hand-req-0001" })).status).toBe(409);
   });
 
   it("Approve is refused while Ivy still works on the mail", async () => {
     owner = () => new Promise(() => undefined);
     await hand("mail:w1");
-    const { status, json } = await act({ action: "ivy.approve", key: "ivy:hand-req-0001" });
+    const { status, json } = await act({ action: "assistant.approve", key: "assistant:hand-req-0001" });
     expect(status).toBe(409);
     expect(json.error).toBe("Assistant is still working on this mail.");
     expect(writes("draft-cmd")).toHaveLength(0);
@@ -231,10 +239,10 @@ describe("Ivy's result card", () => {
     await settle();
     const card = (await compose()).find((i) => i.key === "mail:w1");
     expect(card?.handoff?.line).toBe("Assistant could not finish: pi did not answer within 300 seconds. No other engine is used.");
-    expect(card?.actions[0]).toMatchObject({ id: "ivy.retry", role: "primary", target: "hand-req-0001" });
+    expect(card?.actions[0]).toMatchObject({ id: "assistant.retry", role: "primary", target: "hand-req-0001" });
     expect(card?.actions.filter((a) => a.role === "primary")).toHaveLength(1);
     owner = async () => ({ findings: ["Found it."], reply: "Yes.", model: "spark/longctx" });
-    expect((await act({ action: "ivy.retry", key: "ivy:hand-req-0001" })).status).toBe(200);
+    expect((await act({ action: "assistant.retry", key: "assistant:hand-req-0001" })).status).toBe(200);
     await settle();
     expect(readHandoff(db, "hand-req-0001")).toMatchObject({ state: "ready", draft: "Yes.", error: null });
   });
@@ -254,8 +262,8 @@ describe("Ivy's result card", () => {
     items.work = [];
     await runtime.sourceCache?.read(options.sources, NOW + 3_600_000);
     const card = (await composeDesk(db, options, undefined, { now: NOW + 3_600_000, handled: runtime.ledger, ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}), ...(runtime.mailHandoff ? { mailHandoff: runtime.mailHandoff } : {}) })).items.find((i) => i.kind === "mail-handoff");
-    expect(card).toMatchObject({ key: "ivy:hand-req-0001", why: "Spark timed out" });
-    expect(card?.actions.map((a) => a.id)).toEqual(["ivy.retry", "ivy.discard"]);
+    expect(card).toMatchObject({ key: "assistant:hand-req-0001", why: "Spark timed out" });
+    expect(card?.actions.map((a) => a.id)).toEqual(["assistant.retry", "assistant.discard"]);
   });
 });
 
@@ -266,8 +274,8 @@ describe("Closing the hand-off's task", () => {
   it("Approve closes the task as approved, with only the Desk receipt", async () => {
     await hand("mail:w1");
     await settle();
-    expect((await act({ action: "ivy.approve", key: "ivy:hand-req-0001" })).json.message).toBe("Reply saved in your work Drafts.");
-    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "approved", receipt: "ivy:hand-req-0001" }]);
+    expect((await act({ action: "assistant.approve", key: "assistant:hand-req-0001" })).json.message).toBe("Reply saved in your work Drafts.");
+    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "approved", receipt: "assistant:hand-req-0001" }]);
     expect(taskClose("hand-req-0001")).toBe("closed");
     await settle();
     expect(closes()).toHaveLength(1);
@@ -276,15 +284,15 @@ describe("Closing the hand-off's task", () => {
   it("Discard closes the task as discarded, also while Ivy still works", async () => {
     owner = () => new Promise(() => undefined);
     await hand("mail:w1");
-    expect((await act({ action: "ivy.discard", key: "ivy:hand-req-0001" })).status).toBe(200);
-    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "discarded", receipt: "ivy:hand-req-0001" }]);
+    expect((await act({ action: "assistant.discard", key: "assistant:hand-req-0001" })).status).toBe(200);
+    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "discarded", receipt: "assistant:hand-req-0001" }]);
   });
 
   it("a failed close still completes Approve with a plain note, and a later pass closes the task once", async () => {
     await hand("mail:w1");
     await settle();
     closerFails = true;
-    const { status, json } = await act({ action: "ivy.approve", key: "ivy:hand-req-0001" });
+    const { status, json } = await act({ action: "assistant.approve", key: "assistant:hand-req-0001" });
     expect(status).toBe(200);
     expect(json.message).toBe("Reply saved in your work Drafts. The task owner/desk#9 is still open; the Desk closes it later.");
     expect(readHandoff(db, "hand-req-0001")?.state).toBe("approved");
@@ -306,7 +314,7 @@ describe("Closing the hand-off's task", () => {
     expect(closes()).toHaveLength(0);
     await hand("mail:w1", "hand-req-0002");
     await settle();
-    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "discarded", receipt: "ivy:hand-req-0001" }]);
+    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "discarded", receipt: "assistant:hand-req-0001" }]);
     expect(taskClose("hand-req-0002")).toBeNull();
   });
 
@@ -316,7 +324,7 @@ describe("Closing the hand-off's task", () => {
     await hand("mail:w1");
     await settle();
     closerFails = true;
-    await act({ action: "ivy.discard", key: "ivy:hand-req-0001" });
+    await act({ action: "assistant.discard", key: "assistant:hand-req-0001" });
     for (let i = 1; i <= MAX_CLOSE_TRIES + 2; i++) await runtime.mailHandoff.kick(db, () => NOW + i * CLOSE_RETRY_MS);
     expect(closes()).toHaveLength(MAX_CLOSE_TRIES);
     expect(taskClose("hand-req-0001")).toBe("failed");
@@ -327,7 +335,7 @@ describe("Closing the hand-off's task", () => {
     runtime.mailHandoff = new MailHandoffWorker((job) => owner(job), () => undefined);
     await hand("mail:w1");
     await settle();
-    expect((await act({ action: "ivy.approve", key: "ivy:hand-req-0001" })).json.message).toBe("Reply saved in your work Drafts.");
+    expect((await act({ action: "assistant.approve", key: "assistant:hand-req-0001" })).json.message).toBe("Reply saved in your work Drafts.");
     expect(closes()).toHaveLength(0);
   });
 });

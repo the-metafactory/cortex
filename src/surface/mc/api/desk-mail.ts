@@ -20,7 +20,7 @@ import { addMailToStudio, mailForStudio, MAX_MAIL_REASON, proposeMailThread } fr
 import type { CaptureModel } from "../desk/studio/capture";
 import { STUDIO_SLUG } from "../desk/studio/format";
 import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
-import { approveHandoff, discardHandoff, handMailToIvy, HANDOFF_OPS, handoffIdOf, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
+import { approveHandoff, discardHandoff, HAND_ACTION, handMailToAssistant, HANDOFF_KEY_PREFIX, HANDOFF_OPS, handoffIdOf, withCurrentActionId, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
 import { handoffReady } from "../desk/compose";
 import { assistantNameOf } from "../desk/assistant-name";
 import { closeHandoffTask } from "../desk/mail-handoff-close";
@@ -62,7 +62,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails), target: z.enum(MOVE_TARGETS).optional() }).strict(),
   z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
   z.object({ action: WaitingActionSchema, key: z.string().min(1).max(1000) }).strict(),
-  z.object({ action: z.literal("ivy.hand"), key: z.string().min(1).max(1000), requestId: z.string().regex(HANDOFF_REQUEST_ID), instruction: z.string().max(MAX_INSTRUCTION).optional() }).strict(),
+  z.object({ action: z.literal(HAND_ACTION), key: z.string().min(1).max(1000), requestId: z.string().regex(HANDOFF_REQUEST_ID), instruction: z.string().max(MAX_INSTRUCTION).optional() }).strict(),
   z.object({ action: z.enum(HANDOFF_OPS), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("snooze"), key: z.string().min(1).max(1000), until: SnoozeChoiceSchema }).strict(),
@@ -109,7 +109,7 @@ export interface DeskMailDeps {
 export async function handleDeskMail(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskMailDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   if (!runtime?.options?.enabled) return fail(409, "The Desk is turned off on this stack.");
-  const parsed = MailRequestSchema.safeParse(await req.json().catch(() => null));
+  const parsed = MailRequestSchema.safeParse(withCurrentActionId(await req.json().catch(() => null)));
   if (!parsed.success) return fail(400, parsed.error.issues.some(issue => issue.path.includes("body")) ? "A draft needs the reply text." : "An action, item key and valid commitment choice are required.");
   const body = parsed.data;
   const now = (deps.now ?? Date.now)();
@@ -143,13 +143,13 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (body.action === "hide") return answer(hideMail(db, mail, now));
   if (body.action === "attach") return answer(await attachToTarget(db, runtime, mail, body, now, deps.newId ?? (() => crypto.randomUUID())));
   if (decision && !mail.invitation && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
-  if (body.action === "ivy.hand") {
+  if (body.action === HAND_ACTION) {
     const worker = runtime.mailHandoff;
     const ask = runtime.options.ask;
     if (!worker || !ask || !runtime.options.mailHandoff || !handoffReady(runtime.options, worker)) return fail(409, `Handing mail to ${assistantNameOf(runtime.options)} is not set up on this stack: it needs the task writer, a task map, the draft command and a model lane.`);
     const readings = runtime.sourceCache?.cached() ?? [];
     const suspicious = mailSuspicion(db, mail, runtime.options.mailOwnDomains).length > 0;
-    const handed = await handMailToIvy(mailForStudio(db, readings, mail), { requestId: body.requestId, instruction: body.instruction ?? null, suspicious }, {
+    const handed = await handMailToAssistant(mailForStudio(db, readings, mail), { requestId: body.requestId, instruction: body.instruction ?? null, suspicious }, {
       localSources: sourceBoundary(runtime.options), db, writers: ask.writers, maps: ask.taskMaps, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000, assistantName: assistantNameOf(runtime.options),
     });
     if (handed.ok) void worker.kick(db, deps.now ?? Date.now);
@@ -250,13 +250,13 @@ function handoffBodyOf(body: z.infer<typeof MailRequestSchema>): HandoffBody | n
 async function actOnHandoff(db: Database, runtime: DeskRuntime, body: HandoffBody, moveDeps: MoveDeps): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {
   const id = handoffIdOf(body.key);
   const name = assistantNameOf(runtime.options);
-  if (!id) return { ok: false, status: 400, error: "A hand-off key starts with ivy:." };
-  if (body.action === "ivy.retry") {
+  if (!id) return { ok: false, status: 400, error: `A hand-off key starts with ${HANDOFF_KEY_PREFIX}.` };
+  if (body.action === "assistant.retry") {
     const retried = retryHandoff(db, id, name);
     if (retried.ok) void runtime.mailHandoff?.kick(db);
     return retried;
   }
-  const decided = body.action === "ivy.discard" ? discardHandoff(db, id, moveDeps.now, name) : await approveHandoff(db, id, body.action === "draft" ? body.body : undefined, (mail, text) => draftReply(mail, text, moveDeps), moveDeps.now, name);
+  const decided = body.action === "assistant.discard" ? discardHandoff(db, id, moveDeps.now, name) : await approveHandoff(db, id, body.action === "draft" ? body.body : undefined, (mail, text) => draftReply(mail, text, moveDeps), moveDeps.now, name);
   if (!decided.ok) return decided;
   const note = await closeHandoffTask(db, id, runtime.mailHandoff?.closer, moveDeps.now);
   return note ? { ok: true, message: `${decided.message} ${note}` } : { ok: true, message: decided.message };

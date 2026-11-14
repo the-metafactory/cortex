@@ -265,7 +265,7 @@ function AvailableSource({ source }: { source: Extract<SourceView, { state: "ava
   </div>;
 }
 
-const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
+const AssistantAnswer = memo(function AssistantAnswer({ text }: { text: string }) {
   return <div className="dcv-markdown">{renderMarkdown(text)}</div>;
 });
 
@@ -303,13 +303,13 @@ export function WorkspaceView(c: WorkspaceProps) {
     </aside>
     <div className="dcv-stream" ref={stream} aria-live="polite">
       {views.map(({ key, view }, i) => {
-        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : name}{view.note ? ` · ${view.note}` : ""}</small>{view.who === "ivy" ? <IvyAnswer text={view.text} /> : <p>{view.text}</p>}</article>;
+        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : name}{view.note ? ` · ${view.note}` : ""}</small>{view.who === "assistant" ? <AssistantAnswer text={view.text} /> : <p>{view.text}</p>}</article>;
         if (view.kind === "activity") return <p key={key} className="dcv-activity">{view.text}</p>;
         const retry = i === views.length - 1 && !archived && !c.busy && said?.text;
         return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.
           {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => { c.onRetry(said.text ?? ""); }}>Retry</button>}</p>;
       })}
-      {c.liveText && <article className="dcv-msg ivy" aria-label={`${name} is answering`}><small>{name} · answering…</small><IvyAnswer text={c.liveText} /></article>}
+      {c.liveText && <article className="dcv-msg assistant" aria-label={`${name} is answering`}><small>{name} · answering…</small><AssistantAnswer text={c.liveText} /></article>}
       {c.busy && <div className="dcv-waiting" role="status" aria-label={`${name} is working`}><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div>}
       {views.length === 0 && !c.liveText && !c.busy && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
     </div>

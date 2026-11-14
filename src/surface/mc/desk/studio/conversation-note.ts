@@ -1,6 +1,7 @@
 import type { ActContext, ActPlan, ActRefusal } from "./acts";
 import { appendEntry, appendLog, safeBody } from "./edit";
 import { localDate } from "./labels";
+import { CONVERSATION_TRIGGER, NOTES_HEADING } from "./assistant-keys";
 
 export const CONVERSATION_NOTE_KINDS = ["note", "idea", "stand"] as const;
 export type ConversationNoteKind = (typeof CONVERSATION_NOTE_KINDS)[number];
@@ -20,8 +21,8 @@ export function planConversationNote(ctx: ActContext, note: ConversationNote): A
   if (!thread || !file) return refused(`No open thread is called ${note.thread}.`);
   const at = new Date(ctx.now);
   while (thread.notes.some(n => Date.parse(n.at) === at.getTime())) at.setMilliseconds(at.getMilliseconds() + 1);
-  const entry = [`### ${at.toISOString()}`, "trigger: Ivy conversation", `model: ${thread.policy}`, `kind: ${note.kind}`, `status: ${note.kind === "note" ? "kept" : "open"}`, "", ...safeBody(note.text)];
-  const added = appendEntry(file.text, "notes", "Ivy's notes", entry);
+  const entry = [`### ${at.toISOString()}`, `trigger: ${CONVERSATION_TRIGGER}`, `model: ${thread.policy}`, `kind: ${note.kind}`, `status: ${note.kind === "note" ? "kept" : "open"}`, "", ...safeBody(note.text)];
+  const added = appendEntry(file.text, "notes", NOTES_HEADING, entry);
   const text = added === null ? null : appendLog(added, localDate(ctx.now), `Added ${ctx.assistantName}'s ${note.kind} ${note.via}`);
   if (text === null) return refused(`${file.path} has a layout the Studio cannot edit.`);
   return { writes: [{ path: file.path, text }], removes: [], subject: `Add ${ctx.assistantName}'s ${note.kind} to ${thread.slug} from a conversation`, message: `${ctx.assistantName}'s ${note.kind} is in the thread.` };

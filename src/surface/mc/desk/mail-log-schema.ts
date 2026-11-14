@@ -1,4 +1,4 @@
-export const MAIL_LOG_ACTIONS = ["archive", "junk", "trash", "restore", "unimportant", "draft", "plan", "todo", "snooze", "opened", "ignored", "kept", "gone", "digest", "unsubscribe", "expect-answer", "no-answer", "waiting-done", "studio", "ivy", "accept", "decline", "not-phishing", "attach"] as const;
+export const MAIL_LOG_ACTIONS = ["archive", "junk", "trash", "restore", "unimportant", "draft", "plan", "todo", "snooze", "opened", "ignored", "kept", "gone", "digest", "unsubscribe", "expect-answer", "no-answer", "waiting-done", "studio", "assistant", "accept", "decline", "not-phishing", "attach"] as const;
 export type MailLogAction = (typeof MAIL_LOG_ACTIONS)[number];
 
 export const MAIL_LOG_WHERE = ["desk", "client", "rule", "correction", "conversation", "auto"] as const;

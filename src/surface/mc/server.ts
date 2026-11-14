@@ -116,6 +116,7 @@ import { handleDeskDmarc } from "./api/desk-dmarc";
 import { DmarcLoop } from "./desk/mail-dmarc";
 import { MailHandoffWorker, piHandoffOwner } from "./desk/mail-handoff";
 import { assistantNameOf } from "./desk/assistant-name";
+import { keyMigrationLine, migrateStudioKeys } from "./desk/studio/migrate-keys";
 import { taskCloser } from "./desk/mail-handoff-close";
 import { piTurns } from "../../conversations/pi";
 import { DEFAULT_MAIL_RULES, MailRuleLoop } from "./desk/mail-rules";
@@ -545,6 +546,15 @@ export function startServer(
   const deskTransport = options.deskTransport ?? ((): DeskTransport | null => null);
   const deskPushes = startDeskPushes(db, deskRuntime, options.vigil, deskTransport);
   deskRuntime.autonomy = startDeskAutonomy(db, deskRuntime);
+  const studioAtStart = options.desk?.enabled ? options.desk.studio : undefined;
+  if (options.desk && studioAtStart) {
+    void migrateStudioKeys({ options: studioAtStart, areas: options.desk.areas, assistantName: assistantNameOf(options.desk) }).then((result) => {
+      const line = keyMigrationLine(result);
+      if (line) console.log(line);
+    }).catch((err: unknown) => {
+      console.log(keyMigrationLine({ kind: "refused", error: err instanceof Error ? err.message : String(err) }));
+    });
+  }
 
   const stop = (closeActive = false) => {
     clearInterval(pingInterval);
