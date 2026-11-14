@@ -131,6 +131,15 @@ describe("Mail move host: the grant prompt", () => {
     expectNothingRan(rig);
   });
 
+  test("Cancel with a standing grant already in place still runs nothing", async () => {
+    const rig = await openRig();
+    receiptOf(await rig.host.press(archive("m1", "always")));
+    const before = rig.calls.length;
+    expect(await rig.host.press(archive("m2", "cancel"))).toEqual({ kind: "cancelled" });
+    expect(rig.calls).toHaveLength(before);
+    expect(rig.folders.get("m2")).toBe("INBOX");
+  });
+
   test("Just this once runs one move on a confirmation and leaves no grant, so the next click asks again", async () => {
     const rig = await openRig();
     const receipt = receiptOf(await rig.host.press(archive("m1", "once")));
@@ -182,6 +191,14 @@ describe("Mail move host: a one-click grant", () => {
     await rig.host.undo(moved.operationId, provenance);
     const restore = rig.calls.find(call => call.snapshot.capabilityId === "mail.restore");
     expect(restore?.snapshot.input).toMatchObject({ from: "Archive" });
+  });
+
+  test("a receipt from another connection with the same account label offers no Undo", async () => {
+    const rig = await openRig();
+    const moved = receiptOf(await rig.host.press(archive("m1", "always")));
+    const unreachable = (): never => { throw new Error("Not reachable."); };
+    const other = new MailMoveHost({ adapterId: ADAPTER, connectionId: `${CONNECTION}-other`, account: ACCOUNT, journal: rig.journal, index: rig.index, authority: { findGrant: unreachable, grant: unreachable, approve: unreachable }, capability: unreachable, dispatch: unreachable, now: () => NOW });
+    expect((await other.receipt(moved.operationId))?.undo).toEqual({ kind: "unavailable", reason: "other-connection" });
   });
 
   test("an Undo after the native window is not offered", async () => {

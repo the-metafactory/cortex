@@ -37,7 +37,7 @@ const INPUT_SCHEMAS = {
 
 const LABELS: Record<MailMoveAction, string> = { move: "Move mail", trash: "Move mail to Trash", restore: "Move mail back" };
 
-/** The declaration a Mail adapter publishes for the move verbs. The host registers it as the contract a fixture binding or a real adapter must meet. */
+/** The declaration a Mail adapter publishes for the move verbs. The Cortex runtime registers it as the contract a fixture binding or a real adapter must meet. */
 export function mailMoveDeclaration(adapterId: string, only: readonly MailMoveAction[] = ["move", "trash", "restore"]): AdapterDeclaration {
   const message = objectReferenceSchema(adapterId, MAIL_MESSAGE_TYPE);
   const folder = { type: "string", minLength: 1, maxLength: 200 };

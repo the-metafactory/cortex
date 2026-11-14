@@ -25,7 +25,7 @@ export interface GrantPrompt {
 export type ApprovalDecision = { kind: "allowed"; authority: Authority } | { kind: "denied"; reason: BoundaryError };
 export interface MailApprovalInput { operationId: string; idempotencyKey: string; ownerRequestId: string; snapshot: ApprovedSnapshot; links?: OperationJournal["links"] }
 
-/** What the host's authority offers one Mail connection: the standing grant for the move actions, and approval of one operation under it. */
+/** What the Cortex runtime's authority offers one Mail connection: the standing grant for the move actions, and approval of one operation under it. */
 export interface MailMoveAuthority {
   findGrant(capabilityId: string): Promise<string | null>;
   grant(capabilityIds: readonly string[]): Promise<string | null>;
@@ -86,6 +86,15 @@ const reason = (code: string, message: string): BoundaryError => ({ code, messag
 const UNAVAILABLE_ACTION = (action: MailMoveAction): BoundaryError => reason("mail.capability_unavailable", action === "trash" ? "Moving mail to Trash is not available on this connection, because it cannot restore the mail." : "This connection does not offer that action.");
 const QUESTION: Record<MailMoveAction, string> = { move: "Move mail with one click on this connection?", trash: "Move mail to Trash with one click on this connection?", restore: "Move mail back with one click on this connection?" };
 
+function compensationLinks(all: readonly StoredOperation[]): Map<string, StoredOperation[]> {
+  const links = new Map<string, StoredOperation[]>();
+  for (const item of all) {
+    const target = item.journal.links?.compensatesOperationId;
+    if (target) links.set(target, [...(links.get(target) ?? []), item]);
+  }
+  return links;
+}
+
 const stateOfRefusal = (code: string): ReceiptState => code.endsWith(`.${MAIL_REFUSAL.missing}`) ? "missing" : code.endsWith(`.${MAIL_REFUSAL.denied}`) ? "denied" : "failed";
 
 export class MailMoveHost {
@@ -118,12 +127,12 @@ export class MailMoveHost {
     if (!this.available(action)) return { kind: "unavailable", reason: UNAVAILABLE_ACTION(action) };
     const capabilityId = MAIL_ACTION_CAPABILITY[action];
     let grantId = await this.options.authority.findGrant(capabilityId);
+    if (request.choice === "cancel") return { kind: "cancelled" };
     if (!grantId) {
       if (request.choice === undefined) return { kind: "needs-grant", prompt: { connectionId: this.options.connectionId, action, covers: this.coveredCapabilities(), question: QUESTION[action], options: GRANT_OPTIONS } };
-      if (request.choice === "cancel") return { kind: "cancelled" };
       if (request.choice === "always") {
         grantId = await this.options.authority.grant(this.coveredCapabilities());
-        if (!grantId) return { kind: "denied", reason: reason("authority_denied", "The host does not allow a standing permission for this connection.") };
+        if (!grantId) return { kind: "denied", reason: reason("authority_denied", "The Cortex runtime does not allow a standing permission for this connection.") };
       }
     }
     const input: MailMoveInput = request.action === "move" ? { action: "move", message: this.message(request.messageId), target: request.target } : { action: "trash", message: this.message(request.messageId) };
@@ -150,13 +159,20 @@ export class MailMoveHost {
 
   async receipts(limit = 100): Promise<MailMoveReceipt[]> {
     const loaded = await this.loadAll();
-    return loaded.map(item => this.project(item, loaded)).sort((a, b) => b.at.localeCompare(a.at) || b.operationId.localeCompare(a.operationId)).slice(0, limit);
+    const links = compensationLinks(loaded);
+    return loaded.map(item => this.project(item, links.get(item.journal.operationId) ?? [])).sort((a, b) => b.at.localeCompare(a.at) || b.operationId.localeCompare(a.operationId)).slice(0, limit);
   }
 
   async receipt(operationId: string): Promise<MailMoveReceipt | null> {
-    const loaded = await this.loadAll();
-    const found = loaded.find(item => item.journal.operationId === operationId);
-    return found ? this.project(found, loaded) : null;
+    return this.receiptOf(operationId, false);
+  }
+
+  private async receiptOf(operationId: string, fresh: boolean): Promise<MailMoveReceipt | null> {
+    const found = await this.options.journal.read(operationId);
+    if (!found) return null;
+    const needsCompensations = !fresh && found.journal.state === "succeeded" && ("kind" in found.journal.snapshot || found.journal.snapshot.capabilityId !== MAIL_RESTORE_CAPABILITY);
+    const compensations = needsCompensations ? (compensationLinks(await this.loadAll()).get(operationId) ?? []) : [];
+    return this.project(found, compensations);
   }
 
   private message(messageId: string) { return mailMessageRef(this.options.adapterId, this.options.connectionId, messageId); }
@@ -179,25 +195,26 @@ export class MailMoveHost {
     if (decision.kind === "denied") return { kind: "denied", reason: decision.reason };
     await this.options.index.add(operationId);
     await this.options.dispatch(operationId);
-    const receipt = await this.receipt(operationId);
+    const receipt = await this.receiptOf(operationId, true);
     if (!receipt) return { kind: "denied", reason: reason("mail.receipt_missing", "The attempt left no journal record.") };
     return { kind: "receipt", receipt };
   }
 
-  private project(stored: StoredOperation, all: readonly StoredOperation[]): MailMoveReceipt {
+  private project(stored: StoredOperation, compensations: readonly StoredOperation[]): MailMoveReceipt {
     const journal = stored.journal;
     const legacy = readLegacyMove(stored);
-    const undone = legacy?.row.undoneAt != null || all.some(other => other.journal.links?.compensatesOperationId === journal.operationId && other.journal.state === "succeeded");
-    const inFlight = all.some(other => other.journal.links?.compensatesOperationId === journal.operationId && ["confirmed", "dispatching", "pending", "uncertain"].includes(other.journal.state));
+    const undone = legacy?.row.undoneAt != null || compensations.some(other => other.journal.state === "succeeded");
+    const inFlight = compensations.some(other => ["confirmed", "dispatching", "pending", "uncertain"].includes(other.journal.state));
     const base = legacy ? this.legacyReceipt(legacy, undone) : this.lifecycleReceipt(stored, undone);
-    return { ...base, undo: this.undoState(base, legacy?.connection ?? null, inFlight) };
+    const connection = legacy ? legacy.connection : "kind" in journal.snapshot ? null : { adapterId: journal.snapshot.adapterId, connectionId: journal.snapshot.connectionId };
+    return { ...base, undo: this.undoState(base, connection, inFlight) };
   }
 
-  private undoState(receipt: Omit<MailMoveReceipt, "undo">, legacyConnection: { adapterId: string; connectionId: string } | null, inFlight: boolean): UndoState {
+  private undoState(receipt: Omit<MailMoveReceipt, "undo">, originConnection: { adapterId: string; connectionId: string } | null, inFlight: boolean): UndoState {
     const none = (why: Extract<UndoState, { kind: "unavailable" }>["reason"]): UndoState => ({ kind: "unavailable", reason: why });
     if (receipt.action === "restore") return none("restore");
     if (receipt.state !== "done") return none("not-done");
-    if (receipt.basis === "legacy" && (legacyConnection?.adapterId !== this.options.adapterId || legacyConnection.connectionId !== this.options.connectionId)) return none("other-connection");
+    if (originConnection?.adapterId !== this.options.adapterId || originConnection.connectionId !== this.options.connectionId) return none("other-connection");
     if (receipt.account !== this.options.account) return none("other-connection");
     if (receipt.undone) return none("undone");
     if (inFlight) return none("in-progress");
@@ -243,7 +260,7 @@ export interface MailMoveAuthorityService {
   approveGrant(context: HostContext, input: MailApprovalInput, grantId: string): Promise<ApprovalDecision>;
 }
 
-/** Binds the host authority to one authenticated session and one Mail connection. */
+/** Binds the Cortex runtime authority to one authenticated session and one Mail connection. */
 export function mailMoveAuthority(service: MailMoveAuthorityService, context: HostContext, connectionId: string): MailMoveAuthority {
   return {
     findGrant: capabilityId => service.findConnectionGrant(context, connectionId, capabilityId),
