@@ -1,5 +1,5 @@
 // ============================================================================
-// glossary-ignore: host, run
+// glossary-ignore: host, run, message, body
 // GENERATED FILE — DO NOT EDIT BY HAND.
 //
 // Self-contained type artifact for the Desk adapter SDK. Out-of-tree Desk
@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.4.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.5.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -736,10 +736,60 @@ export interface DeskActionConnector {
 }
 /** Builds one connector per connection; the host calls it only after a connection exists. */
 export type DeskConnectorFactory = (connection: DeskAdapterConnection) => DeskActionConnector;
-/** The only host seam a package module receives: its SDK version and protected action-connector registration. */
+/** One listed mail's identity: the connection that listed it and its Message-ID. */
+export interface DeskMailReference {
+	readonly connection: string;
+	readonly messageId: string;
+}
+/**
+ * One mail a Mail source listed for a connection, as the host releases it to an adapter. It carries the header
+ * fields and at most the first paragraph, never a body.
+ */
+export interface DeskListedMail {
+	readonly ref: DeskMailReference;
+	readonly account: string;
+	readonly from: {
+		readonly name?: string;
+		readonly address: string;
+	};
+	readonly subject: string;
+	readonly receivedAt: string;
+	readonly unread: boolean;
+	readonly firstParagraph?: string;
+}
+/**
+ * A connection's provider health. `fresh` means the source's last listing succeeded. `stale` means it failed
+ * (`provider_failure`) or has not run yet (`not_listed`); the listing then keeps the last listed mail, and nothing
+ * is reported as deleted.
+ */
+export type DeskMailHealth = {
+	readonly state: "fresh";
+	readonly listedAt: string;
+} | {
+	readonly state: "stale";
+	readonly code: "provider_failure" | "not_listed";
+};
+/** The mail one source listed for one source-and-account connection, with the account the host resolved for it. */
+export interface DeskMailListing {
+	readonly connection: DeskAdapterConnection;
+	readonly account: string;
+	readonly health: DeskMailHealth;
+	readonly mail: readonly DeskListedMail[];
+}
+/**
+ * The host's read bridge to Mail. Call `listed` only inside a backend call the host made for that same connection,
+ * such as a query handler; elsewhere it rejects with `mail_read_unadmitted`. It resolves to `null` for a connection
+ * the host does not bind to a Mail source and account for this adapter. It never runs the provider: it reads what
+ * the source last listed.
+ */
+export interface DeskMailReadBridge {
+	listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;
+}
+/** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {
 	readonly sdkVersion: string;
 	registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
+	readonly mail: DeskMailReadBridge;
 }
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {

@@ -29,7 +29,7 @@ export interface ConformanceReport {
 	credentialRequests: number;
 }
 export declare function formatReport(report: ConformanceReport): string;
-export declare const DESK_ADAPTER_SDK_VERSION = "1.4.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.5.0";
 export type ScenarioVerdict = "isolated" | "failed";
 export declare const FAILURE_SCENARIOS: readonly [
 	"module-load",
