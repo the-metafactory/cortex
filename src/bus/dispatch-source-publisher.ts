@@ -198,7 +198,7 @@ function responseRoutingFromMessage(msg: InboundMessage): ResponseRouting {
   };
 }
 
-function buildDirectTaskPublishSubject(
+export function buildDirectTaskPublishSubject(
   principal: string,
   targetDid: string,
   stack: string | undefined,

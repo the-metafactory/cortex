@@ -5,6 +5,7 @@ import { ParserPermissionsSchema } from "./desk-parser";
 import { RoutineOptionsSchema } from "./desk-routines";
 import { WorkerHandoffOptionsSchema } from "./desk-workers";
 import { DeskConversationsSchema } from "./desk-conversations";
+import { DeskDispatchSchema } from "./desk-dispatch";
 /**
  * F-007: Bot Configuration Types
  *
@@ -579,6 +580,7 @@ export const DeskSchema = z.object({
     )
     .default([]),
   conversations: DeskConversationsSchema.optional(),
+  dispatch: DeskDispatchSchema.optional(),
   studio: z
     .object({
       dir: z.string().min(1),
