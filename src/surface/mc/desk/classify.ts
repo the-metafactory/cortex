@@ -496,6 +496,7 @@ export interface ClassifyInput {
   vips: string[];
   unimportant?: string[];
   corrections?: ClassifierCorrection[];
+  onSorted?: (mail: ClassifierMail, classification: MailClassification, now: number) => void;
 }
 
 /** Forgets one mail's classification, so the next pass sorts it again with what the log now knows. */
@@ -550,6 +551,14 @@ export class MailClassifier {
     } catch (err) {
       this.log(`desk: mail similarity: ${err instanceof Error ? err.message : String(err)}`);
       return undefined;
+    }
+  }
+
+  private afterSorted(input: ClassifyInput, m: ClassifierMail, answer: MailClassification): void {
+    try {
+      input.onSorted?.(m, answer, this.clock());
+    } catch (err) {
+      this.log(`desk: mail classifier: after sorting: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -608,6 +617,7 @@ export class MailClassifier {
       if (answer) {
         if (similar) answer = { ...answer, precedents: precedentsOf(similar) };
         saveClassification(db, m.id, answer, this.model, input.now);
+        this.afterSorted(input, m, answer);
         if (answer.commitment) this.retryAt.delete(m.id);
         else this.retryAt.set(m.id, this.clock() + RETRY_AFTER_MS);
         result.classified += 1;

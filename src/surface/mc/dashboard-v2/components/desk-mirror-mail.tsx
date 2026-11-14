@@ -11,7 +11,7 @@ const ACTION_WORD: Record<MailLogAction, string> = {
   digest: "Kept for the digest", unsubscribe: "Unsubscribed",
   "expect-answer": "Expecting an answer", "no-answer": "Needs no answer", "waiting-done": "Stopped waiting", studio: "Added to the Studio", ivy: "Handed to Ivy", accept: "Invitation accepted", decline: "Invitation declined", "not-phishing": "Not phishing", attach: "Attached to a task",
 };
-const WHERE_WORD: Record<MailLogWhere, string> = { desk: "On the Desk", client: "In your mail client", rule: "By your rules", correction: "Corrections you gave", conversation: "In an Ivy conversation" };
+const WHERE_WORD: Record<MailLogWhere, string> = { desk: "On the Desk", client: "In your mail client", rule: "By your rules", correction: "Corrections you gave", conversation: "In an Ivy conversation", auto: "By the Desk on its own" };
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 const sourceLabel = (s: { kind: "list" | "sender"; value: string }): string => (s.kind === "list" ? `List ${s.value}` : s.value);

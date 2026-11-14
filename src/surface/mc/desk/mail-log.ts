@@ -213,6 +213,7 @@ export function historySentence(e: MailLogEntry, now: number): string {
   }
   if (e.where === "correction") return `${CORRECTED[e.action] ?? `You corrected the Desk: “${e.action}”`} (${when}).`;
   if (e.where === "conversation") return e.action === "todo" ? `You made it a to-do in an Ivy conversation (${when}).` : `An Ivy conversation recorded “${e.action}” for it (${when}).`;
+  if (e.where === "auto") return e.action === "attach" ? `The Desk linked it to “${e.folder ?? "a meeting"}” on its own (${when}).` : `The Desk recorded “${e.action}” for it on its own (${when}).`;
   if (e.where === "rule") {
     if (e.action === "attach") return `A rule you approved attached it to “${e.folder ?? "a task"}” (${when}).`;
     return e.action === "digest" ? `A rule you approved kept it for the digest (${when}).` : `A rule you approved moved it to ${folder || e.action} (${when}).`;

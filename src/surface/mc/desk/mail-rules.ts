@@ -248,14 +248,14 @@ const decisionOf = (db: Database, e: MailLogEntry): { action: MailLogAction; tar
 /**
  * Rules the log supports: a sender, domain or List-Id whose last `proposeAfter` or more mails the principal all moved
  * the same way (or attached to the same task or Studio thread), in the Desk or their mail client, with no counter-example in the window (another action, an Undo,
- * a mail kept in the inbox). Rule runs do not count. A domain is proposed only for two or more senders; a group whose
+ * a mail kept in the inbox). Rule runs and the Desk's own auto-links do not count. A domain is proposed only for two or more senders; a group whose
  * mails another proposal already covers, a VIP's mail, and any match the principal answered (rule, Not now, Never)
  * are left out.
  */
 export function proposeRules(db: Database, now: number, config: MailRulesConfig = DEFAULT_MAIL_RULES, vips: ReadonlySet<string> = new Set(listVips(db).map((v) => v.address))): RuleProposal[] {
   const answers = db.query<{ match: string; value: string }, [number]>("SELECT match, value FROM desk_mail_rule_answers WHERE answer = 'never' OR until > ?").all(now);
   const answered = new Set([...allRows(db), ...answers].map((r) => `${r.match}\u0000${r.value}`));
-  const entries = queryMailLog(db, { since: now - config.windowDays * DAY_MS, limit: 5000 }).filter((e) => e.where !== "rule" && DECISIVE.has(e.action));
+  const entries = queryMailLog(db, { since: now - config.windowDays * DAY_MS, limit: 5000 }).filter((e) => e.where !== "rule" && e.where !== "auto" && DECISIVE.has(e.action));
   const groups = new Map<string, { match: RuleMatch; value: string; entries: MailLogEntry[] }>();
   const add = (match: RuleMatch, value: string | null, e: MailLogEntry): void => {
     const v = value?.trim().toLowerCase();
