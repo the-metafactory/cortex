@@ -3,14 +3,10 @@ import type { Database } from "bun:sqlite";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { spawnWithStdin } from "../desk/create";
 import { fail, noStore, type DeskMailDeps } from "./desk-mail";
-import { answerProposal, createRule, DEFAULT_MAIL_RULES, deleteRule, editRule, releaseRule, ruleById, ruleViews, setRuleOn, undoRuleRun, type RuleChange, type RuleTarget } from "../desk/mail-rules";
+import { answerProposal, createRule, DEFAULT_MAIL_RULES, deleteRule, editRule, proposalAction, releaseRule, ruleById, ruleViews, setRuleOn, undoRuleRun, type RuleChange, type RuleTarget } from "../desk/mail-rules";
 import type { MoveResult } from "../desk/mail-move";
-import { taskTarget } from "../desk/links";
-import { readMyDay } from "../desk/my-day";
-import { ruleAttach } from "../desk/rule-attach";
+import { ruleAttach, ruleTargetOf } from "../desk/rule-attach";
 import { STUDIO_SLUG } from "../desk/studio/format";
-import { oneLine } from "../desk/studio/edit";
-import { withSyncedBalance } from "../desk/studio-my-day";
 
 const Id = z.string().min(1).max(64);
 const TargetSchema = z.discriminatedUnion("kind", [
@@ -36,20 +32,15 @@ const KEEPS_IN_MAILBOX = new Set<string>(["attach", "digest"]);
 
 function actionOf(db: Database, body: RuleBody): string | null {
   if (body.op === "create" || body.op === "edit") return body.action;
-  if (body.op === "approve") return body.proposal.split(":")[2] ?? null;
+  if (body.op === "approve") return proposalAction(body.proposal);
   if (body.op === "release" || body.op === "start") return ruleById(db, body.rule)?.action ?? null;
   return null;
 }
 
 async function targetOf(db: Database, desk: DeskOptions, target: z.infer<typeof TargetSchema>, now: number): Promise<RuleTarget | string> {
-  return withSyncedBalance(db, desk, now, (source, studio) => {
-    if (target.kind === "task") {
-      const task = taskTarget(readMyDay(db, desk, now, source), target.id);
-      return task ? { kind: "task", key: task.key, title: task.title } : "That task no longer exists or is done. Pick another one.";
-    }
-    const thread = studio?.active.find((t) => t.slug === target.slug);
-    return thread ? { kind: "thread", key: thread.slug, title: oneLine(thread.question) } : "That thread is no longer active. Pick another one.";
-  });
+  const picked = await ruleTargetOf(db, desk, target, now);
+  if (typeof picked !== "string") return picked;
+  return target.kind === "task" ? "That task no longer exists or is done. Pick another one." : "That thread is no longer active. Pick another one.";
 }
 
 /**

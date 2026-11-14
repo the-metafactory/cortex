@@ -14,7 +14,7 @@ import { SourceCache, type SourceMail, type SourceReading } from "../desk/source
 import { DAY_MS } from "../desk/time";
 import { addVip } from "../desk/vips";
 import { initDatabase } from "../db/init";
-import { activeMailLink, attachMail, undoAttach } from "../desk/links";
+import { activeMailLink, attachMail, linkStudioMail, undoAttach } from "../desk/links";
 import { ruleAttach } from "../desk/rule-attach";
 import { saveBalanceState } from "../desk/balance-store";
 import { snoozeMail } from "../desk/mail-snooze";
@@ -362,6 +362,14 @@ describe("rules that attach", () => {
     expect(answerProposal(db, p?.key ?? "", "approve", NOW, config, () => "r2")).toMatchObject({ ok: true, rule: { sentence: "Attach mail from ada@example.org to “Kickoff prep”" } });
     db.exec("DELETE FROM desk_mail_rules");
     await undoAttach(db, "l-a1", { now: NOW, listed: () => true });
+    expect(proposeRules(db, NOW, config)).toEqual([]);
+  });
+
+  it("counts Add to thread as an attach, so mail filed in a thread breaks agreement with a task", () => {
+    const config = { ...CONFIG, proposeAfter: 3 };
+    for (const id of ["a1", "a2"]) attachMail(db, { ...ada(id), sourceId: "work-mail" }, { kind: "task", key: "kickoff", title: "Kickoff prep" }, { id: `l-${id}`, requestId: `q-${id}`, origin: "desk", now: NOW - 60_000 });
+    linkStudioMail(db, { ...ada("a3"), sourceId: "work-mail" }, { kind: "thread", key: "engines", title: "What can engines make?" }, { id: "c-a3", requestId: "c-a3", origin: "desk", now: NOW - 60_000 });
+    logMailDecision(db, { ...features("a3", "ada@example.org"), subject: "Report a3" }, "studio", "desk", NOW - 60_000, null);
     expect(proposeRules(db, NOW, config)).toEqual([]);
   });
 });

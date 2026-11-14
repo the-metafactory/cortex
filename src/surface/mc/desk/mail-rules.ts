@@ -108,7 +108,7 @@ const isAction = (v: unknown): v is RuleAction => RULE_ACTIONS.includes(v as Rul
 
 const VERB: Record<RuleAction, string> = { archive: "Archive", junk: "Move to Junk", trash: "Delete", digest: "Keep for the digest", attach: "Attach" };
 const DONE_BY: Record<RuleAction, string> = { archive: "Archived by your rule", junk: "Moved to Junk by your rule", trash: "Deleted by your rule", digest: "Kept for the digest by your rule", attach: "Attached by your rule" };
-const PAST: Partial<Record<MailLogAction, string>> = { archive: "archived", junk: "moved to Junk", trash: "deleted", attach: "attached" };
+const PAST: Partial<Record<MailLogAction, string>> = { archive: "archived", junk: "moved to Junk", trash: "deleted", attach: "attached", studio: "added to a thread" };
 
 const whose = (match: RuleMatch, value: string): string => {
   switch (match) {
@@ -226,19 +226,23 @@ export function pendingRuleMail(db: Database, mails: readonly SourceMail[], susp
   return new Set(mails.filter((m) => !ran.has(m.id) && !offDesk.has(m.id) && ruleFor(rules, m, suspicion, flagged.has(m.id))).map((m) => m.id));
 }
 
-const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze", "attach"]);
+const ATTACHES = new Set<MailLogAction>(["attach", "studio"]);
+const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze", ...ATTACHES]);
 const PROPOSABLE = new Set<MailLogAction>(["archive", "junk", "trash", "attach"]);
 const ORDER: RuleMatch[] = ["list", "domain", "sender"];
 
 const proposalKey = (match: RuleMatch, value: string, action: RuleAction, target: RuleTarget | null): string =>
   target ? `mailrule:${match}:${action}:${target.kind}:${target.key}:${value}` : `mailrule:${match}:${action}:${value}`;
 
+/** The action a proposal key stands for, as `proposalKey` wrote it. */
+export const proposalAction = (key: string): string | null => key.split(":")[2] ?? null;
+
 const isRuleTarget = (t: LinkTarget | null): t is LinkTarget & RuleTarget => t !== null && (t.kind === "task" || t.kind === "thread");
 
 const decisionOf = (db: Database, e: MailLogEntry): { action: MailLogAction; target: RuleTarget | null; same: string } => {
-  if (e.action !== "attach") return { action: e.action, target: null, same: e.action };
+  if (!ATTACHES.has(e.action)) return { action: e.action, target: null, same: e.action };
   const target = linkTargetOf(db, e.messageId, e.at);
-  return { action: e.action, target: isRuleTarget(target) ? { kind: target.kind, key: target.key, title: target.title } : null, same: target ? `attach:${target.kind}:${target.key}` : "attach:" };
+  return { action: "attach", target: isRuleTarget(target) ? { kind: target.kind, key: target.key, title: target.title } : null, same: target ? `attach:${target.kind}:${target.key}` : "attach:" };
 };
 
 /**
@@ -271,13 +275,13 @@ export function proposeRules(db: Database, now: number, config: MailRulesConfig 
   for (const g of groups.values()) {
     const first = g.entries[0];
     const decided = first ? decisions.get(first.id) : undefined;
-    if (!first || !decided || answered.has(`${g.match}\u0000${g.value}`) || !PROPOSABLE.has(first.action)) continue;
-    if (first.action === "attach" && !decided.target) continue;
+    if (!first || !decided || answered.has(`${g.match}\u0000${g.value}`) || !PROPOSABLE.has(decided.action)) continue;
+    if (decided.action === "attach" && !decided.target) continue;
     if (g.entries.some((e) => decisions.get(e.id)?.same !== decided.same || isVip(vips, e.sender))) continue;
     if (g.match === "domain" && new Set(g.entries.map((e) => e.sender)).size < 2) continue;
     const agreeing = new Set(g.entries.map((e) => e.messageId)).size;
     if (agreeing < config.proposeAfter) continue;
-    const action = first.action as RuleProposal["action"];
+    const action = decided.action as RuleProposal["action"];
     candidates.push({ key: proposalKey(g.match, g.value, action, decided.target), match: g.match, value: g.value, action, target: decided.target, agreeing, examples: g.entries.slice(0, 5) });
   }
   candidates.sort((a, b) => ORDER.indexOf(a.match) - ORDER.indexOf(b.match) || b.agreeing - a.agreeing || a.value.localeCompare(b.value));
@@ -373,6 +377,8 @@ function checked(db: Database, edit: RuleInput, except: string | null): RuleEdit
   return { match: edit.match, value, action: edit.action, target: edit.action === "attach" ? edit.target ?? null : null };
 }
 
+const targetColumns = (t: RuleTarget | null): [string | null, string | null, string | null] => [t?.kind ?? null, t?.key ?? null, t?.title ?? null];
+
 const clearAnswer = (db: Database, match: RuleMatch, value: string): void => {
   db.query("DELETE FROM desk_mail_rule_answers WHERE match = ? AND value = ?").run(match, value);
 };
@@ -385,7 +391,7 @@ export function createRule(db: Database, edit: RuleInput, now: number, newId: ()
   db.transaction(() => {
     clearAnswer(db, rule.match, rule.value);
     db.query("INSERT INTO desk_mail_rules (id, match, value, action, state, created_at, updated_at, target_kind, target_key, target_title) VALUES (?, ?, ?, ?, 'on', ?, ?, ?, ?, ?)")
-      .run(id, rule.match, rule.value, rule.action, now, now, rule.target?.kind ?? null, rule.target?.key ?? null, rule.target?.title ?? null);
+      .run(id, rule.match, rule.value, rule.action, now, now, ...targetColumns(rule.target));
     setGrant(db, RULES_GRANT, true, now);
   })();
   return { ok: true, message: `${ruleSentence(rule)}: the Desk now does this on its own and lists each mail under Done for you.`, ...withView(db, id) };
@@ -416,7 +422,7 @@ export function editRule(db: Database, id: string, edit: RuleInput, now: number)
   db.transaction(() => {
     clearAnswer(db, rule.match, rule.value);
     db.query("UPDATE desk_mail_rules SET match = ?, value = ?, action = ?, target_kind = ?, target_key = ?, target_title = ?, held = NULL, released = 0, updated_at = ? WHERE id = ?")
-      .run(rule.match, rule.value, rule.action, rule.target?.kind ?? null, rule.target?.key ?? null, rule.target?.title ?? null, now, id);
+      .run(rule.match, rule.value, rule.action, ...targetColumns(rule.target), now, id);
   })();
   return { ok: true, message: `Saved: ${ruleSentence(rule)}.`, ...withView(db, id) };
 }
@@ -490,9 +496,7 @@ async function handleOne(rule: MailRule, mail: ListedMail, deps: RulePassDeps): 
   if (rule.action === "attach") return attachByRule(rule, mail, deps, id, now, features);
   if (rule.action === "digest") {
     db.transaction(() => {
-      recordRun(db, rule, mail, id, "done", now);
-      db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.rule', ?, ?, 'done', ?, ?, ?)")
-        .run(`mail-rule:${id}`, id, `${DONE_BY.digest}: “${mail.subject}”`, "It stays in your inbox and off the Desk.", now, now);
+      recordOutcome(db, rule, mail, id, "done", { title: `${DONE_BY.digest}: “${mail.subject}”`, message: "It stays in your inbox and off the Desk." }, now);
       logMailDecision(db, features, "digest", "rule", now);
     })();
     return "done";
@@ -502,16 +506,16 @@ async function handleOne(rule: MailRule, mail: ListedMail, deps: RulePassDeps): 
   const result = await moveMail(mail, rule.action, moveDeps, rule.action, features, { where: "rule", doneAction: "mail.rule", title: DONE_BY[rule.action], recorded: (moveId) => { recordRun(db, rule, mail, moveId, "done", now); } });
   if (result.ok) return "done";
   if (result.status === 409) return "skipped";
-  return recordFailure(db, rule, mail, id, { title: `Your rule could not handle “${mail.subject}”`, message: result.error }, now);
+  return recordOutcome(db, rule, mail, id, "failed", { title: `Your rule could not handle “${mail.subject}”`, message: result.error }, now);
 }
 
-function recordFailure(db: Database, rule: MailRule, mail: ListedMail, id: string, line: { title: string; message: string }, now: number): "failed" {
+function recordOutcome<S extends "done" | "failed">(db: Database, rule: MailRule, mail: ListedMail, id: string, status: S, line: { title: string; message: string }, now: number): S {
   db.transaction(() => {
-    recordRun(db, rule, mail, id, "failed", now);
-    db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.rule.failed', ?, ?, 'failed', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")
-      .run(`mail-rule:${id}`, id, line.title, line.message, now, now);
+    recordRun(db, rule, mail, id, status, now);
+    db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")
+      .run(`mail-rule:${id}`, status === "done" ? "mail.rule" : "mail.rule.failed", id, line.title, status, line.message, now, now);
   })();
-  return "failed";
+  return status;
 }
 
 const RULE_OFF = "The rule is turned off, and the mail stays on the Desk.";
@@ -523,7 +527,7 @@ async function attachByRule(rule: MailRule, mail: ListedMail, deps: RulePassDeps
   const cannot = (why: string): string => `Your rule could not attach “${mail.subject}”: “${target.title}” ${why}`;
   const turnOff = (why: string): "failed" => {
     setRuleOn(db, rule.id, false, now);
-    return recordFailure(db, rule, mail, id, { title: cannot(why), message: RULE_OFF }, now);
+    return recordOutcome(db, rule, mail, id, "failed", { title: cannot(why), message: RULE_OFF }, now);
   };
   if (target.kind === "task") {
     const task = await deps.attach.task(target.key);
@@ -531,15 +535,10 @@ async function attachByRule(rule: MailRule, mail: ListedMail, deps: RulePassDeps
     if (!attachMail(db, mail, task, { id: `rule-${id}`, requestId: `rule-${id}`, origin: "rule", ruleRun: id, now }).ok) return "skipped";
   } else {
     const filed = await deps.attach.thread(mail, target.key, id);
-    if (!filed.ok) return filed.gone ? turnOff("is closed") : recordFailure(db, rule, mail, id, { title: cannot("could not take it"), message: filed.error }, now);
+    if (!filed.ok) return filed.gone ? turnOff("is closed") : recordOutcome(db, rule, mail, id, "failed", { title: cannot("could not take it"), message: filed.error }, now);
     logMailDecision(db, features, "attach", "rule", now, target.title);
   }
-  db.transaction(() => {
-    recordRun(db, rule, mail, id, "done", now);
-    db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.rule', ?, ?, 'done', ?, ?, ?)")
-      .run(`mail-rule:${id}`, id, `${DONE_BY.attach}: “${mail.subject}” → “${target.title}”`, "It stays in your mailbox and off the Desk.", now, now);
-  })();
-  return "done";
+  return recordOutcome(db, rule, mail, id, "done", { title: `${DONE_BY.attach}: “${mail.subject}” → “${target.title}”`, message: "It stays in your mailbox and off the Desk." }, now);
 }
 
 /**
