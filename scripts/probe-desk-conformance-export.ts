@@ -10,7 +10,7 @@ const GREENHOUSE = join(FIXTURES, "greenhouse");
 const CONSUMER_TIMEOUT_MS = 15_000;
 const TYPECHECK_TIMEOUT_MS = 60_000;
 const CONSUMERS = ["run.ts", "run-mail.ts"] as const;
-/** `run.ts` runs the capability and failure checks; `run-mail.ts` runs a Mail read package with listed mail on three connections. */
+/** `run.ts` runs the capability and failure checks; `run-mail.ts` runs the synthetic `tideway` Mail read package with listed mail on three connections. */
 export type ConformanceConsumer = (typeof CONSUMERS)[number];
 
 export async function collect(proc: Subprocess<"ignore", "pipe", "pipe">, timeoutMs = CONSUMER_TIMEOUT_MS): Promise<{ exitCode: number; stdout: string; stderr: string }> {
