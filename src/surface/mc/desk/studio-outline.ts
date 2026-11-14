@@ -25,22 +25,22 @@ function move(root: OutlineNode, id: string, parent: OutlineNode): void {
   if (node) parent.children.push(node);
 }
 type ProjectionEntry = MyDayMeta["studio"][number];
-function responseTask(project: OutlineNode, entry: ProjectionEntry, thread: StudioThread, at: number): OutlineNode {
+function responseTask(project: OutlineNode, entry: ProjectionEntry, thread: StudioThread, at: number, date?: string): OutlineNode {
   entry.pending ??= { id: `studio-response:${crypto.randomUUID()}`, at };
   let task = findNode(project, entry.pending.id);
   if (!task) {
-    task = { id: entry.pending.id, title: `Respond to the note on ${thread.question}`, weight: 50, ordering: "parallel", children: [], effort: 1 };
+    task = { id: entry.pending.id, title: `Respond to the note on ${thread.question}`, weight: 50, ordering: "parallel", children: [], effort: 1, ...(date ? { createdAt: date } : {}) };
     project.children.push(task);
   }
   return task;
 }
-function completion(state: AppState, entry: ProjectionEntry, thread: StudioThread, project: OutlineNode, area: OutlineNode): void {
+function completion(state: AppState, entry: ProjectionEntry, thread: StudioThread, project: OutlineNode, area: OutlineNode, today?: string): void {
   const responses = thread.responses.filter(r => r.text.trim() && responseCoverage(thread, r) > entry.response).sort((a, b) => responseCoverage(thread, a) - responseCoverage(thread, b));
   for (const response of responses) {
     const time = responseCoverage(thread, response);
     const note = thread.notes.find(n => !n.sample && Date.parse(n.at) > entry.response && Date.parse(n.at) <= time);
     if ((entry.pending && entry.pending.at <= time) || note) {
-      const task = responseTask(project, entry, thread, note ? Date.parse(note.at) : time);
+      const task = responseTask(project, entry, thread, note ? Date.parse(note.at) : time, today);
       const at = new Date(response.at);
       const date = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
       task.done = true;
@@ -56,7 +56,7 @@ function uniquelyIdentifiedThreads(input: StudioProjection): { source: string; t
   for (const thread of input.threads) if (thread.id) counts.set(thread.id, (counts.get(thread.id) ?? 0) + 1);
   return input.threads.flatMap(thread => thread.id && counts.get(thread.id) !== 1 ? [] : [{ source: thread.id ? `id:${thread.id}` : `path:${thread.path}`, thread }]);
 }
-export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioProjection): void {
+export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioProjection, date?: string): void {
   for (const entry of meta.studio) {
     const project = findNode(state.outline, entry.projectId);
     if (project) project.done = true;
@@ -73,12 +73,12 @@ export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioPro
     const configured = area && state.outline.children.includes(area) && (!input.areas || input.areas.includes(thread.areas[0] ?? ""));
     let project = findNode(state.outline, entry.projectId);
     if (!project && configured) {
-      project = { id: entry.projectId, title: thread.question, weight: 50, ordering: "parallel", children: [], done: true };
+      project = { id: entry.projectId, title: thread.question, weight: 50, ordering: "parallel", children: [], done: true, ...(date ? { createdAt: date } : {}) };
       area.children.push(project);
     }
     if (project && configured) {
       if (entry.pending) move(state.outline, entry.pending.id, project);
-      completion(state, entry, thread, project, area);
+      completion(state, entry, thread, project, area, date);
     }
     if (thread.state !== "active" || !configured) continue;
     if (!project) continue;
@@ -89,7 +89,7 @@ export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioPro
     const first = unanswered[0];
     if (first) {
       if (entry.pending) move(state.outline, entry.pending.id, current);
-      const task = responseTask(current, entry, thread, Date.parse(first.at));
+      const task = responseTask(current, entry, thread, Date.parse(first.at), date);
       task.title = `Respond to the note on ${thread.question}`;
       task.done = false;
       delete task.completedAt;

@@ -2,6 +2,7 @@ import { ancestorIndex, findNode, findParent, MAX_FOCUS_PER_MONTH, type AppState
 import type { BalanceCommand } from "./balance-command";
 import type { DeskOptions } from "./compose";
 import type { MyDayMeta } from "./my-day-schema";
+import { stampCreated, stampTouched } from "./balance-touch";
 import { studioOwned } from "./studio-outline";
 
 export const STALE_OUTLINE = "The outline changed in another window or source. Your draft is kept; reload the latest outline before saving again.";
@@ -24,6 +25,7 @@ export function completeOutlineLeaf(state: AppState, node: OutlineNode, date: st
   if (!area) throw new Error("This task needs an area.");
   node.done = true;
   node.completedAt = date;
+  stampTouched(node, date);
   if (state.log.some(event => event.taskId === node.id && event.date === date)) return;
   if (node.repeat) node.repeat.timesDone = (node.repeat.timesDone ?? 0) + 1;
   state.log.push({ taskId: node.id, areaId: area.id, effort: node.effort ?? 1, date, title: node.title });
@@ -45,13 +47,14 @@ export function outlineDestination(state: AppState, desk: DeskOptions, id: strin
   delete parent.done;
   return parent;
 }
-export function fileBalanceInbox(state: AppState, meta: MyDayMeta, desk: DeskOptions, id: string, parentId: string): void {
+export function fileBalanceInbox(state: AppState, meta: MyDayMeta, desk: DeskOptions, id: string, parentId: string, date: string): void {
   const index = meta.inbox.findIndex(node => node.id === id);
   const node = meta.inbox[index];
   if (!node) throw new Error("This Inbox item was already filed.");
   const parent = outlineDestination(state, desk, parentId);
   parent.children.push(node);
   meta.inbox.splice(index, 1);
+  stampTouched(node, date);
 }
 function hasStudioOwner(node: OutlineNode, meta: MyDayMeta): boolean {
   return studioOwned(meta, node.id) || node.children.some(child => hasStudioOwner(child, meta));
@@ -73,13 +76,14 @@ function removeInboxTask(state: AppState, meta: MyDayMeta, id: string): string {
 export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, command: BalanceCommand): string {
   if (command.revision !== meta.revision) throw new Error(STALE_OUTLINE);
   if (command.op === "outline-file") {
-    fileBalanceInbox(state, meta, desk, command.id, command.parent);
+    fileBalanceInbox(state, meta, desk, command.id, command.parent, date);
     return command.id;
   }
   if (command.op === "outline-add") {
     const parent = openParent(state, desk, meta, command.parent);
     delete parent.done;
     const node: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: command.weight ?? 50, ordering: "parallel", children: [], ...(command.context ? { context: command.context } : {}), ...(command.estimateMinutes ? { estimateMinutes: command.estimateMinutes } : {}), ...(command.kind === "project" ? { done: true } : { effort: command.effort ?? 1 }), ...(command.note ? { note: command.note } : {}), ...(command.dueDate ? { dueDate: command.dueDate } : {}) };
+    stampCreated(node, date);
     parent.children.push(node);
     return node.id;
   }
@@ -100,6 +104,7 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
     if (!isArea(state, node) && node.children.length === 0) node.effort = details.effort;
     if (details.estimateMinutes !== null) node.estimateMinutes = details.estimateMinutes;
     else delete node.estimateMinutes;
+    stampTouched(node, date);
     return node.id;
   }
   if (isArea(state, node)) throw new Error("Configured areas stay at the root. Pause their importance instead.");
@@ -108,11 +113,13 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
     if (node.done) return node.id;
     if (node.children.length > 0) node.done = true;
     else completeOutlineLeaf(state, node, date);
+    stampTouched(node, date);
     return node.id;
   }
   if (command.op === "outline-reopen") {
     delete node.done;
     delete node.completedAt;
+    stampTouched(node, date);
     return node.id;
   }
   const parent = findParent(state.outline, node.id);
@@ -130,5 +137,6 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   parent.children = parent.children.filter(child => child.id !== node.id);
   delete next.done;
   next.children.splice(Math.min(command.index ?? next.children.length, next.children.length), 0, node);
+  stampTouched(node, date);
   return node.id;
 }

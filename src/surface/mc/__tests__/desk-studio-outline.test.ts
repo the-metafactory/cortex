@@ -118,6 +118,30 @@ describe("Studio source projection", () => {
       expect(html).not.toContain(">Done</button>");
     } finally { db.close(); }
   });
+  test("stamps createdAt on the rows the Studio creates and never a touch", () => {
+    const f = fixture();
+    projectStudio(f.model, f.meta, f.source, "2026-11-01");
+    const entry = first(f.meta.studio);
+    const project = findNode(f.model.outline, entry.projectId);
+    const task = findNode(f.model.outline, entry.pending?.id ?? "");
+    if (!project || !task) throw new Error("Missing projected rows");
+    expect(project.createdAt).toBe("2026-11-01");
+    expect(project.touchedAt).toBeUndefined();
+    expect(task.createdAt).toBe("2026-11-01");
+    expect(task.touchedAt).toBeUndefined();
+    first(f.source.threads).areas = ["other", "lab"];
+    first(f.source.threads).responses.push({ at: responseAt, re: noteAt, text: "Use the small sketch." });
+    projectStudio(f.model, f.meta, f.source, "2026-11-02");
+    const moved = findNode(f.model.outline, entry.projectId);
+    const completed = findNode(f.model.outline, entry.pending?.id ?? task.id);
+    if (!moved || !completed) throw new Error("Missing projected rows after completion");
+    expect(findNode(f.model.outline, "area:other")?.children).toContain(moved);
+    expect(completed.done).toBe(true);
+    expect(moved).toMatchObject({ createdAt: "2026-11-01" });
+    expect(moved.touchedAt).toBeUndefined();
+    expect(completed).toMatchObject({ createdAt: "2026-11-01" });
+    expect(completed.touchedAt).toBeUndefined();
+  });
 });
 
 const directories: string[] = [];

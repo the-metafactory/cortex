@@ -119,4 +119,29 @@ describe("Mission Control balance storage", () => {
       db.close();
     }
   });
+
+  test("created and touched dates round-trip and a malformed one fails the load", () => {
+    const db = initDatabase(":memory:");
+    try {
+      const original = fixture();
+      const row = original.outline.children[0]?.children[0];
+      if (!row) throw new Error("Missing fixture row");
+      row.createdAt = "2026-10-29";
+      row.touchedAt = "2026-10-30";
+      saveBalanceState(db, original);
+      expect(loadBalanceState(db)).toEqual(original);
+      for (const field of ["createdAt", "touchedAt"] as const) {
+        const broken = fixture();
+        const target = broken.outline.children[0]?.children[0];
+        if (!target) throw new Error("Missing fixture row");
+        target[field] = "yesterday";
+        expect(() => saveBalanceState(db, broken)).toThrow();
+      }
+      const raw = db.query<{ data: string }, []>("SELECT data FROM desk_balance WHERE id = 1").get()?.data ?? "";
+      db.query("UPDATE desk_balance SET data = ? WHERE id = 1").run(raw.replace('"touchedAt":"2026-10-30"', '"touchedAt":"2026-10-30T10:00:00Z"'));
+      expect(() => loadBalanceState(db)).toThrow();
+    } finally {
+      db.close();
+    }
+  });
 });

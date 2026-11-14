@@ -26,6 +26,8 @@ const outline: z.ZodType<OutlineNode> = z.object({
   note: z.string().optional(),
   done: z.boolean().optional(),
   completedAt: date.optional(),
+  createdAt: date.optional(),
+  touchedAt: date.optional(),
   effort: z.union([z.literal(1), z.literal(2), z.literal(4)]).optional(),
   estimateMinutes: z.number().int().positive().optional(),
   dueDate: date.optional(),

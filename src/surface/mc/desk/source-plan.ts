@@ -9,6 +9,7 @@ import type { DeskOptions } from "./compose";
 import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import type { DeskItem } from "./types";
 import { outlineDestination } from "./balance-outline";
+import { stampTouched } from "./balance-touch";
 import { sourceIdentity, todo } from "./source-task";
 
 export function planSource({
@@ -52,7 +53,7 @@ export function planSource({
     throw new Error(
       "This focus project is no longer available. Refresh the proposal.",
     );
-  const taskId = todo(meta, source);
+  const taskId = todo(meta, source, date);
   const node = meta.inbox.find((n) => n.id === taskId);
   const link = meta.sources.find((s) => s.taskId === taskId);
   if (!node || !link)
@@ -61,6 +62,7 @@ export function planSource({
     parent.children.push(node);
     meta.inbox = meta.inbox.filter((n) => n.id !== taskId);
   }
+  stampTouched(node, date);
   meta.planned.push({
     filing: requestId,
     taskId,
