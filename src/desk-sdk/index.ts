@@ -1,4 +1,4 @@
-// glossary-ignore: host
+// glossary-ignore: host, run, message, body
 export { DESK_ADAPTER_SDK_VERSION } from "./version";
 import type { CancelRequest, DispatchRequest, LookupRequest, OwnerSupport, ReadbackRequest } from "../conversations/domain-adapters/operations/types";
 import type { ObservationRequest } from "../conversations/domain-adapters/reads/observation-types";
@@ -111,8 +111,10 @@ export interface DeskMailListing {
 }
 
 /**
- * The host's read bridge to Mail. `listed` resolves to `null` for a connection the host does not bind to a Mail
- * source and account for this adapter. It never runs the provider: it reads what the source last listed.
+ * The host's read bridge to Mail. Call `listed` only inside a backend call the host made for that same connection,
+ * such as a query handler; elsewhere it rejects with `mail_read_unadmitted`. It resolves to `null` for a connection
+ * the host does not bind to a Mail source and account for this adapter. It never runs the provider: it reads what
+ * the source last listed.
  */
 export interface DeskMailReadBridge {
   listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;

@@ -15,6 +15,7 @@ import type { ObjectReference } from "../types";
 import type { DomainAdapterRegistry } from "../registry";
 import { DeskPackageLoader } from "../package";
 import { mailReadRestriction, type MailConnectionBinding } from "../mail-read";
+import { withAdmittedCall } from "../package-backend";
 import { deskFixturePackageId, deskFixtureSetup, deskTestWorkspace, writeDeskFixturePackage } from "./fixtures/package-fixtures";
 
 const ADAPTER = "mail";
@@ -61,7 +62,7 @@ const backendSource = [
   "  globalThis.__deskMailHost = host;",
   `  return { declaration: ${JSON.stringify(declaration)}, bindings: { observations: {}, handlers: { ${JSON.stringify(CAPABILITY)}: async request => {`,
   "    const destination = request.destinations[0];",
-  "    const listing = await host.mail.listed({ adapterId: destination.adapterId, connectionId: destination.connectionId });",
+  "    const listing = await host.mail.listed({ adapterId: destination.adapterId, connectionId: globalThis.__deskMailReadOther ?? destination.connectionId });",
   "    seen.push(listing);",
   "    if (!listing) throw new Error('mail.not_a_mail_connection');",
   "    const items = listing.mail.map(mail => ({ messageId: mail.ref.messageId, account: mail.account, from: mail.from.address, subject: mail.subject, firstParagraph: mail.firstParagraph ?? '' }));",
@@ -74,7 +75,7 @@ const backendSource = [
 
 const listed = (id: string, account: string | undefined, subject: string, extra: Record<string, unknown> = {}) => ({
   kind: "mail", id, from: { name: "Sender Example", address: "sender@example.test" }, subject, receivedAt: AT, unread: true,
-  firstParagraph: `Opening line of ${subject}.\n\n${SECOND_PARAGRAPH} ${BODY_CANARY}`, ...(account === undefined ? {} : { account }), ...extra,
+  firstParagraph: `\n  \nOpening line of ${subject}.\n\n${SECOND_PARAGRAPH} ${BODY_CANARY}`, ...(account === undefined ? {} : { account }), ...extra,
 });
 const sourceOutput: Record<string, unknown> = {
   [SOURCE]: { items: [
@@ -100,7 +101,7 @@ const packageHost = (): DeskAdapterHost => {
 beforeEach(() => {
   provider.calls = 0;
   provider.failing = false;
-  Object.assign(globalThis, { __deskMailListings: [], __deskMailHost: undefined });
+  Object.assign(globalThis, { __deskMailListings: [], __deskMailHost: undefined, __deskMailReadOther: undefined });
 });
 
 afterEach(async () => {
@@ -215,6 +216,8 @@ async function query(rig: MailRig, reader: Reader, connectionIds: string[]): Pro
 const bindingOne: MailConnectionBinding = { adapterId: ADAPTER, connectionId: ONE, sourceId: SOURCE, account: ACCOUNT_ONE };
 const bindingTwo: MailConnectionBinding = { adapterId: ADAPTER, connectionId: TWO, sourceId: SOURCE, account: ACCOUNT_TWO };
 const released = (reader: Reader): string => JSON.stringify(reader.sends);
+const listedIn = (connectionId: string, target = connectionId): Promise<DeskMailListing | null> =>
+  withAdmittedCall({ adapterId: ADAPTER, connectionId }, () => packageHost().mail.listed({ adapterId: ADAPTER, connectionId: target }));
 
 async function openListedRig(mail: MailConnectionBinding[] = [bindingOne, bindingTwo]): Promise<{ cache: SourceCache; rig: MailRig }> {
   const cache = await listedSources();
@@ -245,11 +248,11 @@ describe("the Desk adapter host's Mail read bridge", () => {
   test("does not supply listed mail that names no account", async () => {
     const cache = await listedSources();
     const unbound = await loadMailAdapter(cache, [{ ...bindingOne, account: "" }]);
-    expect(await packageHost().mail.listed({ adapterId: ADAPTER, connectionId: ONE })).toBeNull();
+    expect(await listedIn(ONE)).toBeNull();
     await unbound.disable(ADAPTER);
 
     await loadMailAdapter(cache, [bindingOne, bindingTwo]);
-    const lists = await Promise.all([ONE, TWO].map(connectionId => packageHost().mail.listed({ adapterId: ADAPTER, connectionId })));
+    const lists = await Promise.all([ONE, TWO].map(connectionId => listedIn(connectionId)));
     const ids = lists.flatMap(listing => listing?.mail.map(mail => mail.ref.messageId) ?? []);
     expect(ids).not.toContain("<orphan@example.test>");
     expect(cache.cached().find(reading => reading.id === SOURCE)?.mail.some(mail => mail.id === "<orphan@example.test>" && mail.account === undefined)).toBe(true);
@@ -286,7 +289,7 @@ describe("the Desk adapter host's Mail read bridge", () => {
 
   test("reports a connection stale on a provider failure and reports nothing deleted", async () => {
     const { cache, rig } = await openListedRig();
-    const before = await packageHost().mail.listed({ adapterId: ADAPTER, connectionId: ONE });
+    const before = await listedIn(ONE);
 
     await failNextListing(cache);
     const result = await query(rig, rig.local, [ONE]);
@@ -302,20 +305,33 @@ describe("the Desk adapter host's Mail read bridge", () => {
   test("reports a connection whose source has not listed yet as stale with no mail", async () => {
     const empty = new SourceCache(() => Promise.resolve("{}"));
     await loadMailAdapter(empty, [bindingOne]);
-    expect(await packageHost().mail.listed({ adapterId: ADAPTER, connectionId: ONE })).toEqual({ connection: { adapterId: ADAPTER, connectionId: ONE }, account: ACCOUNT_ONE, health: { state: "stale", code: "not_listed" }, mail: [] });
+    expect(await listedIn(ONE)).toEqual({ connection: { adapterId: ADAPTER, connectionId: ONE }, account: ACCOUNT_ONE, health: { state: "stale", code: "not_listed" }, mail: [] });
   });
 
   test("serves no connection of another adapter and refuses once the generation is disabled", async () => {
     const cache = await listedSources();
     const loader = await loadMailAdapter(cache, [bindingOne, { ...bindingTwo, adapterId: "other-adapter" }]);
     const host = packageHost();
-    expect(await host.mail.listed({ adapterId: "other-adapter", connectionId: TWO })).toBeNull();
-    expect(await host.mail.listed({ adapterId: ADAPTER, connectionId: TWO })).toBeNull();
+    expect(await withAdmittedCall({ adapterId: "other-adapter", connectionId: TWO }, () => host.mail.listed({ adapterId: "other-adapter", connectionId: TWO }))).toBeNull();
+    expect(await listedIn(TWO)).toBeNull();
     expect(host.sdkVersion).toBe("1.5.0");
 
     await loader.disable(ADAPTER);
 
-    await expect(host.mail.listed({ adapterId: ADAPTER, connectionId: ONE })).rejects.toMatchObject({ error: { code: "adapter_unavailable" } });
+    await expect(listedIn(ONE)).rejects.toMatchObject({ error: { code: "adapter_unavailable" } });
+  });
+
+  test("serves a connection's mail only inside a call admitted for that same connection", async () => {
+    const { rig } = await openListedRig([bindingOne, { ...bindingTwo, dataPolicy: "cloud" }]);
+    await expect(packageHost().mail.listed({ adapterId: ADAPTER, connectionId: ONE })).rejects.toMatchObject({ error: { code: "mail_read_unadmitted" } });
+    await expect(listedIn(TWO, ONE)).rejects.toMatchObject({ error: { code: "mail_read_unadmitted" } });
+    Object.assign(globalThis, { __deskMailReadOther: ONE });
+
+    const result = await query(rig, rig.cloud, [TWO]);
+
+    expect(result.status).toBe("unavailable");
+    expect(seenListings()).toHaveLength(0);
+    expect(rig.cloud.sends).toHaveLength(0);
   });
 
   test("leaves the native Mail listing unchanged and runs no provider call", async () => {
@@ -327,7 +343,7 @@ describe("the Desk adapter host's Mail read bridge", () => {
     const rig = await openMailRig(loader, [bindingOne, bindingTwo]);
 
     await query(rig, rig.local, [ONE, TWO]);
-    const listing = await packageHost().mail.listed({ adapterId: ADAPTER, connectionId: ONE });
+    const listing = await listedIn(ONE);
     const first = listing?.mail[0] as { subject: string } | undefined;
     if (first) first.subject = "changed by the adapter";
 

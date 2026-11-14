@@ -1,4 +1,4 @@
-<!-- glossary-ignore: host, token, path, user, data -->
+<!-- glossary-ignore: host, token, path, user, data, message, body, run -->
 # Desk adapter package and SDK authoring contract
 
 This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.5.0, an additive amendment of 1.0.0 through 1.4.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.5.0"`).
@@ -191,8 +191,9 @@ The host supplies the loader's `mail` option (`MailReadSource` in `src/conversat
 
 - `account` is the account the host bound to the connection, not one the adapter names.
 - `mail` holds only the mail that source listed under that account. Mail that names no account is never supplied. Each entry is referenced as `{ connection, messageId }`, so the same Message-ID under two connections is two entries.
-- An entry carries the sender, subject, date, unread flag and at most the first paragraph (cut at the first blank line, 1,000 characters at most). It never carries a body.
+- An entry carries the sender, subject, date, unread flag and at most the first paragraph (leading blank lines dropped, cut at the next blank line, 1,000 characters at most). It never carries a body.
 - `health` is `{ state: "fresh", listedAt }` after a successful listing. After a provider failure it is `{ state: "stale", code: "provider_failure" }` and the listing keeps the last listed mail, so nothing is reported as deleted. A source that has not listed yet is `{ state: "stale", code: "not_listed" }` with no mail.
+- The call is served only inside a backend call the host admitted for that same connection (a query handler, an observation fetch or an action-connector call). Called anywhere else, including from a handler running for another connection, it rejects with `mail_read_unadmitted`, so a handler cannot carry one connection's mail into another connection's release.
 - A connection of another adapter, an unknown connection or one with no account resolves to `null`. Once the adapter's generation is disabled, uninstalled or superseded, the call rejects with `adapter_unavailable`.
 
 The host publishes each Mail connection's read restriction with `mailReadRestriction(binding, destination, metadata)`. A connection with no explicit `dataPolicy` is `local`, so the query runner denies a cloud reader with status `denied`, no group and no count, and the adapter is never called.

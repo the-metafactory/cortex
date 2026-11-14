@@ -1,5 +1,5 @@
 // ============================================================================
-// glossary-ignore: host, run
+// glossary-ignore: host, run, message, body
 // GENERATED FILE — DO NOT EDIT BY HAND.
 //
 // Self-contained type artifact for the Desk adapter SDK. Out-of-tree Desk
@@ -777,8 +777,10 @@ export interface DeskMailListing {
 	readonly mail: readonly DeskListedMail[];
 }
 /**
- * The host's read bridge to Mail. `listed` resolves to `null` for a connection the host does not bind to a Mail
- * source and account for this adapter. It never runs the provider: it reads what the source last listed.
+ * The host's read bridge to Mail. Call `listed` only inside a backend call the host made for that same connection,
+ * such as a query handler; elsewhere it rejects with `mail_read_unadmitted`. It resolves to `null` for a connection
+ * the host does not bind to a Mail source and account for this adapter. It never runs the provider: it reads what
+ * the source last listed.
  */
 export interface DeskMailReadBridge {
 	listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;

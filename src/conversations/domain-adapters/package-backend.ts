@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { TrustedConnector } from "../authority";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskObservationBinding } from "../../desk-sdk";
 import { OwnerSupportSchema, type OwnerSupport } from "./operations/types";
@@ -29,6 +30,17 @@ const OMITTED = (path: DeskBackendPath): DeskBackendPathState => unavailable(`${
 const NO_DISPATCH_CAPABILITY = "desk.dispatch.unavailable";
 
 const settled = <T>(run: () => T): Promise<Awaited<T>> => new Promise(resolve => { resolve(run() as Awaited<T>); });
+
+const admittedCalls = new AsyncLocalStorage<string>();
+/** The adapter-and-connection key of a backend call. */
+export const connectionKey = (connection: DeskAdapterConnection): string => JSON.stringify([connection.adapterId, connection.connectionId]);
+/** The key of the connection whose admitted backend call is running now, if any. */
+export const admittedCallKey = (): string | undefined => admittedCalls.getStore();
+
+/** Runs one admitted backend call for a connection; host reads such as listed mail serve only that connection inside it. */
+export function withAdmittedCall<T>(connection: DeskAdapterConnection, run: () => T): T {
+  return admittedCalls.run(connectionKey(connection), run);
+}
 
 export class DeskBackendUnavailableError extends Error {
   constructor(readonly error: BoundaryError) {
@@ -91,7 +103,7 @@ export function adaptDeskBackend(input: DeskBackendInput): DeskBackendConnector 
   const call = <T>(run: () => T): T => {
     const gated = input.gate();
     if (gated) throw new DeskBackendUnavailableError(gated);
-    return run();
+    return withAdmittedCall(input.connection, run);
   };
   const action = input.action;
   const queryIds = new Set(input.declaration.capabilities.filter(capability => capability.kind === "query").map(capability => capability.capabilityId));
