@@ -1,6 +1,5 @@
 import { required } from "./required";
 import type { OutlineNode, Recurrence } from "./types";
-import { daysBetween } from "./scheduler";
 export function shiftDays(iso: string, days: number): string {
     const t = Date.parse(iso + "T00:00:00Z") + days * 86400000;
     return new Date(t).toISOString().slice(0, 10);
@@ -40,6 +39,22 @@ export function recurrenceFinished(repeat: Recurrence, next: string): boolean {
         return true;
     return false;
 }
+/** When a repeating leaf comes back. `returnsOn` is its next occurrence and `reappearsOn` that date minus its lead days, the day `applyRecurrence` reopens it; both are null while the row is open or once the repeat is finished. */
+export interface RecurrenceProjection {
+    returnsOn: string | null;
+    finished: boolean;
+    reappearsOn: string | null;
+}
+export function recurrenceProjection(node: OutlineNode): RecurrenceProjection | null {
+    if (!node.repeat)
+        return null;
+    if (node.children.length > 0 || node.done !== true || !node.completedAt)
+        return { returnsOn: null, finished: false, reappearsOn: null };
+    const next = nextOccurrence(node.completedAt, node.repeat);
+    if (recurrenceFinished(node.repeat, next))
+        return { returnsOn: null, finished: true, reappearsOn: null };
+    return { returnsOn: next, finished: false, reappearsOn: shiftDays(next, -Math.floor(node.leadDays ?? 0)) };
+}
 export interface RespawnResult {
     changed: boolean;
     respawned: string[];
@@ -57,14 +72,13 @@ export function applyRecurrence(outline: OutlineNode, today: string): RespawnRes
             result.respawned.push(node.id);
             return;
         }
-        const next = nextOccurrence(node.completedAt, node.repeat);
-        if (recurrenceFinished(node.repeat, next))
+        const { returnsOn, reappearsOn } = required(recurrenceProjection(node));
+        if (returnsOn === null || reappearsOn === null)
             return;
-        const lead = node.leadDays ?? 0;
-        if (daysBetween(today, next) <= lead) {
+        if (today >= reappearsOn) {
             node.done = false;
             delete node.completedAt;
-            node.dueDate = next;
+            node.dueDate = returnsOn;
             if (node.deferredUntil && node.deferredUntil <= today)
                 delete node.deferredUntil;
             result.changed = true;
