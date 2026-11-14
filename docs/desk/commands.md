@@ -134,6 +134,8 @@ Event fields:
 | `location` | no | String. |
 | `online` | no | Boolean. An online event with a URL offers a Join action. |
 | `url` | no | Link beginning with `http:`, `https:`, or `message:`. |
+| `organizer` | no | Object with `address` and optional `name`. Addresses are compared without regard to case. |
+| `attendees` | no | Array of objects with `address` and optional `name`, at most 500 kept. An entry whose address does not parse is dropped; the event is kept. With `organizer`, these are the people the `mail.link-meeting` auto-link checks a sender against. |
 
 Mail fields:
 

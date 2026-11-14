@@ -49,6 +49,20 @@ describe("the source contract", () => {
     expect(parsed.dropped).toBe(2);
   });
 
+  it("reads an event's organizer and attendees in lowercase, and drops an address that does not parse without dropping the event", () => {
+    const parsed = parseSourceOutput(JSON.stringify({
+      events: [
+        { id: "a", start: at("13:00"), title: "Venue walkthrough", organizer: { name: "Grace", address: " Grace@Example.org " }, attendees: [{ address: "Bob@Example.org" }, { address: "not an address" }, "ada@example.org"] },
+        { id: "b", start: at("14:00"), title: "Bad organizer", organizer: { address: "nobody" } },
+      ],
+    }));
+    expect(parsed.events.map((e) => ({ id: e.id, organizer: e.organizer, attendees: e.attendees }))).toEqual([
+      { id: "a", organizer: { name: "Grace", address: "grace@example.org" }, attendees: [{ address: "bob@example.org" }] },
+      { id: "b", organizer: undefined, attendees: undefined },
+    ]);
+    expect(parsed.dropped).toBe(0);
+  });
+
   it("runs a source once per interval, shares a run between requests, and keeps the last reading on failure", async () => {
     let calls = 0;
     let fail = false;

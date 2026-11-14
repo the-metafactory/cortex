@@ -13,20 +13,6 @@ export const SAFE_LINK = /^(https?:|message:)/i;
 const safeLink = z.string().refine((u) => SAFE_LINK.test(u), "must start with http:, https: or message:");
 const isoDate = z.string().refine((s) => Number.isFinite(Date.parse(s)), "must be an ISO 8601 date and time");
 
-export const SourceEventSchema = z.object({
-  id: z.string().min(1),
-  start: isoDate,
-  end: isoDate.optional(),
-  allDay: z.boolean().optional(),
-  title: z.string().min(1),
-  calendar: z.string().trim().min(1).max(200).optional(),
-  calendarId: z.string().trim().min(1).max(500).optional(),
-  location: z.string().optional(),
-  online: z.boolean().optional(),
-  url: safeLink.optional(),
-  availability: EventAvailabilitySchema.optional(),
-});
-
 export const AUTH_VERDICTS = ["pass", "fail", "softfail", "neutral", "none", "temperror", "permerror", "policy"] as const;
 
 function printable(v: string): string {
@@ -141,6 +127,25 @@ export const SourceMailSchema = z.object({
 const MailAddressSchema = z.object({
   name: z.string().transform(printable).pipe(z.string().max(200)).optional().catch(undefined),
   address: z.string().trim().toLowerCase().pipe(z.string().min(3).max(320).regex(/^[^\s<>@,;]+@[^\s<>@,;]+$/)),
+});
+
+const MAX_EVENT_ATTENDEES = 500;
+
+/** A calendar event. `organizer` and `attendees` are the meeting's people, read by the `mail.link-meeting` auto-link; entries whose address does not parse are dropped. */
+export const SourceEventSchema = z.object({
+  id: z.string().min(1),
+  start: isoDate,
+  end: isoDate.optional(),
+  allDay: z.boolean().optional(),
+  title: z.string().min(1),
+  calendar: z.string().trim().min(1).max(200).optional(),
+  calendarId: z.string().trim().min(1).max(500).optional(),
+  location: z.string().optional(),
+  online: z.boolean().optional(),
+  url: safeLink.optional(),
+  availability: EventAvailabilitySchema.optional(),
+  organizer: MailAddressSchema.optional().catch(undefined),
+  attendees: lenientList(MailAddressSchema, MAX_EVENT_ATTENDEES),
 });
 
 const MAX_RECIPIENTS = 20;
