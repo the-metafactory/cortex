@@ -171,11 +171,16 @@ export class MailMoveHost {
     const found = await this.options.journal.read(operationId);
     if (!found) return null;
     const needsCompensations = !fresh && found.journal.state === "succeeded" && ("kind" in found.journal.snapshot || found.journal.snapshot.capabilityId !== MAIL_RESTORE_CAPABILITY);
-    const compensations = needsCompensations ? (compensationLinks(await this.loadAll()).get(operationId) ?? []) : [];
+    const compensations = needsCompensations ? await this.loadCompensations(operationId) : [];
     return this.project(found, compensations);
   }
 
   private message(messageId: string) { return mailMessageRef(this.options.adapterId, this.options.connectionId, messageId); }
+
+  private async loadCompensations(operationId: string): Promise<StoredOperation[]> {
+    const stored = await Promise.all((await this.options.index.compensations(operationId)).map(id => this.options.journal.read(id)));
+    return stored.filter((item): item is StoredOperation => item !== null);
+  }
 
   private async loadAll(): Promise<StoredOperation[]> {
     const stored = await Promise.all((await this.options.index.list()).map(id => this.options.journal.read(id)));
@@ -193,7 +198,7 @@ export class MailMoveHost {
     const operationId = `mail-move:${this.newId()}`;
     const decision = await this.options.authority.approve({ operationId, idempotencyKey: operationId, ownerRequestId: randomUUID(), snapshot, ...(compensates ? { links: { compensatesOperationId: compensates } } : {}) }, grantId);
     if (decision.kind === "denied") return { kind: "denied", reason: decision.reason };
-    await this.options.index.add(operationId);
+    await this.options.index.add(operationId, compensates);
     await this.options.dispatch(operationId);
     const receipt = await this.receiptOf(operationId, true);
     if (!receipt) return { kind: "denied", reason: reason("mail.receipt_missing", "The attempt left no journal record.") };

@@ -51,7 +51,8 @@ async function openRig(only: readonly MailMoveAction[] = ["move", "trash", "rest
   if (!registered.ok) throw new Error(registered.error.code);
   const journal = new OperationJournalStore(engine, registry);
   const ids: string[] = [];
-  const index = { ids, add: (id: string) => { if (!ids.includes(id)) ids.push(id); return Promise.resolve(); }, list: () => Promise.resolve([...ids]) };
+  const links = new Map<string, string[]>();
+  const index = { ids, add: (id: string, compensates?: string) => { if (!ids.includes(id)) ids.push(id); if (compensates) links.set(compensates, [...(links.get(compensates) ?? []), id]); return Promise.resolve(); }, list: () => Promise.resolve([...ids]), compensations: (original: string) => Promise.resolve([...(links.get(original) ?? [])]) };
   const folders = new Map<string, string>([["m1", "INBOX"], ["m2", "INBOX"], ["m3", "INBOX"]]);
   const calls: DispatchRequest[] = [];
   const grants: Rig["grants"] = [];

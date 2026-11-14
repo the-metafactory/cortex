@@ -19,7 +19,7 @@ export type LegacyMoveEvidence = z.infer<typeof LegacyMoveEvidenceSchema>;
 export interface LegacyMoveConnection { adapterId: string; connectionId: string }
 
 export interface LegacyMoveImportResult { imported: string[]; unchanged: string[]; changed: string[] }
-export interface OperationIndex { add(operationId: string): Promise<void>; list(): Promise<string[]> }
+export interface OperationIndex { add(operationId: string, compensates?: string): Promise<void>; list(): Promise<string[]>; compensations(originalOperationId: string): Promise<string[]> }
 
 export const legacyMoveOperationId = (id: string): string => `mail-move:${id}`;
 const IMPORT_REASON = "A legacy Desk move has no lifecycle approval; its Undo runs as a new linked operation.";
