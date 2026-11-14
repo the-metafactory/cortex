@@ -166,7 +166,7 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 - `inbox` and `proposals`, oldest first. Proposals carry their effective `policy`, which also counts the `target.area`.
 - `problems`: one entry per file that could not be read or parsed, with its `path` and a `reason`. A broken file never breaks the response.
 
-Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText` and its effective `policy`.
+Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText`, its effective `policy` and its sparring `personas`.
 
 `GET /api/desk/studio/relations?thread=<slug>` returns one thread's **Relates to** groups, computed on request and never stored:
 
@@ -253,9 +253,9 @@ Every successful filing appears in Done for you, with the reason and Undo. Undo 
 
 ## Sparring and Think now
 
-On an open thread, Think now, Grill me, Argue the other side, Red team and First principles enqueue Ranger's configured `ivy-think` job. Each name in `mc.desk.studio.personas` adds a “What would X say?” button. Personas are optional, with at most 20 names of up to 100 characters. The Desk uses the existing `mc.desk.ranger.bin` and optional `config` settings. Ranger's Studio directory must match this Studio.
+On an open thread, Think now, Grill me, Argue the other side, Red team and First principles enqueue Ranger's configured `ivy-think` job. Each persona adds a “What would X say?” button. A thread's personas are the names in `mc.desk.studio.personas` (optional, at most 20 names of up to 100 characters), then the thread's people: its People group under Relates to, that is material items of kind `person`, `people` or `contact` and kept person relations, in material order. At most 10 thread people are offered; a name over 100 characters or with a line break is not, and a name that is also configured appears once. Open relation proposals and free text never add a persona. `GET /api/desk/studio` serves each thread's list as `personas: [{ "name": "Nico", "from": "thread" }]`, with `from` `config` or `thread`. The Desk uses the existing `mc.desk.ranger.bin` and optional `config` settings. Ranger's Studio directory must match this Studio.
 
-The `spar` modes are `think`, `grill`, `other-side`, `red-team`, `first-principles` and `persona:<configured name>`. Every request carries its explicit mode and the trigger `You asked: <mode>`. An explicit mode bypasses the automatic once-per-thread daily limit. It still consumes the native daily budget for the thread's strictest model policy; started failed attempts also count. Budgets reset at midnight UTC. When the budget is spent, buttons explain why they are disabled. A request already queued remains queued with Ranger's deferral reason.
+The `spar` modes are `think`, `grill`, `other-side`, `red-team`, `first-principles` and `persona:<name>`, where the name is one of the thread's personas; any other name is refused with 400. Every request carries its explicit mode and the trigger `You asked: <mode>`. An explicit mode bypasses the automatic once-per-thread daily limit. It still consumes the native daily budget for the thread's strictest model policy; started failed attempts also count. Budgets reset at midnight UTC. When the budget is spent, buttons explain why they are disabled. A request already queued remains queued with Ranger's deferral reason.
 
 The response is `{ ok, message, studio }`. Ranger retains the request id after completion, so a retry uses the original job rather than starting another. Reusing an id with a different thread or mode returns a conflict. The page keeps the request pending until a note carrying that job's `run` UUID appears. Other notes cannot clear it. A failed job shows its failure reason. Queue and note changes arrive through the Studio's 30-second refresh.
 

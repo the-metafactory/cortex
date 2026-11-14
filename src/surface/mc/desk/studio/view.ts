@@ -1,5 +1,6 @@
 import { DEFAULT_YES_FILTER } from "../yes-filter";
 import type { StudioThinking } from "./thinking";
+import { sparPersonas, type SparPersona } from "./relates";
 import type { AreaPolicy, DeskArea, StudioOptions } from "../types";
 import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioCapture, type StudioProposal, type StudioTarget, type StudioThread } from "./format";
 
@@ -25,6 +26,7 @@ export interface StudioThreadView extends StudioThread {
   policy: AreaPolicy;
   place?: number;
   overCap: boolean;
+  personas: SparPersona[];
 }
 
 export interface StudioProposalView extends StudioProposal {
@@ -85,7 +87,7 @@ export function buildStudioView(files: StudioFiles, options: StudioOptions, area
     return { ...item, policy };
   };
 
-  const threads: StudioThreadView[] = parseAll(files.threads, parseThreadFile).map((t) => ({ ...withPolicy(t), overCap: false }));
+  const threads: StudioThreadView[] = parseAll(files.threads, parseThreadFile).map((t) => ({ ...withPolicy(t), overCap: false, personas: sparPersonas(options, t) }));
   const active = threads
     .filter((t) => t.state === "active")
     .sort(byOpened)
