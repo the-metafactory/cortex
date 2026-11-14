@@ -14,7 +14,8 @@ import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import { queryMailLog } from "../desk/mail-log";
 import { activeMailLink } from "../desk/links";
-import { WORK_MAIL_NO_THREAD, mailLine } from "../desk/mail-studio";
+import { WORK_MAIL_NO_THREAD, mailLine, senderPerson } from "../desk/mail-studio";
+import { threadPeople } from "../desk/studio/relates";
 import { createRule, DEFAULT_MAIL_RULES, runMailRules, undoRuleRun } from "../desk/mail-rules";
 import { ruleAttach } from "../desk/rule-attach";
 import type { CaptureModel, CaptureRequest } from "../desk/studio/capture";
@@ -46,6 +47,10 @@ const act = async (body: unknown): Promise<{ status: number; json: Record<string
 };
 const readThread = (slug: string): string => readFileSync(join(dir, `threads/${slug}.md`), "utf8");
 const git = (...args: string[]): string => gitIn(dir, ...args);
+const undoLast = (requestId: string): Promise<Response> => {
+  const id = readDone(db, NOW)[0]?.itemKey ?? "";
+  return handleDeskCaptureUndo(new Request("http://localhost/api/desk/capture/undo", { method: "POST", body: JSON.stringify({ id, requestId }) }), db, runtime);
+};
 
 beforeEach(async () => {
   dir = seedStudioRepo("desk-mail-studio-", { engines: thread("What can engines make?", "lab"), home: thread("How do we live at home?", "private") });
@@ -138,6 +143,7 @@ describe("Add a mail to a Studio thread", () => {
     expect(inbox).toContain("via: mail");
     expect(inbox).toContain("> The analytical engine could weave patterns.");
     expect(readThread("engines")).not.toContain("capture:");
+    expect(inbox).not.toContain("person:");
   });
 
   it("Undo removes the capture and its quoted text from the thread", async () => {
@@ -147,9 +153,8 @@ describe("Add a mail to a Studio thread", () => {
     expect(added).toContain("  > The analytical engine could weave patterns.");
     expect(added).toContain("you chose this thread");
     const parsed = parseThreadFile("threads/engines.md", added);
-    expect(parsed.ok && parsed.value.material.map((m) => m.kind)).toEqual(["link", "capture"]);
-    const id = readDone(db, NOW)[0]?.itemKey ?? "";
-    const res = await handleDeskCaptureUndo(new Request("http://localhost/api/desk/capture/undo", { method: "POST", body: JSON.stringify({ id, requestId: "req-undo-2" }) }), db, runtime);
+    expect(parsed.ok && parsed.value.material.map((m) => m.kind)).toEqual(["link", "capture", "person"]);
+    const res = await undoLast("req-undo-2");
     expect(res.status).toBe(200);
     const after = readThread("engines");
     expect(after).not.toContain("capture:");
@@ -184,7 +189,7 @@ describe("Add a mail to a Studio thread", () => {
     const body = await (await handleGetDeskStudio(runtime)).json() as { materialText: string; studio: { active: { slug: string; material: { kind: string; text?: string }[] }[] } };
     expect(body.materialText).toBe("untrusted");
     const material = body.studio.active.find((t) => t.slug === "engines")?.material ?? [];
-    expect(material.map((m) => [m.kind, m.text ?? null])).toEqual([["link", null], ["capture", "The analytical engine could weave patterns.\nSecond line of the body."]]);
+    expect(material.map((m) => [m.kind, m.text ?? null])).toEqual([["link", null], ["capture", "The analytical engine could weave patterns.\nSecond line of the body."], ["person", null]]);
   });
 
   it("links a Studio thread to a meeting", async () => {
@@ -217,6 +222,54 @@ describe("Add a mail to a Studio thread", () => {
     const { studio: _studio, ...rest } = runtime.options ?? { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [] };
     runtime = { ...runtime, options: rest };
     expect((await act({ action: "studio.propose", key: "mail:w1" })).status).toBe(409);
+  });
+
+  it("adds the sender as a person under the capture, so the thread counts them among its people", async () => {
+    await act({ action: "studio.add", key: "mail:w1", requestId: "req-person-1", thread: "engines", includeText: true });
+    const text = readThread("engines");
+    expect(text).toMatch(/- capture: \[capture-[a-f0-9]{32}\] Mail from Ada Lovelace[^\n]*\n( {2}>[^\n]*\n)+- person: Ada Lovelace\n/);
+    const parsed = parseThreadFile("threads/engines.md", text);
+    expect(parsed.ok && threadPeople(parsed.value).map((p) => p.title)).toEqual(["Ada Lovelace"]);
+  });
+
+  it("does not add a sender without a display name", async () => {
+    await act({ action: "studio.add", key: "mail:h1", requestId: "req-person-2", thread: "home", includeText: false });
+    expect(readThread("home")).toContain("Mail from nan@example.org");
+    expect(readThread("home")).not.toContain("person:");
+  });
+
+  it("does not add a sender the thread already names, and Undo keeps that person", async () => {
+    writeFileSync(join(dir, "threads/engines.md"), readThread("engines").replace("- link: Existing source", "- person: ada  LOVELACE\n\n- link: Existing source"));
+    git("commit", "-qam", "Name Ada");
+    const seeded = readThread("engines");
+    await act({ action: "studio.add", key: "mail:w1", requestId: "req-person-3", thread: "engines", includeText: false });
+    expect(readThread("engines").match(/- person: /g)).toHaveLength(1);
+    const res = await undoLast("req-person-4");
+    expect(await res.json()).toMatchObject({ ok: true, message: "Removed the capture from its thread. Later changes were kept." });
+    expect(readThread("engines").split("## Log")[0]).toBe(seeded.split("## Log")[0]);
+  });
+
+  it("Undo removes the person line its capture added, and keeps later material", async () => {
+    await act({ action: "studio.add", key: "mail:w1", requestId: "req-person-5", thread: "engines", includeText: false });
+    writeFileSync(join(dir, "threads/engines.md"), readThread("engines").replace("## Log", "- link: Later source\n\n## Log"));
+    git("commit", "-qam", "Later material");
+    const res = await undoLast("req-person-6");
+    expect(await res.json()).toMatchObject({ ok: true, message: "Removed the capture and the sender it added from its thread. Later changes were kept." });
+    const parsed = parseThreadFile("threads/engines.md", readThread("engines"));
+    expect(parsed.ok && parsed.value.material.map((m) => `${m.kind}: ${m.label}`)).toEqual(["link: Existing source", "link: Later source"]);
+  });
+
+  it("matches the sender to a thread person by normalised name, including a kept person relation", () => {
+    const item = (name: string | undefined) => ({ mail: { ...mail("x"), from: { ...(name === undefined ? {} : { name }), address: "ada@example.org" }, sourceId: "work-mail" }, area: "lab", summary: null });
+    const empty = { material: [], notes: [] };
+    expect(senderPerson(item("Ada Lovelace"), empty)).toBe("Ada Lovelace");
+    expect(senderPerson(item(undefined), empty)).toBeNull();
+    expect(senderPerson(item("ADA@example.org"), empty)).toBeNull();
+    expect(senderPerson(item("someone@else.org"), empty)).toBeNull();
+    expect(senderPerson(item("Ada Lovelace"), { material: [{ kind: "contact", label: "Ada-Lovelace" }], notes: [] })).toBeNull();
+    expect(senderPerson(item("Ada Lovelace"), { material: [{ kind: "link", label: "Ada Lovelace" }], notes: [] })).toBe("Ada Lovelace");
+    const kept = { at: "2026-11-01 10:00", kind: "relation", status: "kept", text: "", relates: { kind: "person", label: "Ada Lovelace" } };
+    expect(senderPerson(item("Ada Lovelace"), { material: [], notes: [kept] } as never)).toBeNull();
   });
 
   it("writes one line with an escaped link", () => {

@@ -41,6 +41,7 @@ export const captureFiler = (options: StudioOptions, ctx: ActContext): Classifie
 
 export const captureId = (requestId: string): string => `capture-${createHash("sha256").update(requestId).digest("hex").slice(0, 32)}`;
 export const captureMarker = (id: string): string => `- capture: [${id}] `;
+export const SENDER_PERSON = "- person: ";
 
 export type FilerChoice = z.infer<typeof FilerAnswer>;
 
@@ -130,11 +131,15 @@ async function undoPlan(ctx: ActContext, dir: string, id: string): Promise<ActPl
   const expected = entryBlock(originalLines, expectedAt);
   const found = entryBlock(lines, at);
   if (found.length !== expected.length || found.some((l, i) => l !== expected[i])) return refuse();
-  const next = lines[at + found.length];
+  const person = originalLines[expectedAt + expected.length];
+  const withPerson = person?.startsWith(SENDER_PERSON) === true && lines[at + found.length] === person;
+  const end = at + found.length + (withPerson ? 1 : 0);
+  const next = lines[end];
   const from = lines[at - 1]?.trim() === "" && (next === undefined || next.trim() === "" || next.startsWith("## ")) ? at - 1 : at;
-  const changed = appendLog([...lines.slice(0, from), ...lines.slice(at + found.length)].join("\n"), localTime(ctx.now), `Undid capture ${id}`);
+  const changed = appendLog([...lines.slice(0, from), ...lines.slice(end)].join("\n"), localTime(ctx.now), `Undid capture ${id}`);
   if (!changed) return { status: 409, error: "That thread cannot be edited; nothing was written." };
-  return { writes: [{ path: file.path, text: changed }], removes: [], subject: `Undo capture ${id}`, message: "Removed the capture from its thread. Later changes were kept." };
+  const message = `Removed the capture${withPerson ? " and the sender it added" : ""} from its thread. Later changes were kept.`;
+  return { writes: [{ path: file.path, text: changed }], removes: [], subject: `Undo capture ${id}`, message };
 }
 
 export async function undoStudioCapture(input: Omit<CaptureInput, "text" | "model"> & { id: string }): Promise<ActResult> {
