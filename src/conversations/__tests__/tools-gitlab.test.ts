@@ -124,6 +124,30 @@ describe("GitLab reads through conversation dispatch", () => {
     expect(JSON.stringify(caps)).toContain("login-required");
   });
 
+  test("HTTP failure statuses take precedence over identifiers and response text", async () => {
+    for (const [code, expected] of [[401, "login-required"], [403, "permission-denied"], [404, "not-found"], [429, "rate-limited"], [502, "provider-failure"]] as const) {
+      for (const number of [401, 403, 404, 429]) {
+        const error = `GET https://${HOST}/api/v4/${PATH}/issues/${number}: ${code} {message: unavailable network resource}`;
+        const r = gitlabRig({ [`${PATH}/issues/${number}`]: fail(error) });
+        expect((await status(r, "gitlab_item", { ...base, kind: "issue", number })).status).toBe(expected);
+      }
+    }
+  });
+
+  test("pipeline pages with conflicting project IDs withhold evidence", async () => {
+    const r = gitlabRig({ [`${PATH}/merge_requests/7/pipelines`]: ok([{ ...pipeline, project_id: 99 }]) });
+    const result = await status(r, "gitlab_pipelines", mrInput);
+    expect(result.status).toBe("identity-mismatch");
+    expect(result.entries).toBeUndefined();
+  });
+
+  test("minimal MR pipeline list payloads get canonical URLs without detail fields", async () => {
+    const r = gitlabRig({ [`${PATH}/merge_requests/7/pipelines`]: ok([{ id: 81, sha: HEAD, ref: "main", status: "success" }]) });
+    expect(await status(r, "gitlab_pipelines", mrInput)).toMatchObject({ status: "ok", headSha: HEAD, entries: [{ id: 81, sha: HEAD, status: "success", url: pipeline.web_url }] });
+    r.routes.set(`${PATH}/merge_requests/7/pipelines`, ok([{ ...pipeline, web_url: "https://elsewhere.example/pipelines/81" }]));
+    expect((await status(r, "gitlab_pipelines", mrInput)).status).toBe("identity-mismatch");
+  });
+
   test("malformed JSON, malformed pages and malformed SHAs stay visible failures", async () => {
     const unreadable = { ...ok({}), stdout: "<html>unreadable</html>" };
     expect((await status(gitlabRig({ [PATH]: unreadable }), "gitlab_project")).status).toBe("invalid-payload");

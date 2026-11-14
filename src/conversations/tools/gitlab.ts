@@ -20,6 +20,7 @@ const Discussion = z.object({ id: z.string(), notes: z.array(Note).max(1000) });
 const Change = z.object({ old_path: z.string(), new_path: z.string(), diff: z.string().optional(), collapsed: z.boolean().optional(), too_large: z.boolean().optional(), new_file: z.boolean().optional(), deleted_file: z.boolean().optional() });
 const Commit = z.object({ id: Sha, title: z.string(), web_url: z.string(), committed_date: z.string() });
 const Pipeline = z.object({ id: Id, sha: Sha, web_url: z.string(), status: z.enum(["created", "waiting_for_resource", "preparing", "pending", "running", "success", "failed", "canceled", "skipped", "manual", "scheduled"]), project_id: Id.optional(), updated_at: z.string().optional() });
+const PipelineListEntry = Pipeline.extend({ web_url: z.string().optional() });
 const Job = z.object({ id: Id, name: z.string(), status: z.string(), stage: z.string(), web_url: z.string(), pipeline: z.object({ id: Id, project_id: Id, sha: Sha }), commit: z.object({ id: Sha }) });
 const clip = (text: string | null | undefined, limit = 1500): string => text && text.length > limit ? `${text.slice(0, limit)}\n[truncated]` : text ?? "";
 
@@ -38,11 +39,14 @@ export function gitlabTarget(project: ToolProject): Target | string {
 }
 const classify = (result: CommandResult): ReadFailure => {
   const text = `${result.stderr}\n${result.stdout}`;
-  if (/401|not logged|no accounts|not authenticated|auth login|unauthorized|invalid token/i.test(text)) return new ReadFailure("login-required", "The configured host has no usable GitLab login.");
-  if (/429|rate.limit/i.test(text)) return new ReadFailure("rate-limited", "GitLab rate limit reached; retry later.");
-  if (/403|forbidden|access denied/i.test(text)) return new ReadFailure("permission-denied", "The GitLab owner denied this project read.");
-  if (/ENOENT|not installed|command not found|no such file|unreachable|connection refused|no route|network|timeout|timed out|dial tcp|could not resolve/i.test(text) || result.code === 127) return new ReadFailure("unavailable", "The GitLab client or configured host is unavailable; no fallback was attempted.");
-  if (/404|not found/i.test(text)) return new ReadFailure("not-found", "The item is missing or hidden from the GitLab owner.");
+  const match = /\bHTTP(?:\/\d(?:\.\d)?)?\s+([45]\d{2})\b|:\s+([45]\d{2})\b/i.exec(text);
+  const status = match?.[1] ?? match?.[2];
+  const matches = (code: string, message: RegExp): boolean => status === code || status === undefined && message.test(text);
+  if (matches("401", /not logged|no accounts|not authenticated|auth login|unauthorized|invalid token/i)) return new ReadFailure("login-required", "The configured host has no usable GitLab login.");
+  if (matches("429", /rate.limit/i)) return new ReadFailure("rate-limited", "GitLab rate limit reached; retry later.");
+  if (matches("403", /forbidden|access denied/i)) return new ReadFailure("permission-denied", "The GitLab owner denied this project read.");
+  if (status === undefined && (/ENOENT|not installed|command not found|no such file|unreachable|connection refused|no route|network|timeout|timed out|dial tcp|could not resolve/i.test(text) || result.code === 127)) return new ReadFailure("unavailable", "The GitLab client or configured host is unavailable; no fallback was attempted.");
+  if (matches("404", /not found/i)) return new ReadFailure("not-found", "The item is missing or hidden from the GitLab owner.");
   return new ReadFailure("provider-failure", "GitLab could not complete the read.");
 };
 const requireIdentity = (matches: boolean): void => { if (!matches) throw new ReadFailure("identity-mismatch", "GitLab returned content outside the configured project or requested identity; it was withheld."); };
@@ -128,10 +132,10 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
     const noteOffset = (input.notesPage - 1) * 3;
     return { url: before.web_url, ...(before.sha ? { headSha: before.sha } : {}), ...pageResult(input, threads.length), notesPage: input.notesPage, discussions: threads.map(thread => ({ id: clip(thread.id, 100), incomplete: input.notesPage > 1 || thread.notes.length > 3, nextNotesPage: thread.notes.length > noteOffset + 3 && input.notesPage < 20 ? input.notesPage + 1 : null, notesLimitReached: input.notesPage === 20 && thread.notes.length > noteOffset + 3, notes: thread.notes.slice(noteOffset, noteOffset + 3).map(note => ({ id: note.id, body: clip(note.body, 200), author: clip(note.author.username, 64), createdAt: clip(note.created_at, 40), resolved: note.resolved, url: `${before.web_url}#note_${note.id}` })) })) };
   });
-  const mrPage = <T>(name: string, description: string, suffix: string, schema: z.ZodType<T>, convert: (entry: T, target: Target) => object) => define(name, description, MrInput, async (input, target, projectId, signal) => {
+  const mrPage = <T>(name: string, description: string, suffix: string, schema: z.ZodType<T>, convert: (entry: T, target: Target, projectId: number) => object) => define(name, description, MrInput, async (input, target, projectId, signal) => {
     const before = await readItem(target, projectId, "mr", input.number, signal);
     const entries = parse(z.array(schema).max(input.perPage), await get(target, `${itemPath("mr", input.number)}/${suffix}`, signal, { page: input.page, per_page: input.perPage }));
-    const values = entries.map(entry => convert(entry, target));
+    const values = entries.map(entry => convert(entry, target, projectId));
     const after = await readItem(target, projectId, "mr", input.number, signal);
     ensureHead(before, after);
     if (suffix === "pipelines" && before.head_pipeline?.id !== after.head_pipeline?.id) throw new ReadFailure("state-changed", "The MR pipeline changed during the read; results were withheld.");
@@ -142,9 +146,10 @@ export function createGitlabTools(options: GitlabToolOptions = {}): ToolDefiniti
     requireIdentity(entry.web_url === `${target.url}/-/commit/${entry.id}`);
     return { sha: entry.id, title: clip(entry.title, 300), url: entry.web_url, committedAt: entry.committed_date };
   });
-  const pipelines = mrPage("gitlab_pipelines", "Read a bounded MR pipeline page with each pipeline's SHA and status. These are observations, not an aggregate passing verdict.", "pipelines", Pipeline, (entry, target) => {
-    requireIdentity(entry.web_url === `${target.url}/-/pipelines/${entry.id}`);
-    return { id: entry.id, sha: entry.sha, status: entry.status, url: entry.web_url, updatedAt: entry.updated_at };
+  const pipelines = mrPage("gitlab_pipelines", "Read a bounded MR pipeline page with each pipeline's SHA and status. These are observations, not an aggregate passing verdict.", "pipelines", PipelineListEntry, (entry, target, projectId) => {
+    const url = `${target.url}/-/pipelines/${entry.id}`;
+    requireIdentity((entry.project_id === undefined || entry.project_id === projectId) && (entry.web_url === undefined || entry.web_url === url));
+    return { id: entry.id, sha: entry.sha, status: entry.status, url, updatedAt: entry.updated_at };
   });
   const jobs = define("gitlab_jobs", "Read a bounded job-status page for a pipeline at the MR's current head. Withhold results when the MR or pipeline changes; never read logs or artifacts.", MrInput.extend({ pipeline: Id }).strict(), async (input, target, projectId, signal) => {
     const before = await readItem(target, projectId, "mr", input.number, signal);
