@@ -40,7 +40,8 @@ const balance = (tasks: { id: string; title: string; note?: string }[]): AppStat
   settings: { ...DEFAULT_SETTINGS }, log: [], history: { deficits: {}, lastSurfaced: {} }, dayState: null,
 });
 
-async function rig(answer: (request: TurnRequest) => string | Promise<string> = request => `Ivy on: ${request.prompt}`) {
+interface Lane { provider: string; model: string }
+async function rig(answer: (request: TurnRequest) => string | Promise<string> = request => `Ivy on: ${request.prompt}`, lanes?: { local?: Lane; cloud?: Lane }) {
   const studioDir = await dirs.make();
   const hostDir = await dirs.make();
   mkdirSync(join(studioDir, "threads"));
@@ -58,7 +59,7 @@ async function rig(answer: (request: TurnRequest) => string | Promise<string> = 
   let status: HostStatus | null = null;
   let skew = 0;
   const boot = async (): Promise<ConversationHost> => {
-    status = await openConversationHost({ dir: hostDir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: lane, cloud: lane }, turns: answering(answer) });
+    status = await openConversationHost({ dir: hostDir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: lanes ?? { local: lane, cloud: lane }, turns: answering(answer) });
     if (status.state !== "ready") throw new Error(status.reason);
     await status.host.attachSources(conversationSources({ db, desk: () => options, now: () => Date.now() + skew }));
     hosts.push(status.host);
@@ -204,6 +205,28 @@ describe("Ivy conversations from Studio and Balance", () => {
     expect(detail.body.conversation.policy).toBe("local");
     expect((await r.entries(one.body.conversation.id)).some(e => e.text === "Where do I start?")).toBe(true);
     expect((await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source })).status).toBe(403);
+  });
+
+  test("a start with no lane for its policy is refused with the turn's message and creates nothing", async () => {
+    const none = await rig(undefined, {});
+    const startId = crypto.randomUUID();
+    for (const attempt of [1, 2]) {
+      const refused = await none.call("POST", "/api/conversations/starts", { startId, source: { owner: "studio-thread", id: "alpha" } });
+      expect({ attempt, status: refused.status, error: refused.body.error }).toEqual({ attempt, status: 503, error: "No conversation model is configured. Nothing was sent." });
+    }
+    expect((await none.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: IDEA })).status).toBe(503);
+    expect((await none.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: { owner: "balance-task", id: "missing" } })).status).toBe(403);
+    expect(await none.host().list()).toEqual([]);
+    const cloudOnly = await rig(undefined, { cloud: { provider: "test", model: "test-model" } });
+    saveBalanceState(cloudOnly.db, balance([{ id: "task-1", title: "Draft the workshop exercise" }]));
+    const served = await cloudOnly.call("POST", "/api/conversations/starts", { startId, source: { owner: "studio-thread", id: "alpha" } });
+    expect(served.status).toBe(201);
+    const [lab] = cloudOnly.options.areas;
+    if (!lab) throw new Error("no lab area");
+    lab.policy = "local";
+    const local = await cloudOnly.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: { owner: "balance-task", id: "task-1" } });
+    expect({ status: local.status, error: local.body.error }).toEqual({ status: 503, error: "No local model is configured. Nothing was sent; no cloud fallback is used." });
+    expect((await cloudOnly.host().list()).map(c => c.id)).toEqual([served.body.conversation.id]);
   });
 
   test("queued status and Use this now come from the host's order, not the browser", async () => {

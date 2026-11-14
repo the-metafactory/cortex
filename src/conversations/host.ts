@@ -92,7 +92,8 @@ export const DISCORD_HISTORY_NOTICE = "This conversation was used in Discord. Ea
 export const UNAVAILABLE_TITLE = "Conversation about work that is no longer available";
 export interface SeedMessage { role: "user" | "assistant"; text: string; model?: string; at: number }
 export interface SeedEntry { kind: string; data: object; messages?: SeedMessage[] }
-export interface Seed { key?: string; imported?: boolean; scope?: OwnerScope; titleFromSource?: boolean; draft?: string; state?: "current" | "archived"; entries?: SeedEntry[] }
+const noLane = (policy: Policy): ConversationError => new ConversationError(503, policy === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
+export interface Seed { key?: string; imported?: boolean; requireLane?: boolean; scope?: OwnerScope; titleFromSource?: boolean; draft?: string; state?: "current" | "archived"; entries?: SeedEntry[] }
 export type HostDetail = Omit<ConversationDetail, "studio"> & { scope: OwnerScope | null; available: boolean };
 export interface ExchangeTurn { text: string; reply: string | null; model: string; policy: Policy }
 type Directory = JsonObject & { conversations: Record<string, JsonObject>; sessions: Record<string, string> };
@@ -762,6 +763,7 @@ export class ConversationHost {
       const at = this.now().toISOString();
       const policy = strictest([request.policy, ...sources.flatMap(source => source.state === "available" ? [source.policy] : [])]);
       const route = this.routeFor(policy);
+      if (!route && seed.requireLane) throw noLane(policy);
       const draft = { toolSources: {}, historySources: {}, workSources: {}, workerSources: {}, communicationSources: {}, principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
       await this.engine.createConversation({
         ownership: { kind: "ownerless" },
@@ -1060,7 +1062,7 @@ export class ConversationHost {
       const existing = await this.priorInput(conversation, request.inputId, sha256);
       if (existing) return { duplicate: true, submission: await this.submissionView(request.inputId, existing) };
       if (stored.state === "archived") throw new ConversationError(409, "This conversation is archived. Restore it to continue; nothing was sent.");
-      if (!route) throw new ConversationError(503, effective === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
+      if (!route) throw noLane(effective);
       if (effective === "cloud" && stored.cloud && !this.cloudLane(stored.cloud)) throw new ConversationError(503, `The cloud model ${stored.cloud} chosen for this conversation is no longer configured. Choose another model; nothing was sent and no other model was used.`);
       await this.claimInput(conversation, request.inputId, sha256);
       if (route !== stored.route) {
