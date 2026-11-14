@@ -20,6 +20,8 @@ If another window changes the item you are editing, Save refuses the stale edit 
 
 In `GET /api/desk/my-day`, every outline row with a `repeat` rule also carries `recurrence: { returnsOn, finished, reappearsOn }`. For a done row, `returnsOn` is its next occurrence and `reappearsOn` is that date minus the row's lead days, the day the row opens again. `finished` is true when the repeat is exhausted; both dates are then null. An open repeating row has `finished: false` and null dates. The Balance engine's recurrence rule computes all three, so a client never recomputes them. Rows without `repeat` have no `recurrence`, and the stored outline never holds it.
 
+Each Studio thread is copied into the outline as a project row. `studioProjects` in `GET /api/desk/my-day` maps those rows to their threads: each entry is `{ id, slug, state, openNotes }`, where `id` is the outline row, `state` is the thread's `active`, `parked` or `closed`, and `openNotes` counts the thread's notes with status `open`, sample notes included. A client reads a thread's state here, not from the row's `done`. An entry whose thread is no longer in the Studio is left out. When the Studio is turned off or cannot be read for this request (`studioStatus` is `disabled` or `unavailable`), every entry keeps its `id` and `slug` and carries `state: null` and `openNotes: null`.
+
 ## Choose your caps
 
 `desk.myDay.cap` sets the My day baseline, from 1 to 7. `desk.topN` sets the Needs you baseline, from 1 to 10. Both default to 5, ratified by the principal in cortex#2871.
