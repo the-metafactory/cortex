@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../db/init";
 import { composeDesk } from "../compose";
-import { heldDuringMeeting, markInterrupts, quietAdapterInterrupts, NO_INTERRUPTIONS, type InterruptRules } from "../interrupt";
+import { heldDuringMeeting, markInterrupts, quietAdapterInterrupts, NO_INTERRUPTIONS, NO_SWITCHES, type InterruptRules } from "../interrupt";
 import { assertRoute, contentFrom, sourceBoundary, CloudRouteRefused } from "../source-boundary";
 import type { CalendarAvailability } from "../calendar-availability";
 import type { Json } from "../../../../conversations/domain-adapters/operations/types";
@@ -53,7 +53,7 @@ test("an interrupt request is placed by the host rules, and does nothing when in
   expect(asked.view.items.map(card => [card.title, card.interrupt?.delivery])).toEqual([["Urgent", "pending"], ["Quiet", undefined]]);
   const off = await composeRanked(item => [mail(item, "Urgent", 0, true)], NO_INTERRUPTIONS);
   expect(off.view.items[0]?.interrupt).toBeUndefined();
-  const stale = markInterrupts(asked.view.items.map(card => ({ ...card, interrupt: undefined, freshness: "stale" as const })), on, new Map(), Date.now());
+  const stale = markInterrupts(asked.view.items.map(card => ({ ...card, interrupt: undefined, freshness: "stale" as const })), on, new Map(), Date.now(), NO_SWITCHES);
   expect(stale.every(card => card.interrupt === undefined)).toBe(true);
 });
 
