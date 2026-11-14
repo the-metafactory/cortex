@@ -168,7 +168,7 @@ export function wakeSnoozes(db: Database, facts: WakeFacts, now: number): string
       }
     }
     db.query("DELETE FROM desk_mail_snoozes WHERE state = 'back' AND back_at < ?").run(now - BACK_KEEP_DAYS * DAY_MS);
-    db.query("DELETE FROM desk_mail_snoozes WHERE created_at < ?").run(now - SNOOZE_KEEP_DAYS * DAY_MS);
+    db.query("DELETE FROM desk_mail_snoozes WHERE kind <> 'hidden' AND created_at < ?").run(now - SNOOZE_KEEP_DAYS * DAY_MS);
   })();
   return woken;
 }

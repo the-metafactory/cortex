@@ -195,6 +195,8 @@ describe("snoozed mail on the Desk", () => {
     expect(queryMailLog(db, {})).toHaveLength(1);
     expect(pendingRuleMail(db, [mail("m1")]).size).toBe(0);
     expect(wakeSnoozes(db, facts(), NOW + 300 * 86_400_000)).toEqual([]);
+    expect(wakeSnoozes(db, facts(), NOW + 500 * 86_400_000)).toEqual([]);
+    expect(pendingRuleMail(db, [mail("m1")]).size).toBe(0);
     const view = await composeWith(db, options, runtime([mail("m1")]), at(4, 11));
     expect(view.items.some((i) => i.key === "mail:m1")).toBe(false);
     expect(view.mailHidden).toEqual([{ key: "mail:m1", subject: "Venue quote", sender: "priya@example.org", at: NOW }]);
