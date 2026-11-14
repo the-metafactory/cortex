@@ -227,6 +227,8 @@ describe("Ivy conversations from Studio and Balance", () => {
     const local = await cloudOnly.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: { owner: "balance-task", id: "task-1" } });
     expect({ status: local.status, error: local.body.error }).toEqual({ status: 503, error: "No local model is configured. Nothing was sent; no cloud fallback is used." });
     expect((await cloudOnly.host().list()).map(c => c.id)).toEqual([served.body.conversation.id]);
+    const retried = await cloudOnly.call("POST", "/api/conversations/starts", { startId, source: { owner: "studio-thread", id: "alpha" } });
+    expect({ status: retried.status, id: retried.body.conversation.id }).toEqual({ status: 201, id: served.body.conversation.id });
   });
 
   test("queued status and Use this now come from the host's order, not the browser", async () => {
