@@ -274,7 +274,7 @@ export function parseMaterialItem(item: string): MaterialLink {
 export const MAX_MATERIAL_TEXT = 2000;
 const QUOTE_MARK = /^> ?/;
 
-export const continuation = (line: string | undefined): boolean => line !== undefined && line.startsWith("  ") && line.trim() !== "";
+const continuation = (line: string | undefined): boolean => line !== undefined && line.startsWith("  ") && line.trim() !== "";
 
 export function entryBlock(lines: readonly string[], at: number): string[] {
   let end = at + 1;

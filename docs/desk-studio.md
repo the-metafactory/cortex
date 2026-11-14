@@ -118,7 +118,7 @@ Rules:
   - `sample: true` marks an example note that no model wrote.
 - **Responses** are your answers to Ivy, as H3 entries headed by an ISO time with a zone. An optional first line `re: <time>` names the note answered; the rest is the text. **Ivy waits on you** while Ivy's latest note has `status: open` and no response is dated at or after it.
 - **Material** and **Log** are bullet lists. A material item is `kind: [label](href)` or `kind: label`; without a kind it is a `link`. A log item may start with an ISO date.
-- Lines indented by two spaces under a material bullet are that item's **text**, with a leading `> ` removed: a mail filed with its text writes its first paragraph there, and you or Ivy can paste an excerpt under any item. Capture undo removes the bullet with these lines. Cortex never fetches a material link to get text.
+- Lines indented by two spaces under a material bullet are that item's **text**, with a leading `> ` removed; a blank line ends the text, so a paragraph break inside it is written as an indented `>` line, as the mail filer does: a mail filed with its text writes its first paragraph there, and you or Ivy can paste an excerpt under any item. Capture undo removes the bullet with these lines. Cortex never fetches a material link to get text.
 
 ## Inbox file
 
