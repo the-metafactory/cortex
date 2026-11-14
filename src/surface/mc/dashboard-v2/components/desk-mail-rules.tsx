@@ -4,7 +4,7 @@ import { RULE_ACTIONS, RULE_MATCHES } from "../../desk/mail-rules-schema";
 import { submitMailRule, type MailRuleBody } from "../lib/desk-action";
 
 const MATCH_LABEL: Record<(typeof RULE_MATCHES)[number], string> = { sender: "Sender", domain: "Domain", list: "List-Id", subject: "Subject contains" };
-const ACTION_LABEL: Record<(typeof RULE_ACTIONS)[number], string> = { archive: "Archive", junk: "Junk", trash: "Delete", digest: "Digest" };
+const ACTION_LABEL: Record<(typeof RULE_ACTIONS)[number], string> = { archive: "Archive", junk: "Junk", trash: "Delete", digest: "Digest", attach: "Attach" };
 
 const when = (at: number | null): string => (at === null ? "never ran" : `last ran ${new Date(at).toLocaleString()}`);
 
@@ -19,7 +19,7 @@ export function RuleEditForm({ editing, busy, onEdit, onSubmit }: { editing: Rul
       </select>
       <input aria-label="Match value" value={editing.value} disabled={busy} onChange={(e) => onEdit({ ...editing, value: e.target.value })} />
       <select aria-label="Action" value={editing.action} disabled={busy} onChange={(e) => onEdit({ ...editing, action: e.target.value })}>
-        {RULE_ACTIONS.map((a) => <option key={a} value={a}>{ACTION_LABEL[a]}</option>)}
+        {RULE_ACTIONS.filter((a) => a !== "attach" || editing.action === "attach").map((a) => <option key={a} value={a}>{ACTION_LABEL[a]}</option>)}
       </select>
       <button type="submit" className="desk-btn pri" disabled={busy || !editing.value.trim()}>Save</button>
       <button type="button" className="desk-btn ghost" onClick={() => onEdit(null)}>Cancel</button>

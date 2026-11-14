@@ -14,7 +14,11 @@ import { SourceCache, type SourceMail, type SourceReading } from "../desk/source
 import { DAY_MS } from "../desk/time";
 import { addVip } from "../desk/vips";
 import { initDatabase } from "../db/init";
-import { attachMail } from "../desk/links";
+import { activeMailLink, attachMail, linkStudioMail, undoAttach } from "../desk/links";
+import { ruleAttach } from "../desk/rule-attach";
+import { saveBalanceState } from "../desk/balance-store";
+import { snoozeMail } from "../desk/mail-snooze";
+import { DEFAULT_SETTINGS, type AppState } from "../../../balance";
 import { mailDesk, queue } from "./desk-mail-fixtures";
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
@@ -257,7 +261,7 @@ describe("the Desk view and the rules API", () => {
     expect(res.status).toBe(200);
     const after = await view(rt);
     expect(after.items.some((i) => i.kind === "mail-rule")).toBe(false);
-    expect(after.mailRules).toEqual([{ id: "r1", match: "sender", value: "reports@dmarc.example", action: "archive", on: true, sentence: "Archive mail from reports@dmarc.example", lastRunAt: null, count: 0, held: null }]);
+    expect(after.mailRules).toEqual([{ id: "r1", match: "sender", value: "reports@dmarc.example", action: "archive", on: true, sentence: "Archive mail from reports@dmarc.example", lastRunAt: null, count: 0, held: null, target: null }]);
     expect(after.autonomy.types.find((t) => t.action === "mail.rules")?.on).toBe(true);
 
     const { deps } = passDeps([moved("m1")]);
@@ -269,15 +273,15 @@ describe("the Desk view and the rules API", () => {
     expect((await view(rt)).autonomy.done[0]?.stop).toBeUndefined();
   });
 
-  it("refuses an edit to a bad match, and a rule API without the move command", async () => {
+  it("refuses an edit to a bad match, and a moving rule without the move command", async () => {
     approve("reports@dmarc.example");
     const rt = runtime([]);
     const bad = await handleDeskMailRules(post({ op: "edit", rule: "rule-reports@dmarc.example", match: "sender", value: "not-an-address", action: "archive" }), db, rt, { now: () => NOW });
     expect(bad.status).toBe(400);
     const good = await handleDeskMailRules(post({ op: "edit", rule: "rule-reports@dmarc.example", match: "domain", value: "@DMARC.example", action: "junk" }), db, rt, { now: () => NOW });
     expect(await good.json()).toMatchObject({ ok: true, rule: { match: "domain", value: "dmarc.example", action: "junk" } });
-    const off = await handleDeskMailRules(post({ op: "delete", rule: "rule-reports@dmarc.example" }), db, { ...rt, options: mailDesk({ timeoutSeconds: 20 }) }, { now: () => NOW });
-    expect(off.status).toBe(409);
+    const off = await handleDeskMailRules(post({ op: "create", match: "sender", value: "news@shop.example", action: "archive" }), db, { ...rt, options: mailDesk({ timeoutSeconds: 20 }) }, { now: () => NOW });
+    expect(await off.json()).toEqual({ ok: false, error: "Mail rules that move mail need the move command (mc.desk.mail.actions.move), and it is not set up on this stack." });
     expect((await handleDeskMailRules(post({ op: "delete", rule: "rule-reports@dmarc.example" }), db, rt, { now: () => NOW })).status).toBe(200);
     expect(listRules(db)).toEqual([]);
   });
@@ -294,5 +298,85 @@ describe("the Desk view and the rules API", () => {
     const loop = new MailRuleLoop(passDeps().deps, () => { throw new Error("disk full"); }, (line) => lines.push(line));
     await loop.kick();
     expect(lines).toEqual(["[desk] mail rule pass failed: disk full"]);
+  });
+});
+
+describe("rules that attach", () => {
+  const ATTACH_DESK: DeskOptions = { ...mailDesk({ timeoutSeconds: 20 }), areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [] }] };
+  const task = (id: string, title: string, done = false) => ({ id, title, weight: 50, ordering: "parallel" as const, children: [], effort: 1 as const, ...(done ? { done: true } : {}) });
+  const seed = (done = false): AppState => ({
+    outline: { id: "root", title: "Outline", weight: 100, ordering: "parallel", children: [{ id: "area:work", title: "Work", weight: 50, ordering: "parallel", children: [task("kickoff", "Kickoff prep", done)] }] },
+    settings: { ...DEFAULT_SETTINGS }, log: [], history: { deficits: {}, lastSurfaced: {} }, dayState: null,
+  });
+  const ada = (id: string, over: Partial<SourceMail> = {}): SourceMail => mail(id, "ada@example.org", over);
+  const rt = (mails: SourceMail[]): DeskRuntime => ({ options: ATTACH_DESK, ledger: new HandledLedger(), sourceCache: new SourceCache(async () => JSON.stringify({ items: mails })) });
+  const rules = (body: unknown) => handleDeskMailRules(new Request("http://localhost/api/desk/mail/rules", { method: "POST", body: JSON.stringify(body) }), db, rt([]), { now: () => NOW, newId: () => "r1" });
+  const pass = (mails: SourceMail[]) => {
+    const { q, deps } = passDeps([], { mailActions: undefined, attach: ruleAttach(db, ATTACH_DESK, () => [reading(mails)], () => NOW) });
+    return { q, run: runMailRules([reading(mails)], deps) };
+  };
+  const attachRule = async () => (await rules({ op: "create", match: "sender", value: "ada@example.org", action: "attach", target: { kind: "task", id: "kickoff" } })).json();
+
+  beforeEach(() => { saveBalanceState(db, seed()); });
+
+  it("accepts an attach rule without a move command and names its target", async () => {
+    expect(await attachRule()).toMatchObject({ ok: true, rule: { action: "attach", sentence: "Attach mail from ada@example.org to “Kickoff prep”", target: { kind: "task", key: "kickoff", title: "Kickoff prep" } } });
+    expect(await (await rules({ op: "create", match: "sender", value: "bo@example.org", action: "attach" })).json()).toEqual({ ok: false, error: "An attach rule needs a task or a thread to attach to." });
+    expect((await rules({ op: "create", match: "sender", value: "cy@example.org", action: "attach", target: { kind: "task", id: "nope" } })).status).toBe(409);
+  });
+
+  it("attaches a matching unread mail to its task without touching the mailbox, and Undo brings it back", async () => {
+    await attachRule();
+    const { q, run } = pass([ada("m1"), mail("m2", "bo@example.org")]);
+    expect(await run).toEqual({ handled: 1, failed: 0, paused: [] });
+    expect(q.calls).toEqual([]);
+    const [r] = ruleRuns(db);
+    expect(activeMailLink(db, "m1")).toMatchObject({ toKind: "task", toKey: "kickoff", origin: "rule", ruleRun: r?.id });
+    expect(db.query("SELECT action, title FROM desk_done").all()).toEqual([{ action: "mail.rule", title: "Attached by your rule: “Report m1” → “Kickoff prep”" }]);
+    expect(queryMailLog(db).map((e) => [e.messageId, e.action, e.where])).toEqual([["m1", "attach", "rule"]]);
+    const desk = rt([ada("m1")]);
+    const shown = await composeDesk(db, ATTACH_DESK, undefined, { now: NOW, handled: desk.ledger, ...(desk.sourceCache ? { sourceCache: desk.sourceCache } : {}) });
+    expect(shown.items.some((i) => i.key === "mail:m1")).toBe(false);
+    expect(shown.autonomy.done[0]).toMatchObject({ action: "mail.rule", undo: r?.id, stop: "r1" });
+    expect(await (await rules({ op: "undo", run: r?.id })).json()).toEqual({ ok: true, message: "The mail is back on the Desk.", restored: "mail:m1" });
+    expect(activeMailLink(db, "m1")).toBeNull();
+    expect(queryMailLog(db).map((e) => e.action).sort()).toEqual(["attach", "restore"]);
+  });
+
+  it("fails the run and turns the rule off when its task is done", async () => {
+    await attachRule();
+    saveBalanceState(db, seed(true));
+    expect(await pass([ada("m1")]).run).toEqual({ handled: 0, failed: 1, paused: [] });
+    expect(listRules(db)[0]?.on).toBe(false);
+    expect(activeMailLink(db, "m1")).toBeNull();
+    expect(db.query("SELECT action, title, message FROM desk_done").all()).toEqual([{ action: "mail.rule.failed", title: "Your rule could not attach “Report m1”: “Kickoff prep” is done", message: "The rule is turned off, and the mail stays on the Desk." }]);
+  });
+
+  it("never attaches a VIP's mail or a snoozed mail", async () => {
+    await attachRule();
+    addVip(db, "ada@example.org", null, NOW);
+    expect(await pass([ada("m1")]).run).toEqual({ handled: 0, failed: 0, paused: [] });
+    db.exec("DELETE FROM desk_vips");
+    snoozeMail(db, { ...ada("m2"), sourceId: "work-mail" }, { kind: "tomorrow" }, { now: NOW, readings: [reading([ada("m2")])] });
+    expect(await pass([ada("m2")]).run).toEqual({ handled: 0, failed: 0, paused: [] });
+  });
+
+  it("proposes an attach rule after three attaches to one task, and an Undo blocks it", async () => {
+    const config = { ...CONFIG, proposeAfter: 3 };
+    for (const id of ["a1", "a2", "a3"]) attachMail(db, { ...ada(id), sourceId: "work-mail" }, { kind: "task", key: "kickoff", title: "Kickoff prep" }, { id: `l-${id}`, requestId: `q-${id}`, origin: "desk", now: NOW - 60_000 });
+    const [p] = proposeRules(db, NOW, config);
+    expect(p).toMatchObject({ key: "mailrule:sender:attach:task:kickoff:ada@example.org", action: "attach", target: { kind: "task", key: "kickoff", title: "Kickoff prep" }, agreeing: 3 });
+    expect(answerProposal(db, p?.key ?? "", "approve", NOW, config, () => "r2")).toMatchObject({ ok: true, rule: { sentence: "Attach mail from ada@example.org to “Kickoff prep”" } });
+    db.exec("DELETE FROM desk_mail_rules");
+    await undoAttach(db, "l-a1", { now: NOW, listed: () => true });
+    expect(proposeRules(db, NOW, config)).toEqual([]);
+  });
+
+  it("counts Add to thread as an attach, so mail filed in a thread breaks agreement with a task", () => {
+    const config = { ...CONFIG, proposeAfter: 3 };
+    for (const id of ["a1", "a2"]) attachMail(db, { ...ada(id), sourceId: "work-mail" }, { kind: "task", key: "kickoff", title: "Kickoff prep" }, { id: `l-${id}`, requestId: `q-${id}`, origin: "desk", now: NOW - 60_000 });
+    linkStudioMail(db, { ...ada("a3"), sourceId: "work-mail" }, { kind: "thread", key: "engines", title: "What can engines make?" }, { id: "c-a3", requestId: "c-a3", origin: "desk", now: NOW - 60_000 });
+    logMailDecision(db, { ...features("a3", "ada@example.org"), subject: "Report a3" }, "studio", "desk", NOW - 60_000, null);
+    expect(proposeRules(db, NOW, config)).toEqual([]);
   });
 });

@@ -5,7 +5,7 @@ import { DoneForYou } from "../components/desk-view";
 import { submitMailRule } from "../lib/desk-action";
 import type { MailRuleView } from "../../desk/mail-rules";
 
-const RULE: MailRuleView = { id: "r1", match: "sender", value: "reports@dmarc.example", action: "archive", on: true, sentence: "Archive mail from reports@dmarc.example", lastRunAt: null, count: 3, held: null };
+const RULE: MailRuleView = { id: "r1", match: "sender", value: "reports@dmarc.example", action: "archive", on: true, sentence: "Archive mail from reports@dmarc.example", lastRunAt: null, count: 3, held: null, target: null };
 const ok = async (): Promise<boolean> => true;
 
 describe("mail rules in Settings", () => {
