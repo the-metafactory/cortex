@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DEFAULT_SETTINGS, findNode, type AppState } from "../../../balance";
 import { createDispatchTaskAbortedEvent, createDispatchTaskCompletedEvent, createDispatchTaskFailedEvent, createDispatchTaskStartedEvent } from "../../../bus/dispatch-events";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import { loadAgentsDirectory } from "../../../common/config/loader";
 import { CortexConfigSchema } from "../../../common/types/cortex-config";
 import { handleDeskTaskHandoff } from "../api/desk-task-handoff";
 import { initDatabase } from "../db/init";
@@ -12,7 +16,7 @@ import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import { changeMyDay, localDay } from "../desk/my-day";
 import { NOT_SET_UP, STALE_PREVIEW, TASK_GONE, type TaskDispatchBus } from "../desk/task-handoff";
-import { readTaskHandoff, type DispatchOptions } from "../desk/task-handoff-store";
+import { deskDispatchOptions, readTaskHandoff, type DispatchOptions } from "../desk/task-handoff-store";
 import type { DeskView } from "../desk/types";
 import { project } from "../projection/dispatch-lifecycle-renderer";
 
@@ -249,12 +253,55 @@ describe("While the agent works and when it is done", () => {
 
 describe("mc.desk.dispatch config", () => {
   const base = { principal: { id: "ada" }, agents: [{ id: "luna", displayName: "Luna", persona: "./luna.md", presence: {} }], claude: {} };
-  it("accepts configured agents with defaults and rejects an id that names no agent", () => {
+  it("accepts configured agents with defaults, and leaves the unknown-id check to the merged agent list", () => {
     const parsed = CortexConfigSchema.parse({ ...base, mc: { desk: { dispatch: { agents: [{ id: "luna", policy: "cloud" }] } } } });
     expect(parsed.mc.desk.dispatch).toEqual({ agents: [{ id: "luna", policy: "cloud" }], startTimeoutSeconds: 120, runTimeoutMinutes: 60 });
-    const unknown = CortexConfigSchema.safeParse({ ...base, mc: { desk: { dispatch: { agents: [{ id: "scout", policy: "local" }] } } } });
-    expect(unknown.success).toBe(false);
-    expect(unknown.error?.issues.map((i) => i.path.join("."))).toContain("mc.desk.dispatch.agents.0.id");
+    expect(CortexConfigSchema.safeParse({ ...base, mc: { desk: { dispatch: { agents: [{ id: "scout", policy: "local" }] } } } }).success).toBe(true);
     expect(CortexConfigSchema.safeParse({ ...base, mc: { desk: { dispatch: { agents: [{ id: "luna", policy: "cloud" }], startTimeoutSeconds: 5 } } } }).success).toBe(false);
+  });
+});
+
+describe("Hand-off targets defined only in agents.d", () => {
+  const base = { principal: { id: "ada" }, agents: [{ id: "luna", displayName: "Luna", persona: "./luna.md", presence: {} }], claude: {} };
+  let agentsDir: string;
+  beforeEach(() => {
+    agentsDir = mkdtempSync(join(tmpdir(), "desk-dispatch-agents-d-"));
+    writeFileSync(join(agentsDir, "gorse.md"), "---\ndisplayName: Gorse\n---\n");
+    writeFileSync(join(agentsDir, "gorse.yaml"), `id: gorse\ndisplayName: Gorse\npersona: ${join(agentsDir, "gorse.md")}\npresence: {}\n`);
+  });
+  afterEach(() => { rmSync(agentsDir, { recursive: true, force: true }); });
+
+  const bootDispatch = (ids: string[]) => {
+    const config = CortexConfigSchema.parse({ ...base, mc: { desk: { dispatch: { agents: ids.map((id) => ({ id, policy: "cloud" })) } } } });
+    const inline = config.agents.map((a) => ({ id: a.id, displayName: a.displayName }));
+    const fragments = loadAgentsDirectory(agentsDir).filter((a) => !inline.some((i) => i.id === a.id));
+    if (!config.mc.desk.dispatch) throw new Error("dispatch not parsed");
+    return deskDispatchOptions(config.mc.desk.dispatch, [...inline, ...fragments]);
+  };
+
+  it("offers a fragment-only agent and accepts it as the target", async () => {
+    const resolved = bootDispatch(["luna", "gorse"]);
+    expect(resolved.unknown).toEqual([]);
+    if (!resolved.options) throw new Error("no dispatch options");
+    options = { ...options, dispatch: resolved.options };
+    runtime = { ...runtime, options };
+    const shown = await preview("t1", { agent: "gorse" });
+    expect(shown.agent.id).toBe("gorse");
+    expect(shown.agents.map((a) => a.id)).toEqual(["luna", "gorse"]);
+    const res = await hand("t1", uuid(1), { agent: "gorse" });
+    expect(res.json.message).toBe("Handed to Gorse. The result comes back here as a card.");
+    expect(published.map((p) => p.subject)).toEqual(["local.ada.home.tasks.@did-mf-gorse.desk-task"]);
+  });
+
+  it("still refuses an id that names no agent, inline or in agents.d", async () => {
+    const resolved = bootDispatch(["gorse", "ghost"]);
+    expect(resolved.unknown).toEqual(["ghost"]);
+    expect(resolved.options?.agents.map((a) => a.id)).toEqual(["gorse"]);
+    if (!resolved.options) throw new Error("no dispatch options");
+    options = { ...options, dispatch: resolved.options };
+    runtime = { ...runtime, options };
+    expect(await act({ action: "preview", taskId: "t1", agent: "ghost" })).toEqual({ status: 409, json: { ok: false, error: "ghost does not take Desk tasks on this stack." } });
+    expect(bootDispatch(["ghost"]).options).toBeUndefined();
+    expect(published).toEqual([]);
   });
 });

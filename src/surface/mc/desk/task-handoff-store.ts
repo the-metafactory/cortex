@@ -116,9 +116,17 @@ export function expireTaskHandoffs(db: Database, dispatch: DispatchOptions, now:
   }
 }
 
-/** `mc.desk.dispatch` with each agent's display name from the stack's agents. */
-export function deskDispatchOptions(config: DeskDispatchConfig, agents: readonly { id: string; displayName: string }[]): DispatchOptions {
-  return { ...config, agents: config.agents.map((a) => ({ ...a, label: agents.find((agent) => agent.id === a.id)?.displayName ?? a.id })) };
+/**
+ * `mc.desk.dispatch` resolved against the stack's merged agents (inline `agents[]` and agents.d fragments): each target gets its display name, and
+ * an id that names no agent is left out and returned in `unknown`. With no target left there is nothing to hand to, so `options` is undefined.
+ */
+export function deskDispatchOptions(config: DeskDispatchConfig, agents: readonly { id: string; displayName: string }[]): { options: DispatchOptions | undefined; unknown: string[] } {
+  const resolved = config.agents.flatMap((a) => {
+    const agent = agents.find((candidate) => candidate.id === a.id);
+    return agent ? [{ ...a, label: agent.displayName }] : [];
+  });
+  const unknown = config.agents.filter((a) => !resolved.some((r) => r.id === a.id)).map((a) => a.id);
+  return { options: resolved.length > 0 ? { ...config, agents: resolved } : undefined, unknown };
 }
 
 interface LifecycleEnvelope {

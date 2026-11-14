@@ -4953,6 +4953,11 @@ export async function startCortex(
         }
       }
       const conversationAccess = Object.assign((): HostStatus | null => conversationStatus, { discord: () => conversationDiscord });
+      const resolvedDispatch = config.mc.desk.dispatch ? deskDispatchOptions(config.mc.desk.dispatch, mergedAgents) : undefined;
+      const deskDispatch = resolvedDispatch?.options;
+      if (resolvedDispatch && resolvedDispatch.unknown.length > 0) {
+        console.warn(`cortex: mc.desk.dispatch.agents names ${resolvedDispatch.unknown.map((id) => `"${id}"`).join(", ")}, but no agent with that id is declared in agents[] or agents.d; the Desk does not offer it as a hand-off target`);
+      }
       mcHandle = await startMissionControl({
         conversations: conversationAccess,
         ...(config.nats
@@ -5035,7 +5040,7 @@ export async function startCortex(
                 },
               }
             : {}),
-          ...(config.mc.desk.dispatch ? { dispatch: deskDispatchOptions(config.mc.desk.dispatch, mergedAgents) } : {}),
+          ...(deskDispatch ? { dispatch: deskDispatch } : {}),
           mailOwnDomains: config.mc.desk.mail.suspicion?.ownDomains ?? config.mc.desk.mail.dmarc?.domains ?? [],
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
           ...(config.mc.desk.ruling?.explainer
