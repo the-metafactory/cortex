@@ -22,7 +22,7 @@
 
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
-import { cortex } from "./eslint/no-comments.ts";
+import { cortex } from "./eslint/plugin.ts";
 
 export default tseslint.config(
   js.configs.recommended,
@@ -39,6 +39,7 @@ export default tseslint.config(
     plugins: { cortex },
     rules: {
       "cortex/no-comments": "error",
+      "cortex/await-async-expect": "error",
       "@typescript-eslint/ban-ts-comment": "off",
 
       // ── Strict (error): type-safety bugs we genuinely want to gate on ──
