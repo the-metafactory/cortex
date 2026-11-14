@@ -33,7 +33,7 @@ export interface MailReadSource {
 	listings(): readonly MailSourceListing[];
 }
 export type Verdict = "conformant" | "refused" | "not-run";
-export type ProbeKind = "destinations" | "query" | "observation" | "draft" | "action" | "readback";
+export type ProbeKind = "destinations" | "query" | "observation" | "draft" | "action" | "readback" | "cloud-reader";
 export interface CapabilityReport {
 	capabilityId: string;
 	probe: ProbeKind;
@@ -62,7 +62,7 @@ export interface ConformanceReport {
 	credentialRequests: number;
 }
 export declare function formatReport(report: ConformanceReport): string;
-export declare const DESK_ADAPTER_SDK_VERSION = "1.6.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.7.0";
 /** The connection id every conformance run uses for the package's one synthetic connection. */
 export declare const CONFORMANCE_CONNECTION_ID = "conformance-connection";
 export type ScenarioVerdict = "isolated" | "failed";
@@ -107,8 +107,14 @@ export interface FailureReport {
 	companion: CompanionReport;
 	networkRequests: number;
 }
+/**
+ * `companionDir` is a second package probed after each scenario (the package itself by default). `mail` is a fake
+ * Mail source, as for `runConformance`: a binding for an adapter and `CONFORMANCE_CONNECTION_ID` serves that
+ * adapter's `host.mail.listed()` and sets the read restriction the scenarios' host publishes for the connection.
+ */
 export interface FailureOptions {
 	companionDir?: string;
+	mail?: MailReadSource;
 }
 /** Drives one package through the named failure scenarios and reports each as isolated or failed. */
 export declare function runFailureScenarios(packageDir: string, options?: FailureOptions): Promise<FailureReport>;

@@ -15,6 +15,7 @@ import type { ObjectReference } from "../../conversations/domain-adapters/types"
 
 export const SYNTHETIC_CREDENTIAL_HANDLE = "conformance-credential-handle";
 const SESSION = "conformance-session";
+const CLOUD_SESSION = "conformance-cloud-session";
 const FAR_FUTURE = "2099-01-01T00:00:00.000Z";
 export const STACK = "conformance";
 
@@ -76,10 +77,16 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
   const sinks = new Map<string, (value: Json) => Promise<void>>();
   let conversationId = "";
   let sink: ReleaseSink = { kind: "web", conversationId };
+  const cloud: { conversationId: string; sink: ReleaseSink; sends: Json[]; context: HostContext | null } = { conversationId: "", sink: { kind: "web", conversationId: "" }, sends: [], context: null };
+  const listen = (target: ReleaseSink, into: Json[]): void => { sinks.set(canonicalWire(target), value => { into.push(value); return Promise.resolve(); }); };
+  const sessionOf = (sessionRef: string): string | null => (sessionRef === SESSION ? conversationId : sessionRef === CLOUD_SESSION && cloud.conversationId !== "" ? cloud.conversationId : null);
   const bindings: AuthorityBindings = {
     currentRevision: () => authorityHash({ policy, lease }),
-    authenticate: sessionRef => Promise.resolve(sessionRef === SESSION ? { principal: principal.principal, stack: principal.stack, conversationId, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: FAR_FUTURE, maintenance: false } : null),
-    policy: () => Promise.resolve(structuredClone(policy)),
+    authenticate: sessionRef => {
+      const conversation = sessionOf(sessionRef);
+      return Promise.resolve(conversation === null ? null : { principal: principal.principal, stack: principal.stack, conversationId: conversation, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: FAR_FUTURE, maintenance: false });
+    },
+    policy: binding => Promise.resolve({ ...structuredClone(policy), conversationPolicy: cloud.conversationId !== "" && binding.conversationId === cloud.conversationId ? "cloud" : "local" }),
     writer: checked => Promise.resolve(canonicalWire(checked) === canonicalWire(lease)),
     restrictions: new Map([["conformance-restriction-resolver", record => Promise.resolve(record)]]),
     connectors: new Map([[connection.connectorId, input.connector]]),
@@ -99,7 +106,13 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
       const conversation = await status.host.create({ title: "Conformance", policy: "local", links: [], origin: { kind: "web" } }, principal.principal);
       conversationId = conversation.id;
       sink = { kind: "web", conversationId };
-      sinks.set(canonicalWire(sink), value => { sends.push(value); return Promise.resolve(); });
+      listen(sink, sends);
+      if (input.mailBinding) {
+        const reader = await status.host.create({ title: "Conformance cloud reader", policy: "cloud", links: [], origin: { kind: "web" } }, principal.principal);
+        cloud.conversationId = reader.id;
+        cloud.sink = { kind: "web", conversationId: reader.id };
+        listen(cloud.sink, cloud.sends);
+      }
     }
     const writer = await status.host.lifecycleWriters().begin(plan, 0);
     Object.assign(lease, writerLease(await status.host.lifecycleWriters().resume(writer.bindingKey, syntheticWriterSteps())));
@@ -111,6 +124,8 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
     }
     opened.context = await opened.service.authenticate(SESSION);
     if (!opened.context) throw new ConformanceRefusal("host_unavailable", "The host refused the synthetic session.");
+    cloud.context = cloud.conversationId === "" ? null : await opened.service.authenticate(CLOUD_SESSION);
+    if (cloud.conversationId !== "" && !cloud.context) throw new ConformanceRefusal("host_unavailable", "The host refused the synthetic cloud session.");
   }
   await boot(true);
   return {
@@ -119,6 +134,7 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
     get context() { return context(); },
     get sink() { return sink; },
     get conversationId() { return conversationId; },
+    get cloudReader() { return cloud.context ? { context: cloud.context, sink: cloud.sink, sends: cloud.sends } : null; },
     lease, sends, bindings, connection, registry: input.registry,
     async revokeConnection(): Promise<void> {
       const revision = Number(connection.connectionRevision);
@@ -141,12 +157,21 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
   };
 }
 
+// glossary-ignore: run
+/** A reader in a cloud-policy conversation. The rig opens one only for a run with a Mail binding. */
+export interface CloudReader {
+  context: HostContext;
+  sink: ReleaseSink;
+  sends: Json[];
+}
+
 export interface ConformanceRig {
   readonly host: ConversationHost;
   readonly service: AuthorityMediator;
   readonly context: HostContext;
   readonly sink: ReleaseSink;
   readonly conversationId: string;
+  readonly cloudReader: CloudReader | null;
   lease: WriterLease;
   sends: Json[];
   bindings: AuthorityBindings;
