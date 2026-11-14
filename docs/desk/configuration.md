@@ -340,6 +340,42 @@ The same lanes and pi settings run **Hand to Ivy** on a mail card. The action is
 
 While Ivy works, the mail card shows "With Ivy since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask Ivy again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
 
+### Hand a task to an agent
+
+<!-- glossary-ignore: agent -->
+<!-- glossary-ignore: run -->
+
+`dispatch` is optional. Without it, or without the local bus (`nats`), `POST /api/desk/task-handoff` answers 409: "Handing tasks to an agent is not set up on this stack".
+
+```yaml
+mc:
+  desk:
+    dispatch:
+      agents:
+        - { id: luna, policy: cloud }
+        - { id: scout, policy: local }
+      startTimeoutSeconds: 120
+      runTimeoutMinutes: 60
+```
+
+`agents` lists 1 to 10 agents. Each `id` must name an agent in the stack's `agents`, or `cortex config validate` rejects it. `policy` says whether the agent's model is local or cloud. A task in a `local`-policy area goes only to a `local` agent. `startTimeoutSeconds` accepts 10 to 600 (default 120), and `runTimeoutMinutes` accepts 1 to 1440 (default 60). Each agent must be registered as a local task receiver. Receivers are a boot snapshot, so a new one needs a restart (see `docs/task-receivers.md`). The receiver's policy must let the stack's signer dispatch to the agent.
+
+The route takes one action per request:
+
+| action | request | response |
+|---|---|---|
+| `preview` | `taskId`, `agent?`, `instruction?` (at most 1000 characters) | `{ ok, preview: { task, agent, agents, brief, briefHash, leaves } }`. Nothing is written. |
+| `hand` | `requestId` (uuid), `taskId`, `agent`, `instruction?`, `briefHash` | `{ ok, id, message }` |
+| `retry` | `requestId`, `id` | `{ ok, id, message }` |
+| `discard` | `id` | `{ ok, message }` |
+| `accept` | `id`, `done`, `requestId` | `{ ok, message, receipt? }` |
+
+`taskId` is a Balance task id under a configured area. The Desk reads the task's title, notes, area and due date from the Balance store, never from the page. Inbox tasks are filed into an area first. `briefHash` is the SHA-256 of the brief the preview showed. `hand` rebuilds the brief and refuses a mismatch ("The task changed since the preview. Preview it again."), so the approval binds to the text that was shown. A repeated `requestId` answers the first receipt.
+
+`hand` records the hand-off in `desk_task_handoffs` and publishes one signed task on `local.{principal}.{stack}.tasks.@{agent}.desk-task`. The attempt id is both the `task_id` and the `correlation_id`. Mission Control's `dispatch.task.*` projection matches the agent's lifecycle to the attempt. While the agent works, `myDay.handoffs[taskId]` and `agents.working` carry the line, either "Sent to Luna, waiting for it to start" or "With Luna since 14:05". A finished hand-off shows as a `task-handoff` card with the agent's answer, capped at 4000 characters and shown as the agent wrote it, plus the brief that was sent. Its actions are **Done**, **Keep open** and **Discard**. A failed hand-off shows the reason with **Retry** and **Discard**. A hand-off fails when the agent reports a failure, when nobody starts it within `startTimeoutSeconds`, or when no result arrives within `runTimeoutMinutes` of the start. Retry publishes a new attempt with a fresh correlation id, and a late answer to an older attempt is dropped. When the bus refuses the publish, the route answers 502 and keeps the hand-off for Retry.
+
+**Done** marks the task done through `outline-complete` and returns an undo `receipt`. My Day's `undo` command with that receipt reopens the task. The day's completion log entry stays after a reopen. **Keep open** closes the card and leaves the task open. **Discard** while the agent works only stops waiting: the agent may still finish, and its answer is dropped. The result stays on the card; the Desk does not copy it into the task's notes.
+
 ### Implementation handoffs
 
 <!-- glossary-ignore: agent -->

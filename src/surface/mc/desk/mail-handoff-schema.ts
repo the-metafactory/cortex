@@ -1,8 +1,5 @@
-export const HANDOFF_STATES = ["working", "ready", "failed", "approved", "discarded"] as const;
-export type HandoffState = (typeof HANDOFF_STATES)[number];
-export const OPEN_STATES: readonly HandoffState[] = ["working", "ready", "failed"];
+export { HANDOFF_STATES, MAX_INSTRUCTION, OPEN_STATES, type HandoffState } from "./handoff";
 
-export const MAX_INSTRUCTION = 1000;
 export const MAX_FINDINGS = 5;
 export const MAX_FINDING = 400;
 

@@ -15,6 +15,7 @@ import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
 import { INTERRUPT_SWITCHES_SQL } from "../desk/interrupt-switches";
 import { WORKER_HANDOFF_SQL } from "../desk/worker-handoff-store";
+import { TASK_HANDOFF_SQL } from "../desk/task-handoff-schema";
 
 const sqlList = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(",");
 
@@ -186,6 +187,7 @@ export const SCHEMA_SQL: string[] = [
   ...WAITING_SQL,
   ...HANDOFF_SQL,
   ...WORKER_HANDOFF_SQL,
+  ...TASK_HANDOFF_SQL,
   ...INVITATIONS_SQL,
   ...SNOOZE_SQL,
   ...INTERRUPT_SWITCHES_SQL,

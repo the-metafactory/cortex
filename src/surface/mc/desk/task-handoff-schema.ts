@@ -1,0 +1,27 @@
+export const TASK_HANDOFF_SQL = [
+  `CREATE TABLE IF NOT EXISTS desk_task_handoffs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    area TEXT,
+    agent TEXT NOT NULL,
+    instruction TEXT,
+    brief TEXT NOT NULL,
+    attempt TEXT NOT NULL,
+    attempt_request TEXT NOT NULL,
+    state TEXT NOT NULL,
+    sent_at INTEGER NOT NULL,
+    started_at INTEGER,
+    result TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    closed_at INTEGER,
+    accept_request TEXT,
+    accept_message TEXT,
+    accept_receipt TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS desk_task_handoffs_attempt ON desk_task_handoffs (attempt)",
+  "CREATE INDEX IF NOT EXISTS desk_task_handoffs_task ON desk_task_handoffs (task_id, state, created_at)",
+  "CREATE INDEX IF NOT EXISTS desk_task_handoffs_state ON desk_task_handoffs (state, created_at)",
+];

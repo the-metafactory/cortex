@@ -54,6 +54,7 @@ import { projectAttention } from "./attention-projection";
 import { projectAdapterLifecycle } from "./adapter-lifecycle";
 import { projectGovernanceVerdict } from "./governance-verdict";
 import { projectGovernanceDenial } from "./governance-denial";
+import { applyTaskLifecycle } from "../desk/task-handoff-store";
 import {
   produceFailedDispatchAttention,
   type AttentionDelta,
@@ -167,6 +168,7 @@ export function project(
   const type = envelope.type;
 
   if (type.startsWith("dispatch.task.")) {
+    applyTaskLifecycle(db, envelope, Date.now());
     const res = projectDispatchLifecycle(db, envelope);
     if (res !== null) {
       broadcastProjection(wsRegistry, "dispatch.lifecycle", {
