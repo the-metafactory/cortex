@@ -70,6 +70,13 @@ describe("rule proposals from the decision log", () => {
     expect(p?.examples).toHaveLength(5);
   });
 
+  it("proposes nothing for a sender whose mail the principal hid", () => {
+    decide(8, "reports@dmarc.example");
+    expect(proposeRules(db, NOW, CONFIG)).toHaveLength(1);
+    decide(1, "reports@dmarc.example", "ignored", "desk", "hidden");
+    expect(proposeRules(db, NOW, CONFIG)).toEqual([]);
+  });
+
   it("proposes nothing when one decision disagrees: another action, an Undo or a mail kept", () => {
     for (const counter of ["trash", "restore", "kept"] as const) {
       db.exec("DELETE FROM desk_mail_log");

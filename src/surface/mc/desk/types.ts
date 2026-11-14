@@ -204,6 +204,7 @@ export interface DeskView {
   routines?: RoutineView;
   mailRules?: import("./mail-rules").MailRuleView[];
   mailTrusted?: import("./mail-trust").TrustedView[];
+  mailHidden?: import("./mail-snooze").HiddenMail[];
   mailSweeps?: import("./mail-sweep").MailSweepView[];
   mailDigests?: import("./mail-digest").MailDigestView[];
   dmarc?: import("./mail-dmarc").DmarcWeek;

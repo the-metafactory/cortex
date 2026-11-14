@@ -185,4 +185,43 @@ describe("snoozed mail on the Desk", () => {
     expect(pendingRuleMail(db, [mail("m1")]).size).toBe(1);
     expect(await ask(rt, { action: "snooze", key: "mail:gone", until: { kind: "later" } })).toMatchObject({ ok: false, error: "The Desk no longer lists this mail." });
   });
+
+  it("hides a mail for good, lists it, and Undo brings the card back without a reason", async () => {
+    createRule(db, { match: "sender", value: "priya@example.org", action: "archive" }, NOW, () => "rule-1");
+    const rt = runtime([mail("m1")]);
+    expect(await ask(rt, { action: "hide", key: "mail:m1" })).toMatchObject({ ok: true, message: "Hid “Venue quote” from the Desk. It stays in your mailbox as it is." });
+    expect(queryMailLog(db, {}).map((e) => e.action)).toEqual(["ignored"]);
+    expect(await ask(rt, { action: "hide", key: "mail:m1" })).toMatchObject({ ok: true });
+    expect(queryMailLog(db, {})).toHaveLength(1);
+    expect(pendingRuleMail(db, [mail("m1")]).size).toBe(0);
+    expect(wakeSnoozes(db, facts(), NOW + 300 * 86_400_000)).toEqual([]);
+    expect(wakeSnoozes(db, facts(), NOW + 500 * 86_400_000)).toEqual([]);
+    expect(pendingRuleMail(db, [mail("m1")]).size).toBe(0);
+    const view = await composeWith(db, options, runtime([mail("m1")]), at(4, 11));
+    expect(view.items.some((i) => i.key === "mail:m1")).toBe(false);
+    expect(view.mailHidden).toEqual([{ key: "mail:m1", subject: "Venue quote", sender: "priya@example.org", at: NOW }]);
+    expect(await ask(rt, { action: "snooze.cancel", key: "mail:m1" })).toMatchObject({ ok: true });
+  });
+
+  it("brings a hidden card back with no reason line and refuses bad hide requests", async () => {
+    const rt = runtime([mail("m1"), mail("m2")]);
+    await ask(rt, { action: "hide", key: "mail:m1" });
+    expect(await ask(rt, { action: "hide.undo", key: "mail:m1" })).toMatchObject({ ok: true });
+    const back = (await composeWith(db, options, runtime([mail("m1")]), at(4, 11))).items.find((i) => i.key === "mail:m1");
+    expect(back).toBeDefined();
+    expect(back?.back).toBeUndefined();
+    expect(back?.why.startsWith("Back because")).toBe(false);
+    expect(await ask(rt, { action: "hide.undo", key: "mail:m1" })).toMatchObject({ ok: false, error: "This mail is not hidden." });
+    await ask(rt, { action: "snooze", key: "mail:m2", until: { kind: "tomorrow" } });
+    expect(await ask(rt, { action: "hide.undo", key: "mail:m2" })).toMatchObject({ ok: false, error: "This mail is not hidden." });
+    expect(await ask(rt, { action: "hide", key: "m1" })).toMatchObject({ ok: false, error: "A hide key starts with mail:." });
+    expect(await ask(rt, { action: "hide", key: "mail:gone" })).toMatchObject({ ok: false, error: "The Desk no longer lists this mail." });
+  });
+
+  it("replaces a real snooze with the hide", async () => {
+    const rt = runtime([mail("m1")]);
+    await ask(rt, { action: "snooze", key: "mail:m1", until: { kind: "tomorrow" } });
+    await ask(rt, { action: "hide", key: "mail:m1" });
+    expect(readSnooze(db, "m1")).toMatchObject({ kind: "hidden", state: "snoozed" });
+  });
 });
