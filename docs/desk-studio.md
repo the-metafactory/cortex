@@ -199,6 +199,7 @@ Opening a thread on the board zooms the card into its thread page; `?desk=studio
 - **Goal it serves**: material items of kind `goal`. A label that starts with a goal id (`G5: one post a week`) takes its name and state from the Desk's goals.
 - **Coming up**: upcoming calendar events from the Desk's calendar sources whose title (at least 4 characters) appears as whole words in a material label or in the question. At most five, soonest first.
 - **People**: material items of kind `person`, `people` or `contact`. Free text is never searched for names.
+  A mail filed into a thread with Add to thread (or an attach rule) writes `- person: <display name>` under its capture line. Nothing is written for a mail without a display name, or with an address as its name, or when the thread already names that person: a `person`, `people` or `contact` item, or a kept person relation, whose label equals the name after lowercasing and folding punctuation and spaces. The address is not compared.
 - **Decision journal**: closed threads that share a material item, or that share an area and a rare word in the question, expectation or outcome. A word counts when it has at least 4 letters, is not a common English or German word, and appears in no more than a quarter of the Studio's threads (at least two). A decision opens in place.
 - **Ivy proposes**: open `relation` notes, each with Keep and Dismiss. A kept relation joins its group (`thread`, `goal`, `person`/`people`/`contact`) or **Also related** for any other kind; a dismissed one disappears.
 
@@ -249,7 +250,7 @@ The endpoint fields match the mail classifier's endpoint form: `baseUrl`, `model
 
 The model returns `{ "thread": "slug or null", "match": true, "reason": "one sentence" }`. A clear match appends one Material bullet and a Log entry. No match, an unknown slug, a missing endpoint, or a model failure saves `inbox/capture-<id>.md`. A valid thread suggestion with `match: false` becomes the inbox file's `target`.
 
-Every successful filing appears in Done for you, with the reason and Undo. Undo removes that capture in a new commit and preserves later thread changes. A capture that has moved or changed cannot be undone automatically. Filing and Undo share the Studio's clean-tree checks, request replay, and write lock.
+Every successful filing appears in Done for you, with the reason and Undo. Undo removes that capture in a new commit and preserves later thread changes. For a filed mail it also removes the `person:` line that capture added, when that line still sits right under the capture; a person line that was there before is never removed. A capture that has moved or changed cannot be undone automatically. Filing and Undo share the Studio's clean-tree checks, request replay, and write lock.
 
 `POST /api/desk/create` accepts `{ "requestId": "...", "kind": "capture", "fields": { "text": "..." } }`. `POST /api/desk/capture/undo` accepts `{ "requestId": "...", "id": "capture-..." }`. Both pass the same identity and rebind gates as other Desk writes.
 

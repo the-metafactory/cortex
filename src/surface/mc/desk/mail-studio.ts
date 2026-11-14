@@ -4,9 +4,12 @@ import { readClassifications } from "./classify";
 import type { ListedMail } from "./mail-actions";
 import { logMailDecision, mailFeatures } from "./mail-log";
 import type { SourceReading } from "./sources/command";
-import { askFiler, captureId, captureInThread, captureModel, filerFor, type CaptureModel } from "./studio/capture";
+import { askFiler, captureId, SENDER_PERSON, captureInThread, captureModel, filerFor, type CaptureModel } from "./studio/capture";
 import { localTime, oneLine, safeBody } from "./studio/edit";
 import { mailHeader, openInMail } from "./studio/mail-header";
+import { normaliseLabel } from "./studio/board";
+import type { StudioThread } from "./studio/format";
+import { threadPeople } from "./studio/relates";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioArea } from "./studio/view";
 import { runStudioTransaction, type ActResult } from "./studio/writer";
@@ -79,6 +82,15 @@ export function mailLine(item: MailForStudio): string {
   return `${mailHeader(sender(item), day(item.mail.receivedAt))}“${oneLine(item.mail.subject)}”.${summary ? ` ${summary}` : ""}${link}`;
 }
 
+const BARE_ADDRESS = /^\S+@\S+$/;
+
+export function senderPerson(item: MailForStudio, thread: Pick<StudioThread, "material" | "notes">): string | null {
+  const name = oneLine(item.mail.from.name ?? "");
+  const key = normaliseLabel(name);
+  if (!key || BARE_ADDRESS.test(name) || name.toLowerCase() === oneLine(item.mail.from.address).toLowerCase()) return null;
+  return threadPeople(thread).some((p) => normaliseLabel(p.title) === key) ? null : name;
+}
+
 const quoted = (text: string): string[] => safeBody(text).map((l) => (l.trim() ? `  > ${l}` : "  >"));
 
 const bodyText = (item: MailForStudio, includeText: boolean): string | null => {
@@ -117,7 +129,8 @@ function planMail(ctx: ActContext, item: MailForStudio, input: AddMailInput, id:
   const thread = ctx.view.active.find((t) => t.slug === input.thread);
   if (!thread) return { status: 409, error: "That thread is no longer active; nothing was written." };
   const why = input.reason ? `the filer said: ${oneLine(input.reason).slice(0, MAX_MAIL_REASON)}` : "you chose this thread";
-  return captureInThread(ctx, thread, id, [mailLine(item), ...(text ? quoted(text) : [])], `Filed capture ${id} from mail; ${why}`, `Added “${subject}” to “${oneLine(thread.question)}”.`);
+  const person = senderPerson(item, thread);
+  return captureInThread(ctx, thread, id, [mailLine(item), ...(text ? quoted(text) : []), ...(person ? [`${SENDER_PERSON}${person}`] : [])], `Filed capture ${id} from mail; ${why}`, `Added “${subject}” to “${oneLine(thread.question)}”.`);
 }
 
 const threadTarget = (studio: StudioView, slug: string): LinkTarget => ({ kind: "thread", key: slug, title: oneLine(studio.active.find((t) => t.slug === slug)?.question ?? slug) });
