@@ -227,7 +227,7 @@ export function pendingRuleMail(db: Database, mails: readonly SourceMail[], susp
 }
 
 const ATTACHES = new Set<MailLogAction>(["attach", "studio"]);
-const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze", ...ATTACHES]);
+const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze", "ignored", ...ATTACHES]);
 const PROPOSABLE = new Set<MailLogAction>(["archive", "junk", "trash", "attach"]);
 const ORDER: RuleMatch[] = ["list", "domain", "sender"];
 

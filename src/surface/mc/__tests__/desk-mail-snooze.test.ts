@@ -13,6 +13,7 @@ import { recordWaiting } from "../desk/mail-waiting";
 import { SourceCache, type SourceEvent, type SourceMail, type SourceReading } from "../desk/sources/command";
 import { initDatabase } from "../db/init";
 import { composeWith, mailDesk } from "./desk-mail-fixtures";
+import { offDeskIds } from "../desk/links";
 
 const at = (day: number, hour = 10, minute = 0): number => new Date(2026, 10, day, hour, minute).getTime();
 const NOW = at(4, 10);
@@ -184,5 +185,31 @@ describe("snoozed mail on the Desk", () => {
     expect(await ask(rt, { action: "snooze.cancel", key: "mail:m1" })).toMatchObject({ ok: true });
     expect(pendingRuleMail(db, [mail("m1")]).size).toBe(1);
     expect(await ask(rt, { action: "snooze", key: "mail:gone", until: { kind: "later" } })).toMatchObject({ ok: false, error: "The Desk no longer lists this mail." });
+  });
+
+  it("hides a mail without a mail command, never wakes it, lists it, and Show again brings it back without a reason", async () => {
+    const calls: string[][] = [];
+    const rt: DeskRuntime = { ...runtime([mail("m1"), mail("m2")]), options };
+    const hide = async (body: unknown) => {
+      await rt.sourceCache?.read(options.sources, NOW);
+      return (await handleDeskMail(new Request("http://localhost/api/desk/mail", { method: "POST", body: JSON.stringify(body) }), db, rt, { now: () => NOW, run: async (argv) => { calls.push(argv); return { code: 0, stdout: "", stderr: "" }; } })).json();
+    };
+    expect(await hide({ action: "hide", key: "mail:m1" })).toEqual({ ok: true, message: "Hid “Venue quote” from the Desk. It stays in your mailbox as it is." });
+    expect(await hide({ action: "hide", key: "mail:m1" })).toEqual({ ok: true, message: "Hid “Venue quote” from the Desk. It stays in your mailbox as it is." });
+    expect(calls).toEqual([]);
+    expect(queryMailLog(db, {}).map((e) => [e.messageId, e.action, e.where])).toEqual([["m1", "ignored", "desk"]]);
+    expect(wakeSnoozes(db, facts(), at(400, 10))).toEqual([]);
+    const view = await composeWith(db, options, rt, NOW);
+    expect(view.items.some((i) => i.key === "mail:m1")).toBe(false);
+    expect(view.mailHidden).toEqual([{ key: "mail:m1", subject: "Venue quote", sender: "priya@example.org", at: NOW }]);
+    createRule(db, { match: "sender", value: "priya@example.org", action: "archive" }, NOW, () => "rule-1");
+    expect([...pendingRuleMail(db, [mail("m1"), mail("m2")])]).toEqual(["m2"]);
+    expect(withoutSnoozed([reading([mail("m1"), mail("m2")])], offDeskIds(db))[0]?.mail.map((m) => m.id)).toEqual(["m2"]);
+    expect(await hide({ action: "snooze", key: "mail:m2", until: { kind: "tomorrow" } })).toMatchObject({ ok: true });
+    expect(await hide({ action: "hide.undo", key: "mail:m2" })).toEqual({ ok: false, error: "This mail is not hidden." });
+    expect(await hide({ action: "hide.undo", key: "m1" })).toEqual({ ok: false, error: "A hide key starts with mail:." });
+    expect(await hide({ action: "hide.undo", key: "mail:m1" })).toEqual({ ok: true, message: "“Venue quote” is back on the Desk." });
+    const back = (await composeWith(db, options, rt, NOW)).items.find((i) => i.key === "mail:m1");
+    expect(back?.back).toBeUndefined();
   });
 });

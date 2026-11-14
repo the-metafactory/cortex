@@ -17,7 +17,7 @@ import { initDatabase } from "../db/init";
 import { activeMailLink, attachMail, linkStudioMail, undoAttach } from "../desk/links";
 import { ruleAttach } from "../desk/rule-attach";
 import { saveBalanceState } from "../desk/balance-store";
-import { snoozeMail } from "../desk/mail-snooze";
+import { hideMail, snoozeMail } from "../desk/mail-snooze";
 import { DEFAULT_SETTINGS, type AppState } from "../../../balance";
 import { mailDesk, queue } from "./desk-mail-fixtures";
 
@@ -71,7 +71,7 @@ describe("rule proposals from the decision log", () => {
   });
 
   it("proposes nothing when one decision disagrees: another action, an Undo or a mail kept", () => {
-    for (const counter of ["trash", "restore", "kept"] as const) {
+    for (const counter of ["trash", "restore", "kept", "ignored"] as const) {
       db.exec("DELETE FROM desk_mail_log");
       decide(10, "news@shop.example");
       decide(1, "news@shop.example", counter, counter === "kept" ? "client" : "desk", `counter-${counter}`);
@@ -345,13 +345,15 @@ describe("rules that attach", () => {
     expect(db.query("SELECT action, title, message FROM desk_done").all()).toEqual([{ action: "mail.rule.failed", title: "Your rule could not attach “Report m1”: “Kickoff prep” is done", message: "The rule is turned off, and the mail stays on the Desk." }]);
   });
 
-  it("never attaches a VIP's mail or a snoozed mail", async () => {
+  it("never attaches a VIP's mail, a snoozed mail or a hidden mail", async () => {
     await attachRule();
     addVip(db, "ada@example.org", null, NOW);
     expect(await pass([ada("m1")]).run).toEqual({ handled: 0, failed: 0, paused: [] });
     db.exec("DELETE FROM desk_vips");
     snoozeMail(db, { ...ada("m2"), sourceId: "work-mail" }, { kind: "tomorrow" }, { now: NOW, readings: [reading([ada("m2")])] });
     expect(await pass([ada("m2")]).run).toEqual({ handled: 0, failed: 0, paused: [] });
+    hideMail(db, { ...ada("m3"), sourceId: "work-mail" }, NOW);
+    expect(await pass([ada("m3")]).run).toEqual({ handled: 0, failed: 0, paused: [] });
   });
 
   it("proposes an attach rule after three attaches to one task, and an Undo blocks it", async () => {
@@ -371,5 +373,16 @@ describe("rules that attach", () => {
     linkStudioMail(db, { ...ada("a3"), sourceId: "work-mail" }, { kind: "thread", key: "engines", title: "What can engines make?" }, { id: "c-a3", requestId: "c-a3", origin: "desk", now: NOW - 60_000 });
     logMailDecision(db, { ...features("a3", "ada@example.org"), subject: "Report a3" }, "studio", "desk", NOW - 60_000, null);
     expect(proposeRules(db, NOW, config)).toEqual([]);
+  });
+
+  it("proposes a thread rule after enough Add to thread decisions, keyed by the slug the rule pass resolves", () => {
+    const config = { ...CONFIG, proposeAfter: 3 };
+    for (const id of ["t1", "t2", "t3"]) {
+      linkStudioMail(db, { ...ada(id), sourceId: "work-mail" }, { kind: "thread", key: "engines", title: "What can engines make?" }, { id: `c-${id}`, requestId: `c-${id}`, origin: "desk", now: NOW - 60_000 });
+      logMailDecision(db, { ...features(id, "ada@example.org"), subject: `Report ${id}` }, "studio", "desk", NOW - 60_000, null);
+    }
+    const [p] = proposeRules(db, NOW, config);
+    expect(p).toMatchObject({ key: "mailrule:sender:attach:thread:engines:ada@example.org", action: "attach", target: { kind: "thread", key: "engines", title: "What can engines make?" } });
+    expect(answerProposal(db, p?.key ?? "", "approve", NOW, config, () => "r3")).toMatchObject({ ok: true, rule: { sentence: "Attach mail from ada@example.org to “What can engines make?”", target: { kind: "thread", key: "engines" } } });
   });
 });

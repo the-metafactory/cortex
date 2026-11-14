@@ -23,7 +23,7 @@ import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import { approveHandoff, discardHandoff, handMailToIvy, HANDOFF_OPS, handoffIdOf, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
 import { handoffReady } from "../desk/compose";
 import { closeHandoffTask } from "../desk/mail-handoff-close";
-import { cancelSnooze, readingEvents, snoozeMail, SNOOZE_TIMES } from "../desk/mail-snooze";
+import { cancelSnooze, hideMail, readingEvents, snoozeMail, SNOOZE_TIMES, unhideMail } from "../desk/mail-snooze";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
 import { attachMail, meetingTarget, taskTarget, undoAttach, type LinkTarget } from "../desk/links";
 import { readMyDay } from "../desk/my-day";
@@ -66,6 +66,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("snooze"), key: z.string().min(1).max(1000), until: SnoozeChoiceSchema }).strict(),
   z.object({ action: z.literal("snooze.cancel"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.enum(["hide", "hide.undo"]), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("opened"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("not-phishing"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("not-phishing.undo"), trust: z.string().min(1).max(64) }).strict(),
@@ -97,7 +98,7 @@ export interface DeskMailDeps {
  * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "unsubscribe", key} sends the list's One-Click
  * unsubscribe after the principal confirmed it; {action: "unsubscribe.rule", key} then adds an archive rule for the list. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said, correction?} logs a per-mail correction and, for archive, spam and delete, moves the mail; with `correction` it retries only the move of that logged correction. {action: "undo" | "block", move} undoes a logged move,
  * or blocks the domain of a mail moved to Junk. {action: "snooze", key, until} hides one mail until a time, a meeting or a
- * person writes; {action: "snooze.cancel", key} ends the snooze. {action: "attach", key, requestId, to: {kind: "task", id} | {kind: "meeting", event}} attaches the mail to a task or a meeting and takes the card off the Desk while the mailbox stays as it is; {action: "attach.undo", link} ends that link and brings the card back. {action: "not-phishing", key} waives a flagged mail's
+ * person writes; {action: "snooze.cancel", key} ends the snooze. {action: "hide", key} hides one mail from the Desk until {action: "hide.undo", key}; the mailbox is not touched. {action: "attach", key, requestId, to: {kind: "task", id} | {kind: "meeting", event}} attaches the mail to a task or a meeting and takes the card off the Desk while the mailbox stays as it is; {action: "attach.undo", link} ends that link and brings the card back. {action: "not-phishing", key} waives a flagged mail's
  * suspicion reasons (see mail-trust.ts); {action: "not-phishing.undo", trust} takes that back, and
  * {action: "not-phishing.remove", sender} forgets every dismissal for one sender address. {action: "opened", key} logs that
  * the principal opened the mail on the Desk (once until the next decision on it). The rebind and identity gates in
@@ -128,6 +129,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   }
   if (body.action === "not-phishing.undo") return answer(undoDismissal(db, body.trust, now));
   if (body.action === "not-phishing.remove") return answer(removeTrustedSender(db, body.sender, now));
+  if (body.action === "hide.undo") return answer(body.key.startsWith("mail:") ? unhideMail(db, body.key.slice("mail:".length)) : { ok: false, status: 400, error: "A hide key starts with mail:." });
   if (body.action === "snooze.cancel") return answer(body.key.startsWith("mail:") ? cancelSnooze(db, body.key.slice("mail:".length)) : { ok: false, status: 400, error: "A snooze key starts with mail:." });
   if (body.action === "attach.undo") return answer(await undoAttach(db, body.link, undoAttachDeps(db, runtime, now)));
   const listed = resolveListedMail(runtime.sourceCache?.cached() ?? [], body.key);
@@ -135,6 +137,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   const mail = listed.mail;
   if (body.action === "opened") return Response.json({ ok: true, recorded: recordMailOpened(db, mail, now) }, { headers: noStore });
   if (body.action === "not-phishing") return answer(dismissSuspicion(db, mail, mailSuspicion(db, mail, runtime.options.mailOwnDomains), now, deps.newId));
+  if (body.action === "hide") return answer(hideMail(db, mail, now));
   if (body.action === "snooze") return answer(snoozeMail(db, mail, body.until, { now, readings: runtime.sourceCache?.cached() ?? [] }));
   if (body.action === "attach") return answer(await attachToTarget(db, runtime, mail, body, now, deps.newId ?? (() => crypto.randomUUID())));
   if (decision && !mail.invitation && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");

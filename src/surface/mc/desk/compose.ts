@@ -32,7 +32,7 @@ import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
-import { backSnoozes, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
+import { backSnoozes, hiddenMail, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
 import { backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
@@ -408,6 +408,7 @@ export async function composeDesk(
     autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove, Boolean(desk.routines?.capabilityBuild?.install)),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),
+    mailHidden: hiddenMail(db),
     ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
     ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
