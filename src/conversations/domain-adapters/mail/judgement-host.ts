@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { Provenance, OperationJournal, OwnerResult } from "../operations/types";
+import type { Provenance } from "../operations/types";
 import type { BoundaryError } from "../types";
 import { UNDO_WINDOW_MS } from "../../../surface/mc/desk/mail-move";
 import { GRANT_OPTIONS, type GrantChoice, type ReceiptState } from "./move-host";
 import { dispatchMailOperation, type MailHostOptions } from "./host-operation";
-import { judgementCapability, judgementHasUndo, mailJudgementSnapshot, MailJudgementInputSchema, MailJudgementOutputSchema, type MailJudgementAction, type MailJudgementInput, type MailJudgementOutput } from "./judgement-contract";
+import { receiptMessage, receiptState, type ReceiptWording } from "./receipt";
+import { judgementCapability, judgementHasUndo, mailJudgementSnapshot, MailJudgementInputSchema, MailJudgementOutputSchema, type MailJudgementAction, type MailJudgementInput } from "./judgement-contract";
 
 export type MailJudgementHostOptions = MailHostOptions;
 
@@ -30,25 +31,7 @@ export type JudgementOutcome =
 
 const unavailable = (code: string, message: string): JudgementOutcome => ({ kind: "unavailable", reason: { code, message } });
 
-const FAILURE_STATES: Readonly<Record<string, ReceiptState>> = { vip_refused: "refused", message_missing: "missing", account_denied: "denied" };
-
-function receiptState(journal: OperationJournal, result: OwnerResult["result"] | undefined, success: MailJudgementOutput | null): ReceiptState {
-  if (journal.state === "succeeded" && success) return "done";
-  if (result?.kind === "failed") return FAILURE_STATES[result.error.code.split(".").at(-1) ?? ""] ?? "failed";
-  if (result?.kind === "conflict") return "conflict";
-  if (journal.events.some(entry => entry.event.kind === "local-outcome")) return "refused";
-  if (["confirmed", "dispatching", "pending"].includes(journal.state)) return "pending";
-  return "uncertain";
-}
-
-function receiptMessage(journal: OperationJournal, result: OwnerResult["result"] | undefined, success: MailJudgementOutput | null, state: ReceiptState): string {
-  if (success) return success.message;
-  if (result && "error" in result) return result.error.message;
-  const local = journal.events.findLast(entry => entry.event.kind === "local-outcome");
-  if (local?.event.kind === "local-outcome") return local.event.reason.message;
-  if (state === "pending") return "The judgement change is still running.";
-  return "Mail has not confirmed the change. Check Mail before trying again.";
-}
+const WORDING: ReceiptWording = { running: "The judgement change is still running.", unconfirmed: "Mail has not confirmed the change. Check Mail before trying again." };
 
 export class MailJudgementHost {
   private readonly undoing = new Set<string>();
@@ -126,8 +109,8 @@ export class MailJudgementHost {
     const inFlight = links.some(other => other && ["confirmed", "dispatching", "pending", "uncertain"].includes(other.journal.state));
     const approved = journal.events[0]?.event;
     const at = journal.events[0]?.at ?? "";
-    const state = receiptState(journal, result, success);
-    const message = receiptMessage(journal, result, success, state);
+    const state = receiptState(journal, result, success !== null);
+    const message = receiptMessage(journal, result, success, state, WORDING);
     const undo = state === "done" && success?.undo === true && judgementHasUndo(input) && !undone && !inFlight
       && (this.options.now ?? Date.now)() - Date.parse(at) <= UNDO_WINDOW_MS && this.available("undo");
     return { operationId, action: input.action, messageId: input.message.canonicalId, state, message, at, basis: approved?.kind === "approved" && approved.authority.basis.kind === "grant" ? "grant" : "confirmation", undo, undone, ...(journal.links?.compensatesOperationId ? { compensates: journal.links.compensatesOperationId } : {}) };

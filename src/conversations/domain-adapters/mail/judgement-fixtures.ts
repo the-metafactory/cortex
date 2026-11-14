@@ -2,14 +2,13 @@ import { recordWaiting } from "../../../surface/mc/desk/mail-waiting";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import { initDatabase } from "../../../surface/mc/db/init";
 import { DomainAdapterRegistry } from "../registry";
 import { fixtureBindings } from "../fixtures";
-import { AT, authority, attemptFixture, eventFixture, openJournalFixture } from "../operations/fixtures";
-import type { DispatchRequest, OwnerResult, OwnerSupport } from "../operations/types";
-import type { MailMoveAuthority } from "./move-host";
+import { AT, openJournalFixture } from "../operations/fixtures";
+import type { DispatchRequest, OwnerResult } from "../operations/types";
 import type { OperationIndex } from "./legacy-move";
+import { fixtureAuthority, prepareDispatch } from "./host-fixtures";
 import { mailJudgementDeclaration, type MailJudgementInput } from "./judgement-contract";
 import { MailJudgementHost, type JudgementOutcome } from "./judgement-host";
 import { MailJudgementStore, type MailJudgementMoves } from "./judgement-store";
@@ -71,44 +70,24 @@ export async function openMailJudgementRig() {
     list() { return Promise.resolve(db.query<{ id: string }, []>("SELECT id FROM fixture_operation_index").all().map(row => row.id)); },
     compensations(original) { return Promise.resolve(db.query<{ id: string }, [string]>("SELECT id FROM fixture_operation_index WHERE compensates = ?").all(original).map(row => row.id)); },
   };
-  const grants: { id: string; capabilities: readonly string[] }[] = [];
-  const approvals: (string | null)[] = [];
-  const authorityPort: MailMoveAuthority = {
-    findGrant(capability) { return Promise.resolve(grants.find(grant => grant.capabilities.includes(capability))?.id ?? null); },
-    grant(capabilities) { const id = randomUUID(); grants.push({ id, capabilities }); return Promise.resolve(id); },
-    async approve(input, grantId) {
-      if (denied) return { kind: "denied", reason: { code: "authority_denied", message: "Permission revoked." } };
-      approvals.push(grantId);
-      const approved = { ...authority, basis: grantId ? { kind: "grant" as const, grantId, grantRevision: "1" } : authority.basis };
-      await fixture.journal.approve({ ...input, authority: approved, at: new Date(now).toISOString() });
-      return { kind: "allowed", authority: approved };
-    },
-  };
+  const auth = fixtureAuthority(() => fixture.journal, () => now, () => denied);
   const calls: DispatchRequest[] = [];
   let published = true;
   const bridge = mailJudgementBridge({ connections: () => [JUDGEMENT_BINDING], listings: () => readings }, "mail", () => published, { dispatch: (...args) => owner.dispatch(...args) });
   const judgementCall = bridge.changeJudgement.bind(bridge);
   let adapterCall = (request: DispatchRequest) => judgementCall(request);
   const dispatch = async (operationId: string) => {
-    const stored = await fixture.journal.read(operationId);
-    if (!stored || "kind" in stored.journal.snapshot) throw new Error("Expected a judgement snapshot.");
-    const approved = stored.journal.events[0]?.event;
-    if (approved?.kind !== "approved") throw new Error("Expected approval evidence.");
-    const support: OwnerSupport = { lifecycleVersion: "1.0.0", adapterId: "mail", connectionId: JUDGEMENT_BINDING.connectionId, capabilityId: stored.journal.snapshot.capabilityId, declarationId: "mail-judgement-owner", dedup: { kind: "guaranteed", scope: "connection-capability", retentionMs: 604800000, bindsSnapshot: true, concurrent: true }, operationLookup: "none", conditionalUpdate: "none", cancellation: "none" };
-    const at = new Date(now).toISOString();
-    const attempt = { ...attemptFixture(), authority: approved.authority, supportDeclarationId: support.declarationId, preparedAt: at, deadlineAt: new Date(now + 30_000).toISOString(), dedupValidUntil: new Date(now + 604800000).toISOString() };
-    const prepared = await fixture.journal.append(operationId, stored.revision, eventFixture(2, { kind: "attempt-prepared", attempt }, at), { support });
-    const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, idempotencyKey: stored.journal.idempotencyKey, ownerRequestId: stored.journal.ownerRequestId, snapshot: stored.journal.snapshot, authority: approved.authority, supportDeclarationId: support.declarationId, deadlineAt: attempt.deadlineAt };
+    const { request, support, at, revision } = await prepareDispatch(fixture.journal, operationId, { connectionId: JUDGEMENT_BINDING.connectionId, declarationId: "mail-judgement-owner", expected: "a judgement", now });
     const backend = adaptDeskBackend({ adapterId: "mail", connection: JUDGEMENT_BINDING, declaration, bindings: { handlers: {}, observations: {} }, action: { ...JUDGEMENT_BINDING, kind: "action", capabilityId: support.capabilityId, writerOwner: "mail-owner", support, dispatch: request => adapterCall(request) }, authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "1" }), gate: () => null });
     calls.push(request);
     const result = await backend.connector.dispatch(request, new AbortController().signal) as OwnerResult;
-    await fixture.journal.receive(operationId, prepared.revision, result, at);
+    await fixture.journal.receive(operationId, revision, result, at);
   };
-  const makeHost = () => new MailJudgementHost({ ...JUDGEMENT_BINDING, journal: fixture.journal, index, authority: authorityPort, capability: id => registry.capability(id), dispatch, now: () => now });
+  const makeHost = () => new MailJudgementHost({ ...JUDGEMENT_BINDING, journal: fixture.journal, index, authority: auth.port, capability: id => registry.capability(id), dispatch, now: () => now });
   let host = makeHost();
   return {
     get host() { return host; }, get db() { return db; }, get owner() { return owner; }, get journal() { return fixture.journal; },
-    readings, folders, grants, approvals, calls, index, bridge, registry,
+    readings, folders, grants: auth.grants, approvals: auth.approvals, calls, index, bridge, registry,
     press(input: MailJudgementInput, choice?: "always" | "once" | "cancel") { return host.press(input, JUDGEMENT_PROVENANCE, choice); },
     failReceipts(operationId?: string) {
       db.run(`CREATE TRIGGER fixture_receipt_failure BEFORE UPDATE OF result_json ON desk_mail_judgement_operations
