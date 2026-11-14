@@ -4,6 +4,7 @@ import type { RangerCli, RangerRunner } from "../actions";
 import { runCommand } from "../../common/spawn";
 import type { StudioAct } from "./acts";
 import type { StudioView } from "./view";
+import { withThreadThinking } from "./thinking-view";
 
 const RunSchema = z.object({
   runUuid: z.uuid(),
@@ -38,7 +39,7 @@ export async function readThinking(dir: string, cli: RangerCli | undefined, run:
 }
 
 export async function withThinking(studio: StudioView, dir: string, cli: RangerCli | undefined, run?: RangerRunner): Promise<StudioView> {
-  return { ...studio, thinking: await readThinking(dir, cli, run) };
+  return withThreadThinking({ ...studio, thinking: await readThinking(dir, cli, run) });
 }
 
 export async function enqueueSparring(input: { studio: StudioView; dir: string; cli: RangerCli | undefined; act: Extract<StudioAct, { act: "spar" }>; requestId: string; run?: RangerRunner }): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {

@@ -167,7 +167,7 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 - `inbox` and `proposals`, oldest first. Proposals carry their effective `policy`, which also counts the `target.area`.
 - `problems`: one entry per file that could not be read or parsed, with its `path` and a `reason`. A broken file never breaks the response.
 
-Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText`, its effective `policy` and its sparring `personas`.
+Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText`, its effective `policy`, its sparring `personas` and its `thinking` (see Sparring and Think now).
 
 A material item carries `text` when the file holds indented lines under its bullet. The text is cut at 2000 characters, and a cut item carries `textTruncated: true`; the full text stays in the file. Control characters are removed. The response carries `"materialText": "untrusted"`: material text is data from mail and pasted sources, so a client renders it as plain text, never as Markdown or HTML, and never turns it into links.
 
@@ -258,6 +258,13 @@ Every successful filing appears in Done for you, with the reason and Undo. Undo 
 On an open thread, Think now, Grill me, Argue the other side, Red team and First principles enqueue Ranger's configured `ivy-think` job. Each persona adds a “What would X say?” button. A thread's personas are the names in `mc.desk.studio.personas` (optional, at most 20 names of up to 100 characters), then the thread's people: its People group under Relates to, that is material items of kind `person`, `people` or `contact` and kept person relations, in material order. At most 10 thread people are offered; a name over 100 characters or with a line break is not, and a name that is also configured appears once. Open relation proposals and free text never add a persona. `GET /api/desk/studio` serves each thread's list as `personas: [{ "name": "Nico", "from": "thread" }]`, with `from` `config` or `thread`. The Desk uses the existing `mc.desk.ranger.bin` and optional `config` settings. Ranger's Studio directory must match this Studio.
 
 The `spar` modes are `think`, `grill`, `other-side`, `red-team`, `first-principles` and `persona:<name>`, where the name is one of the thread's personas; any other name is refused with 400. Every request carries its explicit mode and the trigger `You asked: <mode>`. An explicit mode bypasses the automatic once-per-thread daily limit. It still consumes the native daily budget for the thread's strictest model policy; started failed attempts also count. Budgets reset at midnight UTC. When the budget is spent, buttons explain why they are disabled. A request already queued remains queued with Ranger's deferral reason.
+
+Each thread in `GET /api/desk/studio`, and in the `studio` of an `/act` answer, carries its `thinking`:
+
+- `{ "kind": "unavailable", "reason": "…" }` when Ranger is not configured or its queue cannot be read; the reason matches the stack-wide `studio.thinking`.
+- `{ "kind": "ready", "budget": "open" | "spent" | "off", "reason": "…" | null, "runs": [{ "id", "mode", "status": "pending" | "failed", "reason" }] }` otherwise. `budget` is `spent` when today's runs for the thread's policy reached its daily limit, and `off` when that limit is 0. `reason` is `null` when the budget is open; otherwise it is the English sentence the dashboard shows, and an external UI shows it verbatim. `runs` are this thread's requests whose note has not landed yet.
+
+The stack-wide `studio.thinking` keeps Ranger's raw `dailyRuns` and `runs`.
 
 The response is `{ ok, message, studio }`. Ranger retains the request id after completion, so a retry uses the original job rather than starting another. Reusing an id with a different thread or mode returns a conflict. The page keeps the request pending until a note carrying that job's `run` UUID appears. Other notes cannot clear it. A failed job shows its failure reason. Queue and note changes arrive through the Studio's 30-second refresh.
 
