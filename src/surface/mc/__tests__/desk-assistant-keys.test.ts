@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initDatabase } from "../db/init";
-import { ASSISTANT_ROW_MIGRATIONS } from "../desk/assistant-rows";
+import { ASSISTANT_ROW_MIGRATIONS, migrateAssistantRows } from "../desk/assistant-rows";
 import { migrateThreadKeys } from "../desk/studio/assistant-keys";
 import { appendEntry, mergeNotesSections, setNoteStatus } from "../desk/studio/edit";
 import { parseThreadFile } from "../desk/studio/format";
@@ -111,7 +111,9 @@ describe("stored rows with the old ids", () => {
     db.run("INSERT INTO desk_mail_log (message_id, sender, sender_domain, action, origin, created_at) VALUES ('m1', 'a@x.org', 'x.org', 'ivy', 'desk', 1)");
     db.run("INSERT INTO desk_done (attempt_key, action, item_key, title, status, created_at, updated_at) VALUES ('a1', 'ivy.approve', 'ivy:h1', 't', 'done', 1, 1)");
     db.run("INSERT INTO desk_grants (action, granted_at) VALUES ('mail.ivy', 1)");
-    for (const sql of ASSISTANT_ROW_MIGRATIONS) db.run(sql);
+    db.run("DELETE FROM desk_data_migrations");
+    expect(migrateAssistantRows(db)).toBe(true);
+    expect(migrateAssistantRows(db)).toBe(false);
     expect(db.query("SELECT action FROM desk_mail_log").all()).toEqual([{ action: "assistant" }]);
     expect(db.query("SELECT action, item_key FROM desk_done").all()).toEqual([{ action: "assistant.approve", item_key: "assistant:h1" }]);
     expect(db.query("SELECT action FROM desk_grants").all()).toEqual([{ action: "mail.assistant" }]);

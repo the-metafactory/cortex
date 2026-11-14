@@ -551,6 +551,8 @@ export function startServer(
     void migrateStudioKeys({ options: studioAtStart, areas: options.desk.areas, assistantName: assistantNameOf(options.desk) }).then((result) => {
       const line = keyMigrationLine(result);
       if (line) console.log(line);
+    }).catch((err: unknown) => {
+      console.log(`desk: Studio keys not renamed yet; the next start tries again: ${err instanceof Error ? err.message : String(err)}`);
     });
   }
 

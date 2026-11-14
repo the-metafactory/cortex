@@ -10,7 +10,7 @@ import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
 import { MAX_REPLY_CHARS, type ListedMail, type MailActionResult } from "./mail-actions";
 import { closePendingTasks, queueTaskClose, type TaskCloser } from "./mail-handoff-close";
 import { MAX_FINDING, MAX_FINDINGS } from "./mail-handoff-schema";
-import { handoffAction as act, handoffKey, HANDOFF_KEY_PREFIX, handoffWhen as when, MAX_INSTRUCTION, OPEN_STATES, type HandoffState, type HandoffView } from "./handoff";
+import { handoffAction as act, handoffKey, HANDOFF_KEY_PREFIX, LEGACY_ACTION_IDS, LEGACY_KEY_PREFIX, handoffWhen as when, MAX_INSTRUCTION, OPEN_STATES, type HandoffState, type HandoffView } from "./handoff";
 import { logMailDecision, mailFeatures, senderDomain, type MailFeatures } from "./mail-log";
 import type { MailForStudio } from "./mail-studio";
 import { replySubject } from "./mail-triage";
@@ -26,21 +26,12 @@ export const HANDOFF_OPS = ["assistant.approve", "assistant.discard", "assistant
 export type HandoffOp = (typeof HANDOFF_OPS)[number];
 export const isHandoffOp = (action: string): action is HandoffOp => HANDOFF_OPS.includes(action as HandoffOp);
 
-const LEGACY_KEY_PREFIX = "ivy:";
-export { HANDOFF_KEY_PREFIX, handoffKey };
+export { HANDOFF_KEY_PREFIX, handoffKey, LEGACY_ACTION_IDS };
 export function handoffIdOf(key: string): string | null {
   const prefix = [HANDOFF_KEY_PREFIX, LEGACY_KEY_PREFIX].find((p) => key.startsWith(p));
   return prefix ? key.slice(prefix.length) : null;
 }
 
-export const LEGACY_ACTION_IDS: Readonly<Record<string, string>> = {
-  "ivy.hand": HAND_ACTION,
-  "ivy.approve": "assistant.approve",
-  "ivy.discard": "assistant.discard",
-  "ivy.retry": "assistant.retry",
-  "ivy.edit": "assistant.edit",
-  "mail.ivy": "mail.assistant",
-};
 
 /** A mail request that still names a hand-off action by its old id, with the id renamed; anything else as it came. */
 export function withCurrentActionId(raw: unknown): unknown {
