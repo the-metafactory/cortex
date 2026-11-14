@@ -1,7 +1,7 @@
 <!-- glossary-ignore: host, token, path, user, data, message, body, run -->
 # Desk adapter package and SDK authoring contract
 
-This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.6.0, an additive amendment of 1.0.0 through 1.5.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.6.0"`).
+This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.7.0, an additive amendment of 1.0.0 through 1.6.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.7.0"`).
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
@@ -18,6 +18,9 @@ SDK 1.5.0 adds `host.mail`, the host's read bridge to Mail (cortex#3593). `host.
 
 <!-- glossary-ignore: host, run, data -->
 SDK 1.6.0 lets a conformance run supply a fake Mail source (cortex#3615). `runConformance(packageDir, options)` takes `{ tempParent?, mail? }`; a string second argument is still read as `tempParent`. See "Conformance with a fake Mail source" below. Only the harness changes; a package built against 1.5.0 still loads.
+
+<!-- glossary-ignore: host, run, data -->
+SDK 1.7.0 extends the fake Mail source to the failure scenarios and adds a cloud reader to a Mail run (cortex#3629). `runFailureScenarios(packageDir, { mail })` takes the same `MailReadSource` as `runConformance`, and a conformance run with a Mail binding reports a `cloud-reader` probe per query capability. Only the harness changes; a package built against 1.6.0 still loads.
 
 An external package's Bun verification script can execute the same checks as `scripts/desk-adapter-conformance.ts`:
 
@@ -49,8 +52,9 @@ const capabilities = await runConformance(import.meta.dir, { mail });
 
 - The run has one synthetic connection, `CONFORMANCE_CONNECTION_ID`. A binding for the package's adapter and that connection makes `host.mail.listed()` serve it exactly as the production bridge does: the bound account, only mail listed under it, at most the first paragraph, `stale` after a provider failure (`error` set) and only inside an admitted call.
 - With no `mail`, or without exactly one binding for that connection, `host.mail.listed()` resolves to `null`, as it does for an unbound connection in production.
-- The binding's `dataPolicy` sets the read restriction the run's host publishes for the connection's destinations, through `mailReadRestriction`: `local` when absent, `cloud` when the binding says so. Without a Mail binding the run publishes `cloud`, as before. The run reads from a local conversation, so either policy admits its reads; a cloud reader's denial is tested through the host query runner, not this harness.
-- `runFailureScenarios` takes no Mail source.
+- The binding's `dataPolicy` sets the read restriction the run's host publishes for the connection's destinations, through `mailReadRestriction`: `local` when absent, `cloud` when the binding says so. Without a Mail binding the run publishes `cloud`, as before. The run's query and observation probes read from a local conversation, so either policy admits them.
+- With a Mail binding, the run also reads each query capability as a reader in a cloud-policy conversation and reports it as a `cloud-reader` probe. For a `local` connection the probe is conformant only when the host answers `denied` with no group and no count, releases nothing and never calls the package; for a `cloud` connection, only when the read is released to that reader. A run without a Mail binding has no `cloud-reader` probe.
+- `runFailureScenarios(packageDir, { mail })` takes the same source. Its scenarios and its companion run read listed mail from it and publish the connection's restriction the same way, so a Mail read adapter's companion run can be conformant. Without `mail` it behaves as before.
 - `MailReadSource`, `MailConnectionBinding`, `MailSourceListing` and `MailSourceItem` are the shapes the Cortex runtime's loader takes, published for this harness. They change only additively within Desk SDK 1.x; a breaking change to them bumps the SDK major version.
 
 The tests are `src/conversations/domain-adapters/__tests__/conformance-mail.test.ts`.

@@ -10,7 +10,7 @@ import type { ObjectReference } from "../../conversations/domain-adapters/types"
 import { probeAction } from "./actions";
 import { CONFORMANCE_CONNECTION_ID } from "./connection";
 import { recordConnector } from "./connectors";
-import { listDestinations, probeObservation, probeQuery, schemaIndex, type ProbeEnv } from "./probes";
+import { listDestinations, probeCloudReader, probeObservation, probeQuery, schemaIndex, type ProbeEnv } from "./probes";
 import { emptyOwnerCalls, overallVerdict, refused, type CapabilityReport, type ConformanceReport, type OwnerCalls } from "./report";
 import { ConformanceRefusal, openConformanceRig, SYNTHETIC_CREDENTIAL_HANDLE } from "./rig";
 
@@ -41,7 +41,8 @@ export async function openConformanceStore(dir: string): Promise<{ engine: Harne
   return { engine, store: new DeskGenerationStore(engine) };
 }
 
-function conformanceMailBinding(mail: MailReadSource | undefined, adapterId: string): MailConnectionBinding | undefined {
+/** The fake Mail source's one binding for the run's connection and this adapter, if it has exactly one. */
+export function conformanceMailBinding(mail: MailReadSource | undefined, adapterId: string): MailConnectionBinding | undefined {
   const matches = mail?.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === CONFORMANCE_CONNECTION_ID) ?? [];
   return matches.length === 1 ? matches[0] : undefined;
 }
@@ -85,10 +86,14 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
     const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
     try {
       if (index === 0) {
+        const queries = manifest.readBindings.filter(binding => binding.mode === "query");
+        const cloudReads: CapabilityReport[] = [];
+        if (mailBinding) for (const binding of queries) cloudReads.push(await probeCloudReader(env, binding, mailBinding.dataPolicy ?? "local"));
         for (const binding of manifest.readBindings) {
           if (binding.mode === "query") capabilities.push(await probeQuery(env, binding));
           if (binding.mode === "poll") capabilities.push(await probeObservation(env, binding));
         }
+        capabilities.push(...cloudReads);
       }
       if (actionId !== undefined) capabilities.push(...await probeAction(env, actionId));
     } finally {

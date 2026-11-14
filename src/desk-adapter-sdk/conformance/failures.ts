@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
+import type { MailReadSource } from "../../conversations/domain-adapters/mail-read-source";
 import type { ApprovedSnapshot, Json } from "../../conversations/domain-adapters/operations/types";
 import { DeskPackageLoader, type DeskPackageCandidate } from "../../conversations/domain-adapters/package";
 import { QueryPageSchema } from "../../conversations/domain-adapters/reads/query-types";
@@ -18,7 +19,7 @@ import { guardNetwork } from "./network";
 import { listDestinations, schemaIndex, type ProbeEnv } from "./probes";
 import { emptyOwnerCalls, totalOwnerCalls, type OwnerCalls, type Verdict } from "./report";
 import { CONFORMANCE_CONNECTION_ID } from "./connection";
-import { authorizeConnection, exercise, openConformanceStore } from "./run";
+import { authorizeConnection, conformanceMailBinding, exercise, openConformanceStore } from "./run";
 import { openConformanceRig, STACK, type ConformanceRig } from "./rig";
 import { sampleValue, schemaUrn } from "./sample";
 
@@ -60,7 +61,13 @@ export interface FailureReport {
   networkRequests: number;
 }
 
-export interface FailureOptions { companionDir?: string }
+// glossary-ignore: host, run
+/**
+ * `companionDir` is a second package probed after each scenario (the package itself by default). `mail` is a fake
+ * Mail source, as for `runConformance`: a binding for an adapter and `CONFORMANCE_CONNECTION_ID` serves that
+ * adapter's `host.mail.listed()` and sets the read restriction the scenarios' host publishes for the connection.
+ */
+export interface FailureOptions { companionDir?: string; mail?: MailReadSource }
 
 const HOST_WAIT_MS = 100;
 const CRASH_WAIT_MS = 400;
@@ -84,10 +91,11 @@ interface ScenarioRun {
   target?: DeskPackageCandidate;
   companion?: DeskPackageCandidate;
   samePackage: boolean;
+  mail?: MailReadSource;
   close(): Promise<void>;
 }
 
-async function prepareScenario(packageDir: string, companionDir: string): Promise<ScenarioRun> {
+async function prepareScenario(packageDir: string, companionDir: string, mail: MailReadSource | undefined): Promise<ScenarioRun> {
   const temp = await mkdtemp(join(tmpdir(), "desk-conformance-failure-"));
   const samePackage = resolve(packageDir) === resolve(companionDir);
   const targetRoot = join(temp, "package");
@@ -95,12 +103,12 @@ async function prepareScenario(packageDir: string, companionDir: string): Promis
   await cp(resolve(packageDir), targetRoot, { recursive: true, dereference: false });
   if (!samePackage) await cp(resolve(companionDir), companionRoot, { recursive: true, dereference: false });
   const { engine, store } = await openConformanceStore(temp);
-  const loader = new DeskPackageLoader({ bundledPackages: samePackage ? [targetRoot] : [targetRoot, companionRoot], store });
+  const loader = new DeskPackageLoader({ bundledPackages: samePackage ? [targetRoot] : [targetRoot, companionRoot], store, ...(mail ? { mail } : {}) });
   const discovery = await loader.discover();
   const find = (root: string) => discovery.candidates.find(candidate => resolve(candidate.packageRoot) === realpathSync(root));
   const target = find(targetRoot);
   const companion = find(companionRoot);
-  return { temp, store: engine, loader, ...(target ? { target } : {}), ...(companion ? { companion } : {}), samePackage,
+  return { temp, store: engine, loader, ...(target ? { target } : {}), ...(companion ? { companion } : {}), samePackage, ...(mail ? { mail } : {}),
     close: async () => { await engine.close(BACKGROUND_CONTEXT); await rm(temp, { recursive: true, force: true }); } };
 }
 
@@ -129,11 +137,12 @@ async function arm(run: ScenarioRun, candidate: DeskPackageCandidate, plan: Faul
   const listed = await listDestinations({ registry, manifest, sample, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID });
   sample.destinations.push(...listed.destinations);
   const binding = manifest.readBindings.find(item => item.mode === "query" && action.objectTypes.includes(item.objectType));
+  const mailBinding = conformanceMailBinding(run.mail, adapterId);
   if (!binding) throw new Error("The package declares no query binding for the action's object type.");
   const { connector, recorded } = recordConnector(faultyConnector(plain, plan));
   const rig = await openConformanceRig({
     dir: run.temp, registry, connector, adapterId, connectionId: CONFORMANCE_CONNECTION_ID, readBindings: manifest.readBindings, readCapabilityIds: readIds,
-    writeCapabilityIds: [actionId], writerCapabilityId: actionId, destinations: sample.destinations,
+    writeCapabilityIds: [actionId], writerCapabilityId: actionId, destinations: sample.destinations, ...(mailBinding ? { mailBinding } : {}),
   });
   const env: ProbeEnv = { rig, manifest, sample, recorded, plain, adapterId, connectionId: CONFORMANCE_CONNECTION_ID };
   return { rig, env, actionId, view, binding, close: async () => { await rig.close(); } };
@@ -333,15 +342,15 @@ async function probeCompanion(run: ScenarioRun, originalDir: string, targetActiv
   if (credentialOnly(candidate) !== null) return { ...base, status: "not-run", code: "authentication_unsupported" };
   const activated = await run.loader.activate(candidate.packageId);
   if (!activated.ok) return { ...base, status: "refused", code: activated.error.code };
-  const outcome = await exercise(run.loader, candidate, run.temp, { packageDir: originalDir, actions: [], credentialRequests: 0 });
+  const outcome = await exercise(run.loader, candidate, run.temp, { packageDir: originalDir, actions: [], credentialRequests: 0 }, run.mail);
   return { ...base, status: outcome.status, ...(outcome.code === undefined ? {} : { code: outcome.code }) };
 }
 
 interface RanScenario { report: ScenarioReport; companion: CompanionReport; packageId?: string; adapterId?: string }
 
-async function runScenario(scenario: ScenarioName, packageDir: string, companionDir: string, guard: ReturnType<typeof guardNetwork>): Promise<RanScenario> {
+async function runScenario(scenario: ScenarioName, packageDir: string, companionDir: string, mail: MailReadSource | undefined, guard: ReturnType<typeof guardNetwork>): Promise<RanScenario> {
   const started = guard.count();
-  const run = await prepareScenario(packageDir, companionDir);
+  const run = await prepareScenario(packageDir, companionDir, mail);
   const candidate = run.target;
   let evidence: Evidence;
   try {
@@ -391,7 +400,7 @@ export async function runFailureScenarios(packageDir: string, options: FailureOp
     let companion: CompanionReport = { packageDir: companionDir, status: "not-run", samePackage: companionDir === resolve(packageDir) };
     let identity: { packageId?: string; adapterId?: string } = {};
     for (const scenario of FAILURE_SCENARIOS) {
-      const ran = await runScenario(scenario, packageDir, companionDir, guard);
+      const ran = await runScenario(scenario, packageDir, companionDir, options.mail, guard);
       scenarios.push(ran.report);
       companion = ran.companion;
       identity = { ...(ran.packageId === undefined ? {} : { packageId: ran.packageId }), ...(ran.adapterId === undefined ? {} : { adapterId: ran.adapterId }) };

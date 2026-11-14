@@ -314,7 +314,7 @@ describe("the Desk adapter host's Mail read bridge", () => {
     const host = packageHost();
     expect(await withAdmittedCall({ adapterId: "other-adapter", connectionId: TWO }, () => host.mail.listed({ adapterId: "other-adapter", connectionId: TWO }))).toBeNull();
     expect(await listedIn(TWO)).toBeNull();
-    expect(host.sdkVersion).toBe("1.6.0");
+    expect(host.sdkVersion).toBe("1.7.0");
 
     await loader.disable(ADAPTER);
 

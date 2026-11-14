@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskMailListing } from "../../../desk-sdk";
-import { CONFORMANCE_CONNECTION_ID, runConformance, type MailConnectionBinding, type MailReadSource, type MailSourceListing } from "../../../desk-adapter-sdk/conformance";
+import { CONFORMANCE_CONNECTION_ID, runConformance, runFailureScenarios, type ConformanceReport, type MailConnectionBinding, type MailReadSource, type MailSourceListing } from "../../../desk-adapter-sdk/conformance";
 import { openConformanceRig } from "../../../desk-adapter-sdk/conformance/rig";
 import { DomainAdapterRegistry } from "../registry";
 import type { TrustedConnector } from "../../authority";
@@ -24,6 +24,13 @@ const listing: MailSourceListing = {
 const binding = (extra: Partial<MailConnectionBinding> = {}): MailConnectionBinding => ({ adapterId: ADAPTER, connectionId: CONFORMANCE_CONNECTION_ID, sourceId: SOURCE, account: ACCOUNT, ...extra });
 const fakeMail = (bindings: MailConnectionBinding[]): MailReadSource => ({ connections: () => bindings, listings: () => [listing] });
 const seenListings = (): (DeskMailListing | null)[] => (globalThis as { __conformanceMailListings?: (DeskMailListing | null)[] }).__conformanceMailListings ?? [];
+
+function expectUnbound(report: ConformanceReport): void {
+  expect(report.status).toBe("refused");
+  expect(seenListings().length).toBeGreaterThan(0);
+  expect(seenListings().every(read => read === null)).toBe(true);
+  expect(report.capabilities.some(item => item.probe === "cloud-reader")).toBe(false);
+}
 
 let root = "";
 let packageDir = "";
@@ -60,17 +67,49 @@ describe("a conformance run given a fake Mail source", () => {
   test("without a fake Mail source the package reads no mail and its reads are refused", async () => {
     const report = await runConformance(packageDir);
 
-    expect(report.status).toBe("refused");
-    expect(seenListings().length).toBeGreaterThan(0);
-    expect(seenListings().every(read => read === null)).toBe(true);
+    expectUnbound(report);
     expect(report.capabilities.find(item => item.probe === "query")).toMatchObject({ verdict: "refused", code: "invalid_query_page" });
   });
 
   test("a binding for another connection leaves the conformance connection unbound", async () => {
-    const report = await runConformance(packageDir, { mail: fakeMail([binding({ connectionId: "connection-other" })]) });
+    expectUnbound(await runConformance(packageDir, { mail: fakeMail([binding({ connectionId: "connection-other" })]) }));
+  });
+});
 
-    expect(report.status).toBe("refused");
+describe("a cloud reader in a conformance run with a fake Mail source", () => {
+  test("is denied a connection with no explicit policy, with no group or count, and the package is not called", async () => {
+    const report = await runConformance(packageDir, { mail: fakeMail([binding()]) });
+
+    const cloud = report.capabilities.filter(item => item.probe === "cloud-reader");
+    expect(cloud).toEqual([{ capabilityId: "tideway.gauge.search", probe: "cloud-reader", verdict: "conformant", released: 0, detail: expect.stringContaining("denied") }]);
+    expect(report.status).toBe("conformant");
+  });
+
+  test("is released a connection whose policy says cloud", async () => {
+    const report = await runConformance(packageDir, { mail: fakeMail([binding({ dataPolicy: "cloud" })]) });
+
+    const [cloud] = report.capabilities.filter(item => item.probe === "cloud-reader");
+    expect(cloud).toMatchObject({ verdict: "conformant" });
+    expect(cloud?.released).toBeGreaterThan(0);
+  });
+});
+
+describe("the failure scenarios given a fake Mail source", () => {
+  test("serve the connection's listed mail, so a Mail read adapter's companion run is conformant and every scenario isolated", async () => {
+    const report = await runFailureScenarios(packageDir, { mail: fakeMail([binding()]) });
+
+    expect(report.companion).toMatchObject({ adapterId: ADAPTER, status: "conformant" });
+    expect(report.status).toBe("isolated");
     expect(seenListings().length).toBeGreaterThan(0);
+    expect(seenListings().every(read => read?.account === ACCOUNT && read.mail.map(mail => mail.subject).join() === "Listed subject one")).toBe(true);
+    expect(report.networkRequests).toBe(0);
+  });
+
+  test("without a Mail source read no mail, as before, and the companion run is refused", async () => {
+    const report = await runFailureScenarios(packageDir);
+
+    expect(report.companion).toMatchObject({ adapterId: ADAPTER, status: "refused" });
+    expect(report.status).toBe("failed");
     expect(seenListings().every(read => read === null)).toBe(true);
   });
 

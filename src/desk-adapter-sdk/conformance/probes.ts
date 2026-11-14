@@ -114,6 +114,39 @@ export async function probeQuery(env: ProbeEnv, binding: ReadBinding): Promise<C
   }
 }
 
+/**
+ * Reads one query capability as a reader in a cloud-policy conversation. For a Mail connection that is `local`, the
+ * host must answer `denied` with no group and no count, release nothing and never call the package; for a `cloud`
+ * connection the read must be released to that reader. The host shares one query runner per host and `probeQuery`
+ * closes it, so this probe runs first and leaves the runner open.
+ */
+export async function probeCloudReader(env: ProbeEnv, binding: ReadBinding, egress: "local" | "cloud"): Promise<CapabilityReport> {
+  const id = binding.capabilityId;
+  const reader = env.rig.cloudReader;
+  if (!reader) return refused(id, "cloud-reader", "host_unavailable", "The run opened no cloud reader.");
+  if (env.sample.destinations.length === 0) return refused(id, "cloud-reader", "no_destination", "No destination could be listed, so no read is admitted.");
+  const runner = env.rig.host.readQueries(env.rig.registry, env.rig.bindings);
+  const calls = env.recorded.queries.length;
+  const sends = reader.sends.length;
+  try {
+    const request = await runner.create(reader.context, [sourceFor(env, binding)], reader.sink);
+    const result = await runner.run(reader.context, request, reader.sink);
+    const called = env.recorded.queries.length - calls;
+    const released = reader.sends.length - sends;
+    if (egress === "local") {
+      const denied = result.status === "denied" && result.groups.length === 0 && released === 0 && called === 0;
+      return denied
+        ? conformant(id, "cloud-reader", "a local Mail connection was denied to a cloud reader with no group or count, and the package was not called")
+        : refused(id, "cloud-reader", "cloud_reader_admitted", `A cloud reader of a local Mail connection got ${result.status} with ${String(result.groups.length)} group(s), ${String(released)} release(s) and ${String(called)} package call(s).`);
+    }
+    return result.status === "ok" && released > 0
+      ? conformant(id, "cloud-reader", `a cloud Mail connection was released to a cloud reader (${String(released)} release(s))`, released)
+      : refused(id, "cloud-reader", "cloud_reader_refused", `A cloud reader of a cloud Mail connection got ${result.status} with ${String(released)} release(s).`);
+  } catch (error) {
+    return refused(id, "cloud-reader", "query_failed", firstLine(messageOf(error)));
+  }
+}
+
 function observationRefusal(env: ProbeEnv, binding: ReadBinding, source: QuerySource): { code: string; detail: string } {
   const entry = env.recorded.observations.filter(item => item.request.source.capabilityId === binding.capabilityId).at(-1);
   if (entry?.failure !== undefined) return { code: "invalid_observation", detail: firstLine(entry.failure) };
