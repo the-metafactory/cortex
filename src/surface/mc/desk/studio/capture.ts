@@ -138,7 +138,7 @@ async function undoPlan(ctx: ActContext, dir: string, id: string): Promise<ActPl
   const from = lines[at - 1]?.trim() === "" && (next === undefined || next.trim() === "" || next.startsWith("## ")) ? at - 1 : at;
   const changed = appendLog([...lines.slice(0, from), ...lines.slice(end)].join("\n"), localTime(ctx.now), `Undid capture ${id}`);
   if (!changed) return { status: 409, error: "That thread cannot be edited; nothing was written." };
-  const message = withPerson ? "Removed the capture and the sender it added from its thread. Later changes were kept." : "Removed the capture from its thread. Later changes were kept.";
+  const message = `Removed the capture${withPerson ? " and the sender it added" : ""} from its thread. Later changes were kept.`;
   return { writes: [{ path: file.path, text: changed }], removes: [], subject: `Undo capture ${id}`, message };
 }
 

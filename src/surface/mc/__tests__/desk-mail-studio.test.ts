@@ -47,6 +47,10 @@ const act = async (body: unknown): Promise<{ status: number; json: Record<string
 };
 const readThread = (slug: string): string => readFileSync(join(dir, `threads/${slug}.md`), "utf8");
 const git = (...args: string[]): string => gitIn(dir, ...args);
+const undoLast = (requestId: string): Promise<Response> => {
+  const id = readDone(db, NOW)[0]?.itemKey ?? "";
+  return handleDeskCaptureUndo(new Request("http://localhost/api/desk/capture/undo", { method: "POST", body: JSON.stringify({ id, requestId }) }), db, runtime);
+};
 
 beforeEach(async () => {
   dir = seedStudioRepo("desk-mail-studio-", { engines: thread("What can engines make?", "lab"), home: thread("How do we live at home?", "private") });
@@ -150,8 +154,7 @@ describe("Add a mail to a Studio thread", () => {
     expect(added).toContain("you chose this thread");
     const parsed = parseThreadFile("threads/engines.md", added);
     expect(parsed.ok && parsed.value.material.map((m) => m.kind)).toEqual(["link", "capture", "person"]);
-    const id = readDone(db, NOW)[0]?.itemKey ?? "";
-    const res = await handleDeskCaptureUndo(new Request("http://localhost/api/desk/capture/undo", { method: "POST", body: JSON.stringify({ id, requestId: "req-undo-2" }) }), db, runtime);
+    const res = await undoLast("req-undo-2");
     expect(res.status).toBe(200);
     const after = readThread("engines");
     expect(after).not.toContain("capture:");
@@ -241,8 +244,7 @@ describe("Add a mail to a Studio thread", () => {
     const seeded = readThread("engines");
     await act({ action: "studio.add", key: "mail:w1", requestId: "req-person-3", thread: "engines", includeText: false });
     expect(readThread("engines").match(/- person: /g)).toHaveLength(1);
-    const id = readDone(db, NOW)[0]?.itemKey ?? "";
-    const res = await handleDeskCaptureUndo(new Request("http://localhost/api/desk/capture/undo", { method: "POST", body: JSON.stringify({ id, requestId: "req-person-4" }) }), db, runtime);
+    const res = await undoLast("req-person-4");
     expect(await res.json()).toMatchObject({ ok: true, message: "Removed the capture from its thread. Later changes were kept." });
     expect(readThread("engines").split("## Log")[0]).toBe(seeded.split("## Log")[0]);
   });
@@ -251,8 +253,7 @@ describe("Add a mail to a Studio thread", () => {
     await act({ action: "studio.add", key: "mail:w1", requestId: "req-person-5", thread: "engines", includeText: false });
     writeFileSync(join(dir, "threads/engines.md"), readThread("engines").replace("## Log", "- link: Later source\n\n## Log"));
     git("commit", "-qam", "Later material");
-    const id = readDone(db, NOW)[0]?.itemKey ?? "";
-    const res = await handleDeskCaptureUndo(new Request("http://localhost/api/desk/capture/undo", { method: "POST", body: JSON.stringify({ id, requestId: "req-person-6" }) }), db, runtime);
+    const res = await undoLast("req-person-6");
     expect(await res.json()).toMatchObject({ ok: true, message: "Removed the capture and the sender it added from its thread. Later changes were kept." });
     const parsed = parseThreadFile("threads/engines.md", readThread("engines"));
     expect(parsed.ok && parsed.value.material.map((m) => `${m.kind}: ${m.label}`)).toEqual(["link: Existing source", "link: Later source"]);
