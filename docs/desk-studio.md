@@ -252,7 +252,7 @@ The model returns `{ "thread": "slug or null", "match": true, "reason": "one sen
 
 Every successful filing appears in Done for you, with the reason and Undo. Undo removes that capture in a new commit and preserves later thread changes. For a filed mail it also removes the `person:` line that capture added, when that line still sits right under the capture; a person line that was there before is never removed. A capture that has moved or changed cannot be undone automatically. Filing and Undo share the Studio's clean-tree checks, request replay, and write lock.
 
-`POST /api/desk/create` accepts `{ "requestId": "...", "kind": "capture", "fields": { "text": "..." } }`. `POST /api/desk/capture/undo` accepts `{ "requestId": "...", "id": "capture-..." }`. Both pass the same identity and rebind gates as other Desk writes.
+`POST /api/desk/create` accepts `{ "requestId": "...", "kind": "capture", "fields": { "text": "..." } }` and answers `{ "ok": true, "id": "capture-...", "message": "...", "commit": "...", "replayed": false, "studio": { ... } }`, whether the capture went to a thread or the inbox. A retry with the same `requestId` answers with `"replayed": true` and the same `id`. That `id` is the handle Undo takes. `POST /api/desk/capture/undo` accepts `{ "requestId": "...", "id": "capture-..." }`. Both pass the same identity and rebind gates as other Desk writes.
 
 ## Sparring and Think now
 

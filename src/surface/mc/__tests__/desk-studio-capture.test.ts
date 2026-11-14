@@ -182,6 +182,40 @@ describe("capture command bar API", () => {
     expect(undo.status).toBe(200);
   });
 
+  it("returns the filed capture's id, which undoes exactly that capture, for an inbox filing and a thread filing", async () => {
+    const create = (requestId: string, model: CaptureModel) => handleDeskCreate(request({ requestId, kind: "capture", fields: { text: "Empty places on the board" } }), db, runtime, { captureModel: model, now: () => NOW.getTime() });
+    const inboxResponse = await create(rid(), async () => ({ thread: null, reason: "Unrelated." }));
+    const inbox = await inboxResponse.json() as { ok: boolean; id: string; message: string; commit: string; replayed: boolean; studio: unknown };
+    expect(inboxResponse.status).toBe(200);
+    expect(inbox).toMatchObject({ ok: true, replayed: false, message: expect.stringContaining("Studio inbox"), commit: expect.stringMatching(/^[a-f0-9]{40,64}$/), studio: expect.any(Object) });
+    expect(inbox.id).toMatch(/^capture-[a-f0-9]{32}$/);
+    expect(readFileSync(join(dir, `inbox/${inbox.id}.md`), "utf8")).toContain("Empty places on the board");
+
+    const threadResponse = await create(rid(), matching);
+    const filed = await threadResponse.json() as { ok: boolean; id: string };
+    expect(filed.ok).toBe(true);
+    expect(filed.id).not.toBe(inbox.id);
+    expect(readFileSync(join(dir, "threads/studio.md"), "utf8")).toContain(`- capture: [${filed.id}] `);
+
+    const undo = await handleDeskCaptureUndo(request({ id: filed.id, requestId: rid() }), db, runtime);
+    expect(undo.status).toBe(200);
+    expect(readFileSync(join(dir, "threads/studio.md"), "utf8")).not.toContain(`- capture: [${filed.id}]`);
+    expect(readFileSync(join(dir, `inbox/${inbox.id}.md`), "utf8")).toContain("Empty places on the board");
+  });
+
+  it("replays a retried capture with the same request id and the same capture id", async () => {
+    const requestId = rid();
+    const body = { requestId, kind: "capture", fields: { text: "Empty places on the board" } };
+    const first = await (await handleDeskCreate(request(body), db, runtime, { captureModel: matching, now: () => NOW.getTime() })).json() as { id: string; replayed: boolean };
+    const head = git("rev-parse", "HEAD");
+    const retry = await handleDeskCreate(request(body), db, runtime, { captureModel: async () => { throw new Error("must not call model"); }, now: () => NOW.getTime() });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toMatchObject({ ok: true, replayed: true, id: first.id });
+    expect(first.replayed).toBe(false);
+    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect((await handleDeskCaptureUndo(request({ id: first.id, requestId: rid() }), db, runtime)).status).toBe(200);
+  });
+
   it("advertises automatic filing only after promotion, even without Ranger", async () => {
     const promoted = await handleDeskAutonomy(request({ action: "studio.capture", on: true }), db, runtime);
     expect(promoted.status).toBe(200);

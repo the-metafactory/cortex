@@ -90,11 +90,14 @@ export interface CaptureInput {
   model?: CaptureModel;
 }
 
-export async function fileStudioCapture(input: CaptureInput): Promise<ActResult> {
+export type CaptureResult = Exclude<ActResult, { ok: true }> | (Extract<ActResult, { ok: true }> & { id: string });
+
+export async function fileStudioCapture(input: CaptureInput): Promise<CaptureResult> {
   const id = captureId(input.requestId);
   const result = await runStudioTransaction(input, (ctx) => planCapture(ctx, input.options, id, input.text, input.model ?? captureModel));
-  if (result.ok) recordCaptureDone(input.db, id, input.text, result.message, (input.now ?? new Date()).getTime());
-  return result;
+  if (!result.ok) return result;
+  recordCaptureDone(input.db, id, input.text, result.message, (input.now ?? new Date()).getTime());
+  return { ...result, id };
 }
 
 export function recordCaptureDone(db: Database, id: string, title: string, message: string, at: number): void {
