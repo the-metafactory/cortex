@@ -20,5 +20,6 @@ export const studioThread = (slug: string, over: Partial<StudioThreadView> = {})
   outcomeText: "",
   policy: "cloud",
   overCap: false,
+  personas: [],
   ...over,
 });

@@ -1,8 +1,10 @@
 import type { Database } from "bun:sqlite";
 import { clock } from "./time";
-import type { DeskAction, DeskEvent, DeskInterrupt, DeskItem } from "./types";
+import type { DeskAction, DeskEvent, DeskInterrupt, DeskInterruptReason, DeskItem, InterruptFeedback } from "./types";
 import { currentGap, type CalendarAvailability } from "./calendar-availability";
 import type { DESK_TRANSPORTS } from "../../../common/types/config";
+import { reasonOn, type InterruptSwitches } from "./interrupt-switches";
+import { listedEntry } from "./vips";
 
 export type TransportId = (typeof DESK_TRANSPORTS)[number];
 
@@ -35,6 +37,7 @@ export interface DeskPush {
   title: string;
   why: string;
   action?: { label: string; url: string };
+  reason?: DeskInterruptReason;
 }
 
 export type PushResult = { status: "sent"; ref?: string } | { status: "buffered" } | { status: "failed"; error: string };
@@ -95,13 +98,43 @@ export function meetingItems(events: DeskEvent[], now: number, minutes: number):
 
 const rankedForToday = (item: DeskItem): boolean => item.urgency !== "waiting";
 
-export function interrupts(item: DeskItem, rules: InterruptRules, now: number): boolean {
+export interface InterruptContext {
+  switches: InterruptSwitches;
+  vips: ReadonlySet<string>;
+  today: readonly DeskEvent[];
+  feedback: ReadonlyMap<string, InterruptFeedback>;
+}
+
+export const NO_SWITCHES: InterruptContext = { switches: new Map(), vips: new Set(), today: [], feedback: new Map() };
+
+const senderOf = (mail: DeskItem): string => mail.detail.refs[0] ?? "";
+
+function meetingLaterToday(eventKey: string, today: readonly DeskEvent[], now: number): boolean {
+  return today.some((e) => e.key === eventKey && e.kind === "meeting" && e.at > now);
+}
+
+function mailReasons(item: DeskItem, context: InterruptContext, now: number): DeskInterruptReason[] {
+  const vip = item.suspicious ? null : listedEntry(context.vips, senderOf(item));
+  return [
+    ...(item.eventKey && meetingLaterToday(item.eventKey, context.today, now) ? [{ code: "mail.meeting-today" as const, eventKey: item.eventKey }] : []),
+    ...(vip ? [{ code: "mail.vip" as const, target: vip }] : []),
+    ...(rankedForToday(item) ? [{ code: "mail.ranked" as const }] : []),
+  ];
+}
+
+function firingReasons(item: DeskItem, rules: InterruptRules, context: InterruptContext, now: number): DeskInterruptReason[] {
   const fresh = item.since !== undefined && now - item.since <= rules.maxAgeMinutes * MINUTE;
-  if (item.kind === "meeting") return rules.meetingMinutes > 0;
-  if (item.kind === "reminder") return rules.reminders && fresh;
-  if (item.kind === "mail") return rules.mail && rankedForToday(item) && fresh;
-  if (item.kind === "adapter") return item.interruptRequested === true && rules.mail && item.freshness === "fresh";
-  return false;
+  if (item.kind === "meeting") return [{ code: "meeting.soon" }];
+  if (item.kind === "adapter") return item.interruptRequested === true && item.freshness === "fresh" ? [{ code: "mail.ranked" }] : [];
+  if (!fresh) return [];
+  if (item.kind === "reminder") return [{ code: "reminder.due" }];
+  if (item.kind === "mail") return mailReasons(item, context, now);
+  return [];
+}
+
+/** The item's interruption reason: the first reason that fires and is switched on, or null when it does not interrupt. */
+export function interrupts(item: DeskItem, rules: InterruptRules, now: number, context: InterruptContext = NO_SWITCHES): DeskInterruptReason | null {
+  return firingReasons(item, rules, context, now).find((r) => reasonOn(rules, context.switches, r.code, r.target)) ?? null;
 }
 
 export function heldDuringMeeting(items: DeskItem[], availability: CalendarAvailability | undefined, now: number): DeskItem[] {
@@ -124,7 +157,7 @@ function failure(sent: Delivery | undefined, now: number): string | null {
   return null;
 }
 
-export function markInterrupts(items: DeskItem[], rules: InterruptRules, deliveries: ReadonlyMap<string, Delivery>, now: number): DeskItem[] {
+export function markInterrupts(items: DeskItem[], rules: InterruptRules, deliveries: ReadonlyMap<string, Delivery>, now: number, context: InterruptContext): DeskItem[] {
   return items.map((item) => {
     const sent = deliveries.get(item.key);
     const error = failure(sent, now);
@@ -132,9 +165,11 @@ export function markInterrupts(items: DeskItem[], rules: InterruptRules, deliver
       const interrupt: DeskInterrupt = { delivery: "failed", error };
       return { ...item, urgency: "now", score: Math.max(item.score, 99), interrupt };
     }
-    if (!interrupts(item, rules, now)) return item;
+    const reason = interrupts(item, rules, now, context);
+    if (reason === null) return item;
     const delivery: DeskInterrupt["delivery"] = rules.transport === "none" ? "off" : sent?.status ?? "pending";
-    return { ...item, interrupt: { delivery } };
+    const feedback = context.feedback.get(item.key);
+    return { ...item, interrupt: { delivery, reason, ...(feedback ? { feedback } : {}) } };
   });
 }
 
@@ -154,7 +189,8 @@ export function readDeliveries(db: Database): Map<string, Delivery> {
 
 export function toPush(item: DeskItem): DeskPush {
   const primary = item.actions.find((a) => a.role === "primary" && a.url);
-  return { key: item.key, title: item.title, why: item.why, ...(primary?.url ? { action: { label: primary.label, url: primary.url } } : {}) };
+  const reason = item.interrupt?.reason;
+  return { key: item.key, title: item.title, why: item.why, ...(primary?.url ? { action: { label: primary.label, url: primary.url } } : {}), ...(reason ? { reason } : {}) };
 }
 
 async function sendSafely(transport: DeskTransport, push: DeskPush): Promise<PushResult> {

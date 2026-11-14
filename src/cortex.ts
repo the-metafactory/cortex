@@ -268,6 +268,7 @@ import { materialFromSeedString, signAdminRequest, randomNonce } from "./bus/sta
 import { confidentialityPosture } from "./common/crypto/network-encryption-policy";
 // MC-I1.S4 (ADR-0005 §4) — bus→MC dispatch-lifecycle projection renderer.
 import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispatch-lifecycle-renderer";
+import { deskDispatchOptions } from "./surface/mc/desk/task-handoff-store";
 // P-14 U2.1 (#934) — bus→MC observability projection renderer (signal's four
 // system.* families). Own renderer, own subjects; registered beside the dispatch
 // renderer, no edit to surface-router.ts.
@@ -4954,6 +4955,19 @@ export async function startCortex(
       const conversationAccess = Object.assign((): HostStatus | null => conversationStatus, { discord: () => conversationDiscord });
       mcHandle = await startMissionControl({
         conversations: conversationAccess,
+        ...(config.nats
+          ? {
+              deskDispatch: {
+                principal: principalId,
+                stack: derivedStack.stack,
+                ...(systemEventSource.dataResidency !== undefined ? { dataResidency: systemEventSource.dataResidency } : {}),
+                publish: async (envelope, subject) => {
+                  if (!runtime.publishOnSubject) throw new Error("the bus runtime cannot publish on a subject");
+                  await runtime.publishOnSubject(envelope, subject);
+                },
+              },
+            }
+          : {}),
         results: {
           ledger: {
             principal: principalId,
@@ -5021,6 +5035,7 @@ export async function startCortex(
                 },
               }
             : {}),
+          ...(config.mc.desk.dispatch ? { dispatch: deskDispatchOptions(config.mc.desk.dispatch, mergedAgents) } : {}),
           mailOwnDomains: config.mc.desk.mail.suspicion?.ownDomains ?? config.mc.desk.mail.dmarc?.domains ?? [],
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
           ...(config.mc.desk.ruling?.explainer

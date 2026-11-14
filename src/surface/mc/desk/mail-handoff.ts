@@ -9,14 +9,14 @@ import type { AskMap } from "./ask";
 import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
 import { MAX_REPLY_CHARS, type ListedMail, type MailActionResult } from "./mail-actions";
 import { closePendingTasks, queueTaskClose, type TaskCloser } from "./mail-handoff-close";
-import { MAX_FINDING, MAX_FINDINGS, MAX_INSTRUCTION, OPEN_STATES, type HandoffState } from "./mail-handoff-schema";
+import { MAX_FINDING, MAX_FINDINGS } from "./mail-handoff-schema";
+import { handoffAction as act, handoffWhen as when, MAX_INSTRUCTION, OPEN_STATES, type HandoffState, type HandoffView } from "./handoff";
 import { logMailDecision, mailFeatures, senderDomain, type MailFeatures } from "./mail-log";
 import type { MailForStudio } from "./mail-studio";
 import { replySubject } from "./mail-triage";
 import { ago } from "./rank";
 import { SingleFlight } from "./single-flight";
 import { oneLine } from "./studio/edit";
-import { clock, DAY_MS, startOfDay } from "./time";
 import type { DeskAction, DeskItem } from "./types";
 
 export { HANDOFF_SQL, HANDOFF_STATES, MAX_INSTRUCTION, type HandoffState } from "./mail-handoff-schema";
@@ -372,16 +372,7 @@ export function retryHandoff(db: Database, id: string): HandoffResult {
   return { ok: true, message: "Ivy tries again. The result comes back here as a card." };
 }
 
-export interface HandoffView {
-  id: string;
-  state: HandoffState;
-  line: string;
-  since: number;
-  findings?: string[];
-  draft?: string;
-}
-
-const when = (at: number, now: number): string => (startOfDay(at) === startOfDay(now) ? clock(at) : startOfDay(now) - startOfDay(at) === DAY_MS ? `yesterday ${clock(at)}` : `${new Date(at).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} ${clock(at)}`);
+export type { HandoffView } from "./handoff";
 
 export function handoffLine(row: HandoffRow, now: number): string {
   if (row.state === "working") return `With Ivy since ${when(row.createdAt, now)}`;
@@ -391,7 +382,6 @@ export function handoffLine(row: HandoffRow, now: number): string {
 
 const viewOf = (row: HandoffRow, now: number): HandoffView => ({ id: row.id, state: row.state, line: handoffLine(row, now), since: row.createdAt });
 
-const act = (id: string, label: string, role: DeskAction["role"], target?: string): DeskAction => ({ id, label, role, wired: true, ...(target ? { target } : {}) });
 const HAND_TO_IVY = "mail.ivy";
 
 /** The mail card while Ivy has it: the status line, no second hand-off, and Retry after a failure. */

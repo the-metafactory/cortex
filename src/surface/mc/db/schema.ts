@@ -13,7 +13,9 @@ import { WAITING_SQL } from "../desk/mail-waiting-schema";
 import { HANDOFF_COLUMNS, HANDOFF_SQL } from "../desk/mail-handoff-schema";
 import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
+import { INTERRUPT_SWITCHES_SQL } from "../desk/interrupt-switches";
 import { WORKER_HANDOFF_SQL } from "../desk/worker-handoff-store";
+import { TASK_HANDOFF_SQL } from "../desk/task-handoff-schema";
 
 const sqlList = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(",");
 
@@ -143,6 +145,8 @@ export const TABLE_NAMES = [
   "desk_grants",
   "desk_done",
   "desk_corrections",
+  "desk_interrupt_switches",
+  "desk_interrupt_feedback",
   "desk_mail_classes",
   "desk_unimportant",
   "desk_studio_sessions",
@@ -183,8 +187,10 @@ export const SCHEMA_SQL: string[] = [
   ...WAITING_SQL,
   ...HANDOFF_SQL,
   ...WORKER_HANDOFF_SQL,
+  ...TASK_HANDOFF_SQL,
   ...INVITATIONS_SQL,
   ...SNOOZE_SQL,
+  ...INTERRUPT_SWITCHES_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_capability_installs (

@@ -34,6 +34,8 @@ import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifie
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { backSnoozes, snoozedIds, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
+import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
+import { expireTaskHandoffs, openTaskHandoffs, type DispatchOptions } from "./task-handoff-store";
 import type { BalanceDayAccess } from "./balance-day";
 import type { PiSettings } from "../../../conversations/pi";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
@@ -48,6 +50,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
+import { listReasons, readFeedback, readSwitches } from "./interrupt-switches";
 import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
 import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
@@ -94,6 +97,7 @@ export interface DeskRuntime {
   digestFlagger?: DigestFlagger;
   waitingClassifier?: WaitingClassifier;
   mailHandoff?: MailHandoffWorker;
+  dispatch?: TaskDispatchBus;
 }
 
 export interface DeskAskOptions {
@@ -139,6 +143,7 @@ export interface DeskOptions {
   mailWaiting?: WaitingConfig;
   mailInvitations?: InvitationsConfig;
   mailHandoff?: { lanes: HandoffLanes; pi: PiSettings };
+  dispatch?: DispatchOptions;
   mailOwnDomains?: string[];
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
@@ -195,6 +200,8 @@ export async function composeDesk(
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
+  if (desk.dispatch) expireTaskHandoffs(db, desk.dispatch, now);
+  const taskHandoffs = desk.dispatch ? openTaskHandoffs(db) : [];
   const routineRead = desk.routines ? deps.routineRead ? Promise.resolve(deps.routineRead.read(db, desk.routines, now)) : readRoutines(db, desk.routines, deps.runRoutine) : Promise.resolve(undefined);
   const sources: DeskView["sources"] = [];
 
@@ -312,6 +319,7 @@ export async function composeDesk(
   const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS);
   const deskCalendar = calendarEvents(calendar, sod, sod + TIMELINE_DAYS * DAY_MS);
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
+  const interruptSwitches = readSwitches(db);
 
   const rangerActions = rangerActionsReady(desk);
   const rulingActions = rangerActions && Boolean(desk.somaBin);
@@ -348,8 +356,9 @@ export async function composeDesk(
     ...dmarcCards,
     ...waitingCards,
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
+    ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
-  ], rules, readDeliveries(db), now)], availability, now), activeCorrections);
+  ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
@@ -383,7 +392,7 @@ export async function composeDesk(
       ...reminderEvents(reminders, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS),
     ].sort((a, b) => a.at - b.at),
     vips: vips.map(({ address, label }) => ({ address, label })),
-    agents: buildAgents(ranger, items, now),
+    agents: buildAgents(ranger, items, now, desk.dispatch ? workingHandoffs(taskHandoffs, desk.dispatch, now) : []),
     goals: buildGoals(subjects),
     notes: notes.filter((n) => n.kind === "note").map(({ id, text, createdAt }) => ({ id, text, createdAt })),
     ask: { kinds: [...writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)), ...(desk.routines ? ["routine"] : [])], maps: desk.ask?.taskMaps ?? [] },
@@ -398,6 +407,7 @@ export async function composeDesk(
     ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
     ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
+    interruptions: listReasons(rules, interruptSwitches, vips, desk.enabled),
     mailClassifier,
   };
 }
@@ -600,14 +610,14 @@ function buildToday(ranger: RangerState | null, items: DeskItem[], areas: AreaRu
   return today.sort((a, b) => a.at - b.at);
 }
 
-function buildAgents(ranger: RangerState | null, items: DeskItem[], now: number): DeskView["agents"] {
+function buildAgents(ranger: RangerState | null, items: DeskItem[], now: number, handed: DeskView["agents"]["working"]): DeskView["agents"] {
   const waiting = items.filter(item => isAgentStop(item) || item.kind === "escalation").length;
-  const working = (ranger?.current ?? []).map((c) => ({
+  const working = [...(ranger?.current ?? []).map((c) => ({
     title: c.title || `An untitled task in ${repoName(c.repo)}`,
     note: [c.phase, c.prLabel].filter(Boolean).join(" · "),
     since: parsedOr(c.startedAt, now),
-  }));
-  const line = ranger
+  })), ...handed];
+  const line = ranger || handed.length > 0
     ? `${working.length === 1 ? "1 agent" : `${working.length} agents`} working, ${waiting} waiting on you`
     : "Agents: not connected";
   return { line, working, waiting };

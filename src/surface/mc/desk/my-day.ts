@@ -11,6 +11,7 @@ import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-
 import type { Database } from "bun:sqlite";
 import { applyDayToHistory, findNode, rankAll, selectToday, shiftDays, todayPlanIds, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { saveBalanceState } from "./balance-store";
+import { taskHandoffLines, type TaskHandoffLines } from "./task-handoff-store";
 import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
@@ -43,7 +44,9 @@ export interface MyDayView {
   yesFilter: string[];
   undos: { receipt: string; title: string }[];
   dayUndo: { receipt: string; text: string } | null;
+  handoffs?: TaskHandoffLines;
 }
+const withHandoffs = (view: MyDayView, db: Database, desk: DeskOptions, now: number): MyDayView => (desk.dispatch ? { ...view, handoffs: taskHandoffLines(db, desk.dispatch, now) } : view);
 function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection, projection?: BalanceDayProjection): MyDayView {
   const state = configuredState(storedState, desk);
   if (projection) applyBalanceDayProjection(state.outline, projection.tasks);
@@ -76,7 +79,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
 export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?: StudioProjection, projection?: BalanceDayProjection): MyDayView {
   return db.transaction(() => {
     const meta = loadMeta(db);
-    return viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio, projection);
+    return withHandoffs(viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio, projection), db, desk, now);
   }).deferred();
 }
 export function movedKeys(db: Database): Set<string> {
@@ -101,7 +104,8 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
   if (command.dueDate) node.dueDate = command.dueDate;
   else delete node.dueDate;
 }
-export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string } {
+/** `reopenable` makes an `outline-complete` of an open task return an undo receipt that My Day `undo` turns into a reopen. */
+export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection; reopenable?: boolean }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string } {
   const { db, desk, now, date, requestId, command, source, studio } = args;
   return db.transaction(() => {
     const meta = loadMeta(db);
@@ -113,7 +117,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       if (command.op === "source-plan" && meta.planned.some(p => p.filing === requestId && p.reversed)) throw new Error("This planning was undone. The source is back in Catch-up; start a new plan if needed.");
       saveBalanceState(db, state);
       saveMeta(db, meta);
-      return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}), ...(receipt.location ? { location: receipt.location } : {}) };
+      return { view: withHandoffs(viewOf(state, meta, desk, localDay(now), studio), db, desk, now), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}), ...(receipt.location ? { location: receipt.location } : {}) };
     }
     if (date !== localDay(now)) throw new Error("The date changed. Refresh the Desk before changing your day.");
     let undo: string | undefined;
@@ -125,6 +129,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     let unavailable: string[] = [];
     const today = (): TodayContext => ({ state, meta, date, rank: rankAll(configuredState(state, desk), date), requestId });
     const dayIds = (): string[] => state.dayState?.date === date ? [...state.dayState.confirmed] : viewOf(state, meta, desk, date, studio).items.map(item => item.task.id);
+    const reopenable = args.reopenable === true && command.op === "outline-complete" && findNode(state.outline, command.id)?.done !== true;
     switch (command.op) {
       case "select": {
         if (command.revision !== meta.revision) throw new Error("Your day changed. Refresh before choosing a task.");
@@ -212,6 +217,17 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
           todayNotice = restored;
           break;
         }
+        const reopen = meta.reopens.find(r => r.receipt === command.receipt);
+        if (reopen) {
+          if (reopen.used) break;
+          if (reopen.date !== date) throw new Error("This Undo belongs to a previous day.");
+          const node = requiredNode(state, reopen.taskId);
+          delete node.done;
+          delete node.completedAt;
+          reopen.used = true;
+          todayNotice = `Reopened ${node.title}.`;
+          break;
+        }
         const previous = meta.undos.find(u => u.receipt === command.receipt);
         if (!previous || previous.used) break;
         if (previous.date !== date) throw new Error("This Undo belongs to a previous day.");
@@ -267,6 +283,10 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         edit(state, command, date);
         break;
     }
+    if (reopenable) {
+      undo = requestId;
+      meta.reopens.push({ receipt: requestId, taskId: command.id, date, used: false });
+    }
     if (joined && state.dayState?.date !== date && !isPersonDraft(meta, date)) {
       if (selectToday(configuredState(state, desk), date).some(item => item.task.id === joined)) todayNotice = `Added ${requiredNode(state, joined).title} to today's proposal.`;
     } else if (joined) {
@@ -276,7 +296,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     }
     retireStaleDraft(meta, date);
     meta.revision += 1;
-    const view = viewOf(state, meta, desk, date, studio);
+    const view = withHandoffs(viewOf(state, meta, desk, date, studio), db, desk, now);
     const notice = [unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list.` : undefined, todayNotice].filter(Boolean).join(" ") || undefined;
     meta.receipts.push({ id: requestId, payload, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) });
     saveBalanceState(db, state);

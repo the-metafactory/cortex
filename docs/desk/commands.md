@@ -306,11 +306,12 @@ With `interruptions.transport: command`, the transport receives:
   "key": "meeting:cal:calendar:planning@1793606400000",
   "title": "Planning starts at 09:00.",
   "why": "It starts in 10 minutes.",
-  "action": { "label": "Join", "url": "https://meet.example.org/planning" }
+  "action": { "label": "Join", "url": "https://meet.example.org/planning" },
+  "reason": { "code": "meeting.soon" }
 }
 ```
 
-`key`, `title`, and `why` are strings. `action` is optional. Cortex includes an action only when its URL is a valid HTTP or HTTPS URL without whitespace or angle brackets. The command exits 0 after accepting the notification. Its stdout is ignored. Nonzero exit or timeout becomes a failed delivery shown on the Desk. Cortex records delivery per item, so a transport must not rely on automatic retries.
+`key`, `title`, and `why` are strings. `reason` is the interruption reason: a `code` from [How the Desk interrupts](README.md#how-the-desk-interrupts), with `target` for a VIP and `eventKey` for a meeting, so a command can phrase it itself. `action` is optional. Cortex includes an action only when its URL is a valid HTTP or HTTPS URL without whitespace or angle brackets. The command exits 0 after accepting the notification. Its stdout is ignored. Nonzero exit or timeout becomes a failed delivery shown on the Desk. Cortex records delivery per item, so a transport must not rely on automatic retries.
 
 For example, the `desk-ntfy` adapter in cortex-desk-adapters posts this notification to an ntfy topic:
 
