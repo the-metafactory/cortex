@@ -128,6 +128,9 @@ export interface DeskMailJudgementBridge {
 export { judgementCapability, mailJudgementDeclaration, mailJudgementSnapshot } from "../conversations/domain-adapters/mail/judgement-contract";
 export type { MailJudgementAction, MailJudgementInput, MailJudgementOutput } from "../conversations/domain-adapters/mail/judgement-contract";
 
+export { MAIL_UNSUBSCRIBE_CAPABILITY, mailUnsubscribeDeclaration, mailUnsubscribeSnapshot } from "../conversations/domain-adapters/mail/unsubscribe-contract";
+export type { MailUnsubscribeInput, MailUnsubscribeOutput } from "../conversations/domain-adapters/mail/unsubscribe-contract";
+
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {
   readonly sdkVersion: string;

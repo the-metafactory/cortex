@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.9.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.10.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -877,6 +877,35 @@ export declare function mailJudgementSnapshot(options: {
 	connectionId: string;
 	account: string;
 	input: MailJudgementInput;
+	provenance: Provenance;
+}): ApprovedSnapshot;
+export declare const MAIL_UNSUBSCRIBE_CAPABILITY = "mail.unsubscribe";
+declare const MailUnsubscribeInputSchema: z.ZodObject<{
+	message: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+}, z.core.$strict>;
+export type MailUnsubscribeInput = z.infer<typeof MailUnsubscribeInputSchema>;
+declare const MailUnsubscribeOutputSchema: z.ZodObject<{
+	ref: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	host: z.ZodString;
+}, z.core.$strict>;
+export type MailUnsubscribeOutput = z.infer<typeof MailUnsubscribeOutputSchema>;
+/** The declaration a Mail adapter publishes for one-click unsubscribe. The Cortex runtime registers it as the contract a fixture binding or a real adapter must meet. */
+export declare function mailUnsubscribeDeclaration(adapterId: string): AdapterDeclaration;
+export declare function mailUnsubscribeSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: string;
+	input: MailUnsubscribeInput;
 	provenance: Provenance;
 }): ApprovedSnapshot;
 /**
