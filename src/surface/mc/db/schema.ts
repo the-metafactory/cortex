@@ -6,6 +6,7 @@ import { TRUST_SQL } from "../desk/mail-trust-schema";
 import { GRAPH_REPOSITORY_SQL } from "../desk/graph-repository-schema";
 import { GRAPH_WRITER_SQL } from "../desk/graph-writer-schema";
 import { DMARC_SQL } from "../desk/mail-dmarc-schema";
+import { MAIL_LOOP_SQL } from "../desk/mail-loop-schema";
 import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
 import { DIGEST_SQL } from "../desk/mail-digest-schema";
 import { UNSUBSCRIBE_SQL } from "../desk/mail-unsubscribe-schema";
@@ -164,6 +165,8 @@ export const TABLE_NAMES = [
   "desk_mail_rules",
   "desk_mail_rule_answers",
   "desk_mail_rule_runs",
+  "desk_mail_loop_grants",
+  "desk_mail_loop_state",
   "desk_mail_vectors",
   "desk_mail_dmarc",
   "desk_mail_sweeps",
@@ -187,6 +190,7 @@ export const SCHEMA_SQL: string[] = [
   ...GRAPH_WRITER_SQL,
   ...MAIL_VECTORS_SQL,
   ...DMARC_SQL,
+  ...MAIL_LOOP_SQL,
   ...ROUTINE_DISPLAY_SQL,
   ...DIGEST_SQL,
   ...UNSUBSCRIBE_SQL,
