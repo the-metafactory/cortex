@@ -157,6 +157,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-graph-scope.ts",
   "probe-desk-graph-work-tools.ts",
   "probe-desk-host-authority.ts",
+  "probe-desk-mail-judgements.ts",
   "probe-desk-observations.ts",
   "probe-desk-operation-dispatch.ts",
   "probe-desk-operation-import.ts",

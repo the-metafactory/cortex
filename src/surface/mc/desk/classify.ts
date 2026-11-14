@@ -11,6 +11,8 @@ import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
 import { classifierDeadline, isDeadlineForm } from "./deadline";
 import type { MailSimilarity, MailText, SimilarDecisions, SimilarityBasis, SimilarityContext } from "./mail-similar";
+import { PREDICTED_ACTIONS, type PredictedAction } from "./mail-action-schema";
+export { PREDICTED_ACTIONS, type PredictedAction } from "./mail-action-schema";
 
 export const SIMILARITY_BASES = ["content", "sender"] as const;
 
@@ -24,8 +26,6 @@ export type MailCategory = (typeof MAIL_CATEGORIES)[number];
 export const SUGGESTED_ACTIONS = ["reply", "archive", "link-meeting", "task", "none"] as const;
 export type SuggestedAction = (typeof SUGGESTED_ACTIONS)[number];
 export const EVIDENCE_KINDS = ["mail", "event", "note"] as const;
-export const PREDICTED_ACTIONS = ["archive", "junk", "trash", "reply", "plan", "todo", "keep"] as const;
-export type PredictedAction = (typeof PREDICTED_ACTIONS)[number];
 
 export interface MailEvidence {
   kind: (typeof EVIDENCE_KINDS)[number];

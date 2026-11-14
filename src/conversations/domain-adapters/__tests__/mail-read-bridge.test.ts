@@ -311,10 +311,12 @@ describe("the Desk adapter host's Mail read bridge", () => {
   test("serves no connection of another adapter and refuses once the generation is disabled", async () => {
     const cache = await listedSources();
     const loader = await loadMailAdapter(cache, [bindingOne, { ...bindingTwo, adapterId: "other-adapter" }]);
+    expect("changeJudgement" in packageHost().mail).toBe(false);
+    expect(typeof packageHost().mailJudgements?.changeJudgement).toBe("function");
     const host = packageHost();
     expect(await withAdmittedCall({ adapterId: "other-adapter", connectionId: TWO }, () => host.mail.listed({ adapterId: "other-adapter", connectionId: TWO }))).toBeNull();
     expect(await listedIn(TWO)).toBeNull();
-    expect(host.sdkVersion).toBe("1.8.0");
+    expect(host.sdkVersion).toBe("1.9.0");
 
     await loader.disable(ADAPTER);
 

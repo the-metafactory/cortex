@@ -1,6 +1,6 @@
 // glossary-ignore: host, run, message, body
 export { DESK_ADAPTER_SDK_VERSION } from "./version";
-import type { CancelRequest, DispatchRequest, LookupRequest, OwnerSupport, ReadbackRequest } from "../conversations/domain-adapters/operations/types";
+import type { CancelRequest, DispatchRequest, LookupRequest, OwnerResult, OwnerSupport, ReadbackRequest } from "../conversations/domain-adapters/operations/types";
 import type { ObservationRequest } from "../conversations/domain-adapters/reads/observation-types";
 import type { QueryFetchRequest } from "../conversations/domain-adapters/reads/query-types";
 import type { AdapterDeclaration } from "../conversations/domain-adapters/types";
@@ -121,11 +121,19 @@ export interface DeskMailReadBridge {
   listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;
 }
 
+export interface DeskMailJudgementBridge {
+  changeJudgement(request: DispatchRequest): Promise<OwnerResult>;
+}
+
+export { judgementCapability, mailJudgementDeclaration, mailJudgementSnapshot } from "../conversations/domain-adapters/mail/judgement-contract";
+export type { MailJudgementAction, MailJudgementInput, MailJudgementOutput } from "../conversations/domain-adapters/mail/judgement-contract";
+
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {
   readonly sdkVersion: string;
   registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
   readonly mail: DeskMailReadBridge;
+  readonly mailJudgements?: DeskMailJudgementBridge;
 }
 
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
