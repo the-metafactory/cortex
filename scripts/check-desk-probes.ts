@@ -159,6 +159,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-host-authority.ts",
   "probe-desk-mail-judgements.ts",
   "probe-desk-mail-unattended-loops.ts",
+  "probe-desk-mail-unsubscribe.ts",
   "probe-desk-observations.ts",
   "probe-desk-operation-dispatch.ts",
   "probe-desk-operation-import.ts",

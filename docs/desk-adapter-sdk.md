@@ -1,7 +1,7 @@
 <!-- glossary-ignore: host, token, path, user, data, message, body, run -->
 # Desk adapter package and SDK authoring contract
 
-This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.9.0, an additive amendment of 1.0.0 through 1.8.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.9.0"`).
+This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.10.0, an additive amendment of 1.0.0 through 1.9.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.10.0"`).
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
@@ -319,3 +319,13 @@ Correction moves use the existing move slice through a trusted `MailJudgementMov
 Snooze and waiting Undo compare Mail versions and the current row before restoring previous state. Native edits invalidate older Undo even if they happen to reproduce the same field values. Mail object identity collisions across listed accounts or sources are refused, and a snooze belonging to another source cannot be changed. The native seven-day Undo window applies.
 
 Execute `bun scripts/probe-desk-mail-judgements.ts` for the Cortex-side live probe. It applies and undoes each judgement family through the SDK bridge and a real journal, reopens the Mail store, and reads canonical state back. Its move port and connection are synthetic. The production helm-mail declaration, binding and real provider parity probe belong to the dependent adapter build; this Cortex slice does not activate them.
+
+## Mail one-click unsubscribe (SDK 1.10.0, #3544)
+
+Mail's one-click unsubscribe is a host-coordinated action with its own grant. A package can import `mailUnsubscribeDeclaration`, `mailUnsubscribeSnapshot`, `MAIL_UNSUBSCRIBE_CAPABILITY` and the `MailUnsubscribeInput` type from the Desk SDK. The declaration defines `mail.unsubscribe`, whose input is one connection-qualified Mail message reference and whose output is that reference plus the list host the provider accepted. The adapter reads the message's `List-Unsubscribe` headers and sends the request; the Cortex runtime never sends it.
+
+`MailUnsubscribeHost` asks for a standing grant naming only `mail.unsubscribe` on that connection. The prompt says the change to the subscription may not be reversible, because a provider can accept an unsubscribe that cannot be undone. A grant for another Mail action, such as a move, never covers unsubscribe. "Just this once" runs on a confirmation and leaves no grant, so the next press asks again.
+
+Every attempt writes a receipt with `undo: false`; a completed receipt says there is no Undo. A refused attempt, such as a denied account or a missing message, still writes a receipt carrying the binding's reason. The host offers no compensating operation and no provider fallback, and a receipt from another connection or account is not read.
+
+Execute `bun scripts/probe-desk-mail-unsubscribe.ts` for the Cortex-side live probe. It runs a fixture binding against a real journal: the prompt, the grant, the completed receipt, a refused account and a missing message. The production helm-mail declaration, binding and real provider parity probe belong to the dependent adapter build; this Cortex slice does not activate them.

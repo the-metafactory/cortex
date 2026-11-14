@@ -1,17 +1,17 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../../surface/mc/db/init";
 import { DomainAdapterRegistry } from "../registry";
 import { fixtureBindings } from "../fixtures";
-import { AT, authority, attemptFixture, eventFixture, openJournalFixture } from "../operations/fixtures";
+import { AT, openJournalFixture } from "../operations/fixtures";
 import { OperationJournalStore } from "../operations/journal";
-import type { Authority, DispatchRequest, OwnerResult, OwnerSupport } from "../operations/types";
+import type { DispatchRequest, OwnerResult } from "../operations/types";
 import type { OperationIndex } from "./legacy-move";
 import { mailMoveDeclaration } from "./move-contract";
-import { MailMoveHost, type MailMoveAuthority, type MailMoveReceipt } from "./move-host";
+import { MailMoveHost, type MailMoveReceipt } from "./move-host";
+import { deliver, fixtureAuthority, prepareDispatch, type FixtureGrant } from "./host-fixtures";
 import { MailLoopHost } from "./loop-host";
 import { DeskMailLoopGrants } from "./loop-grant-store";
 import type { LoopMail, MailLoopAction, MailLoopGrant, MailLoopKind, MailLoopSelection } from "./loop-contract";
@@ -26,11 +26,6 @@ export const loopMail = (id: string, over: Partial<LoopMail> = {}): LoopMail => 
 export const dmarcMail = (id: string, heldBy: string, over: Partial<LoopMail> = {}): LoopMail =>
   loopMail(id, { subject: `Report Domain: example.org Submitter: reporter.example.net Report-ID: ${id}`, heldBy, ...over });
 
-export interface AuthorityGrant {
-  id: string;
-  capabilityIds: string[];
-}
-
 export interface MailLoopRig {
   readonly loop: MailLoopHost;
   readonly moves: MailMoveHost;
@@ -38,7 +33,7 @@ export interface MailLoopRig {
   readonly db: Database;
   readonly folders: Map<string, string>;
   readonly calls: DispatchRequest[];
-  readonly authorityGrants: AuthorityGrant[];
+  readonly authorityGrants: FixtureGrant[];
   grant(loop: MailLoopKind, actions: readonly MailLoopAction[], selection: MailLoopSelection): Promise<MailLoopGrant>;
   revoke(grantId: string): boolean;
   pause(loop: MailLoopKind): void;
@@ -75,10 +70,10 @@ export async function openMailLoopRig(): Promise<MailLoopRig> {
   let now = Date.parse(AT) + 60_000;
   const folders = new Map<string, string>();
   const calls: DispatchRequest[] = [];
-  const authorityGrants: AuthorityGrant[] = [];
   const operations: string[] = [];
   const compensations = new Map<string, string[]>();
   let denied = false;
+  const auth = fixtureAuthority(() => fixture.journal, () => now, () => denied);
 
   const index: OperationIndex = {
     add(operationId, compensates) {
@@ -105,44 +100,21 @@ export async function openMailLoopRig(): Promise<MailLoopRig> {
     return { kind: "succeeded", output: { ref, folder }, evidence: { kind: "effect", evidenceId: `effect:${request.attemptId}`, observedAt: AT, ownerRequestId: request.ownerRequestId, receipt: { moved: folder }, refs: [ref] } };
   };
 
-  const authorityPort: MailMoveAuthority = {
-    findGrant: capabilityId => Promise.resolve(authorityGrants.find(grant => grant.capabilityIds.includes(capabilityId))?.id ?? null),
-    grant: capabilityIds => {
-      const id = randomUUID();
-      authorityGrants.push({ id, capabilityIds: [...capabilityIds] });
-      return Promise.resolve(id);
-    },
-    approve: async (input, grantId) => {
-      if (denied) return { kind: "denied", reason: { code: "authority_denied", message: "The current host authority does not permit this action." } };
-      const basis = grantId ? { kind: "grant" as const, grantId, grantRevision: "1" } : authority.basis;
-      const approved: Authority = { ...authority, basis };
-      await fixture.journal.approve({ ...input, authority: approved, at: AT });
-      return { kind: "allowed", authority: approved };
-    },
-  };
-
-  const supportOf = (request: DispatchRequest): OwnerSupport => ({ lifecycleVersion: "1.0.0", adapterId: LOOP_ADAPTER, connectionId: LOOP_CONNECTION, capabilityId: request.snapshot.capabilityId, declarationId: "mail-loop-support", dedup: { kind: "none" }, operationLookup: "none", conditionalUpdate: "none", cancellation: "none" });
-
   const dispatch = async (operationId: string): Promise<void> => {
-    const stored = await fixture.journal.read(operationId);
-    if (!stored || "kind" in stored.journal.snapshot) throw new Error("Expected an approved move operation.");
-    const attempt = { ...attemptFixture(), authority, supportDeclarationId: "mail-loop-support" };
-    const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, idempotencyKey: operationId, ownerRequestId: stored.journal.ownerRequestId, snapshot: stored.journal.snapshot, authority, supportDeclarationId: "mail-loop-support", deadlineAt: attempt.deadlineAt };
-    const prepared = await fixture.journal.append(operationId, stored.revision, eventFixture(2, { kind: "attempt-prepared", attempt }, AT), { support: supportOf(request) });
-    calls.push(request);
-    const result = binding(request);
-    await fixture.journal.receive(operationId, prepared.revision, { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, snapshotDigest: request.snapshot.digest, resultId: `result:${attempt.attemptId}`, reportedAt: AT, result }, AT);
+    const prepared = await prepareDispatch(fixture.journal, operationId, { connectionId: LOOP_CONNECTION, declarationId: "mail-loop-owner", expected: "an approved move", now });
+    calls.push(prepared.request);
+    await deliver(fixture.journal, prepared, binding(prepared.request));
   };
 
-  const movesOf = (): MailMoveHost => new MailMoveHost({ adapterId: LOOP_ADAPTER, connectionId: LOOP_CONNECTION, account: LOOP_ACCOUNT, journal: fixture.journal, index, authority: authorityPort, capability: id => registry.capability(id), dispatch, now: () => now });
+  const movesOf = (): MailMoveHost => new MailMoveHost({ adapterId: LOOP_ADAPTER, connectionId: LOOP_CONNECTION, account: LOOP_ACCOUNT, journal: fixture.journal, index, authority: auth.port, capability: id => registry.capability(id), dispatch, now: () => now });
   let moves = movesOf();
 
-  const loopOf = (moves_: MailMoveHost): MailLoopHost => new MailLoopHost({ adapterId: LOOP_ADAPTER, connectionId: LOOP_CONNECTION, account: LOOP_ACCOUNT, moves: moves_, grants: new DeskMailLoopGrants(db), authority: authorityPort, now: () => now });
+  const loopOf = (moves_: MailMoveHost): MailLoopHost => new MailLoopHost({ adapterId: LOOP_ADAPTER, connectionId: LOOP_CONNECTION, account: LOOP_ACCOUNT, moves: moves_, grants: new DeskMailLoopGrants(db), authority: auth.port, now: () => now });
   let loop = loopOf(moves);
 
   return {
     get loop() { return loop; }, get moves() { return moves; }, get journal() { return fixture.journal; }, get db() { return db; },
-    folders, calls, authorityGrants,
+    folders, calls, authorityGrants: auth.grants,
     grant: (kind, actions, selection) => loop.grant({ loop: kind, actions, selection }).then(grant => {
       if (!grant) throw new Error("The fake authority refused the standing Mail grant.");
       return grant;

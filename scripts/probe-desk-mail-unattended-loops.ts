@@ -35,7 +35,7 @@ try {
   assert.equal(rig.loop.activeGrant("rule"), null);
 
   const ruleGrant = await rig.grant("rule", ["move"], ruleSelection);
-  assert.equal(rig.authorityGrants[0]?.capabilityIds.join(","), "mail.move,mail.restore");
+  assert.equal(rig.authorityGrants[0]?.capabilities.join(","), "mail.move,mail.restore");
   const rulePass = await rig.loop.runRules({ rule: RULE, mail: [loopMail("rule-1"), loopMail("rule-2")] }, LOOP_PROVENANCE);
   moves(rulePass, ["rule-1", "rule-2"]);
   assert.equal(rig.folders.get("rule-1"), "Archive");

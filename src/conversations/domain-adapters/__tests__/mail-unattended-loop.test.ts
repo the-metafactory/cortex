@@ -50,7 +50,7 @@ describe("a Mail rule pass under a standing grant", () => {
     const grant = await rig.grant("rule", ["move"], ruleSelection());
     expect(grant).toMatchObject({ loop: "rule", actions: ["move"], selection: ruleSelection(), status: "active" });
     expect(rig.authorityGrants).toHaveLength(1);
-    expect(rig.authorityGrants[0]?.capabilityIds).toEqual(["mail.move", "mail.restore"]);
+    expect(rig.authorityGrants[0]?.capabilities).toEqual(["mail.move", "mail.restore"]);
 
     const pass = await rig.loop.runRules(ruleWork([loopMail("m1"), loopMail("m2")]), LOOP_PROVENANCE);
     expect(pass.acted).toBe(2);
