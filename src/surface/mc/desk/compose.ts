@@ -276,7 +276,7 @@ export async function composeDesk(
   const boundary = sourceBoundary(desk);
   const cloudSources = new Set(readings.filter((r) => !boundary.has(r.id)).map((r) => r.id));
   const localSources = boundary;
-  const linkOnSorted = (sorted: ClassifierMail, classification: MailClassification): void => void autoLinkMeeting({ db, events: wakeFacts.events, vips: vipSet, now }, sorted, classification);
+  const linkOnSorted = (sorted: ClassifierMail, classification: MailClassification, sortedAt: number): void => void autoLinkMeeting({ db, events: wakeFacts.events, vips: vipSet, now: sortedAt }, sorted, classification);
   if (localClassifier) {
     const sourceIds = new Set(readings.filter((r) => boundary.has(r.id)).map((r) => r.id));
     void localClassifier.kick(db, {

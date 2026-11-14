@@ -52,9 +52,9 @@ interface Stack {
   compose: (now?: number) => Promise<DeskView>;
 }
 
-function deskWithClassifier(items: SourceMail[], events: SourceEvent[] = [MEETING, PAST]): Stack {
+function deskWithClassifier(items: SourceMail[], events: SourceEvent[] = [MEETING, PAST], passClock: () => number = () => NOW): Stack {
   const answers = new Map<string, MailClassification | Record<string, unknown>>();
-  const classifier = new MailClassifier(COMMAND, async (req) => answers.get(req.mail.id) ?? { category: "fyi", reason: "Just news." }, () => undefined, () => NOW);
+  const classifier = new MailClassifier(COMMAND, async (req) => answers.get(req.mail.id) ?? { category: "fyi", reason: "Just news." }, () => undefined, passClock);
   const sourceCache = new SourceCache(async ([cmd]) => JSON.stringify(cmd === "cal" ? { events } : { items }));
   const rt: DeskRuntime = { options: DESK, ledger: new HandledLedger(), sourceCache };
   const compose = async (now = NOW): Promise<DeskView> => {
@@ -127,6 +127,13 @@ describe("an auto-link in the classifier pass", () => {
     await s.compose();
     expect(linksCount()).toBe(0);
     expect(doneRows()).toEqual([]);
+  });
+
+  it("judges the meeting by the time the pass sorts the mail, not when compose started it", async () => {
+    const s = deskWithClassifier([mail("m1")], [MEETING, PAST], () => Date.parse(MEETING.end ?? MEETING.start) + 1);
+    s.answers.set("m1", LINK_MEETING);
+    await s.compose();
+    expect(linksCount()).toBe(0);
   });
 
   it("links nothing without link-meeting, without a meeting key, for suspicious mail or for a VIP", async () => {

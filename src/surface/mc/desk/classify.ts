@@ -496,7 +496,7 @@ export interface ClassifyInput {
   vips: string[];
   unimportant?: string[];
   corrections?: ClassifierCorrection[];
-  onSorted?: (mail: ClassifierMail, classification: MailClassification) => void;
+  onSorted?: (mail: ClassifierMail, classification: MailClassification, now: number) => void;
 }
 
 /** Forgets one mail's classification, so the next pass sorts it again with what the log now knows. */
@@ -556,7 +556,7 @@ export class MailClassifier {
 
   private afterSorted(input: ClassifyInput, m: ClassifierMail, answer: MailClassification): void {
     try {
-      input.onSorted?.(m, answer);
+      input.onSorted?.(m, answer, this.clock());
     } catch (err) {
       this.log(`desk: mail classifier: after sorting: ${err instanceof Error ? err.message : String(err)}`);
     }
