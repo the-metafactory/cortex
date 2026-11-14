@@ -22,6 +22,27 @@ In `GET /api/desk/my-day`, every outline row with a `repeat` rule also carries `
 
 Each Studio thread is copied into the outline as a project row. `studioProjects` in `GET /api/desk/my-day` maps those rows to their threads: each entry is `{ id, slug, state, openNotes }`, where `id` is the outline row, `state` is the thread's `active`, `parked` or `closed`, and `openNotes` counts the thread's notes with status `open`, sample notes included. A client reads a thread's state here, not from the row's `done`. An entry whose thread is no longer in the Studio is left out. When the Studio is turned off or cannot be read for this request (`studioStatus` is `disabled` or `unavailable`), every entry keeps its `id` and `slug` and carries `state: null` and `openNotes: null`.
 
+## Ask the assistant about a row
+
+`POST /api/desk/outline/ask` answers a question about one outline row at once and stores nothing. The client holds the answer as a draft; to keep it, write it into the row's note with `outline-edit`.
+
+- `{ requestId, row, kind: "answer", question, passage? }` answers `{ ok: true, reply }`.
+- `{ requestId, row, kind: "shorten", passage, question? }` answers `{ ok: true, reply, replacement }`. `replacement` is the passage rewritten shorter, and `reply` says in one sentence what changed.
+
+`requestId` is a UUID. Sending the same request again returns the first answer without asking the model again; the same id with a different question is a 409. A failed ask is not remembered, so a retry asks again.
+
+The model reads the row's title, its note, the titles of the rows above it, the question and the passage, as data in the prompt. It has no tools and starts no action. The row's area chooses the model with the rule a Studio session uses: a `local` area uses only `studio.filer.local`, a `cloud` area (or one with no `policy`) uses `studio.filer`. There is no cloud fallback for a local area.
+
+| Status | When |
+| --- | --- |
+| 400 | The body is not a valid ask, the `question` is over 4,000 characters, the `passage` is over 10,000 characters, `answer` has no question or `shorten` has no passage. |
+| 404 | The row is not in the outline. |
+| 409 | The Desk is off, or the request id belongs to another ask. |
+| 502 | The model failed or did not answer the expected JSON. Nothing is stored. |
+| 503 | No model serves the row's policy (`No local model is configured. Nothing was sent; no cloud fallback is used.` or `No conversation model is configured. Nothing was sent.`), or the row's area is not in `desk.areas`. Nothing is sent. |
+
+Every refusal is `{ ok: false, error }`. The route changes no outline state and bumps no revision. It sits behind the same Host, Origin and identity checks as the other `/api/desk` writes.
+
 ## Choose your caps
 
 `desk.myDay.cap` sets the My day baseline, from 1 to 7. `desk.topN` sets the Needs you baseline, from 1 to 10. Both default to 5, ratified by the principal in cortex#2871.

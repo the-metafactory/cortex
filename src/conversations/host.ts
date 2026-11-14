@@ -27,7 +27,7 @@ import { OperationJournalStore } from "./domain-adapters/operations/journal";
 import type { DomainAdapterRegistry } from "./domain-adapters/registry";
 import { AuthorityMediator, type AuthorityBindings, type HostPolicyState } from "./authority";
 import { creationFor } from "./creation";
-import { ConversationError } from "./errors";
+import { ConversationError, noLaneMessage } from "./errors";
 export { ConversationError } from "./errors";
 import { registryRevision, sourceRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
 import type { HistoryConversation, HistoryOwner } from "./tools/conversation-history";
@@ -93,7 +93,7 @@ export const DISCORD_HISTORY_NOTICE = "This conversation was used in Discord. Ea
 export const UNAVAILABLE_TITLE = "Conversation about work that is no longer available";
 export interface SeedMessage { role: "user" | "assistant"; text: string; model?: string; at: number }
 export interface SeedEntry { kind: string; data: object; messages?: SeedMessage[] }
-const noLane = (policy: Policy): ConversationError => new ConversationError(503, policy === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
+const noLane = (policy: Policy): ConversationError => new ConversationError(503, noLaneMessage(policy));
 export interface Seed { key?: string; imported?: boolean; requireLane?: boolean; scope?: OwnerScope; titleFromSource?: boolean; draft?: string; state?: "current" | "archived"; entries?: SeedEntry[] }
 export type HostDetail = Omit<ConversationDetail, "studio"> & { scope: OwnerScope | null; available: boolean };
 export interface ExchangeTurn { text: string; reply: string | null; model: string; policy: Policy }
