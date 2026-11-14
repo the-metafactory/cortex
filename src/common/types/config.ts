@@ -406,6 +406,7 @@ const DeskInterruptionsSchema = z.object({
   everySeconds: z.number().int().min(15).max(3600).default(60),
   chime: z.boolean().default(true),
   notifications: z.boolean().default(true),
+  holdDuringMeetings: z.boolean().default(true),
 }).refine((v) => v.transport !== "command" || v.command !== undefined, "mc.desk.interruptions.command is required when transport is command");
 
 export const CLASSIFIER_FORM_ERROR = "mc.desk.mail.classifier: set either command, or baseUrl and model";

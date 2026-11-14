@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { clock } from "./time";
-import type { DeskAction, DeskEvent, DeskInterrupt, DeskInterruptReason, DeskItem, InterruptFeedback } from "./types";
+import type { DeskAction, DeskEvent, DeskInterrupt, DeskInterruptReason, DeskItem, InterruptFeedback, MeetingHold } from "./types";
 import type { DESK_TRANSPORTS } from "../../../common/types/config";
 import { reasonOn, type InterruptSwitches } from "./interrupt-switches";
 import { listedEntry } from "./vips";
@@ -18,6 +18,7 @@ export interface InterruptRules {
   everySeconds: number;
   chime: boolean;
   notifications: boolean;
+  holdDuringMeetings: boolean;
 }
 
 export const NO_INTERRUPTIONS: InterruptRules = {
@@ -29,6 +30,7 @@ export const NO_INTERRUPTIONS: InterruptRules = {
   everySeconds: 60,
   chime: false,
   notifications: false,
+  holdDuringMeetings: false,
 };
 
 export interface DeskPush {
@@ -37,6 +39,7 @@ export interface DeskPush {
   why: string;
   action?: { label: string; url: string };
   reason?: DeskInterruptReason;
+  held?: MeetingHold;
 }
 
 export type PushResult = { status: "sent"; ref?: string } | { status: "buffered" } | { status: "failed"; error: string };
@@ -121,8 +124,8 @@ function mailReasons(item: DeskItem, context: InterruptContext, now: number): De
   ];
 }
 
-function firingReasons(item: DeskItem, rules: InterruptRules, context: InterruptContext, now: number): DeskInterruptReason[] {
-  const fresh = item.since !== undefined && now - item.since <= rules.maxAgeMinutes * MINUTE;
+function firingReasons(item: DeskItem, rules: InterruptRules, context: InterruptContext, now: number, freshFrom: number | undefined): DeskInterruptReason[] {
+  const fresh = freshFrom !== undefined && now - freshFrom <= rules.maxAgeMinutes * MINUTE;
   if (item.kind === "meeting") return [{ code: "meeting.soon" }];
   if (!fresh) return [];
   if (item.kind === "reminder") return [{ code: "reminder.due" }];
@@ -131,8 +134,39 @@ function firingReasons(item: DeskItem, rules: InterruptRules, context: Interrupt
 }
 
 /** The item's interruption reason: the first reason that fires and is switched on, or null when it does not interrupt. */
-export function interrupts(item: DeskItem, rules: InterruptRules, now: number, context: InterruptContext = NO_SWITCHES): DeskInterruptReason | null {
-  return firingReasons(item, rules, context, now).find((r) => reasonOn(rules, context.switches, r.code, r.target)) ?? null;
+export function interrupts(item: DeskItem, rules: InterruptRules, now: number, context: InterruptContext = NO_SWITCHES, freshFrom: number | undefined = item.since): DeskInterruptReason | null {
+  return firingReasons(item, rules, context, now, freshFrom).find((r) => reasonOn(rules, context.switches, r.code, r.target)) ?? null;
+}
+
+const holdsInterruptions = (e: DeskEvent): e is DeskEvent & { end: number } => e.kind === "meeting" && e.end !== undefined && e.availability?.status !== "free";
+
+export interface MeetingChain extends MeetingHold {
+  keys: ReadonlySet<string>;
+}
+
+/** The meeting running at `at`, with `until` stretched over meetings that follow back to back; null when none runs then. */
+export function runningMeeting(events: readonly DeskEvent[], at: number): MeetingChain | null {
+  const holding = events.filter(holdsInterruptions).sort((a, b) => a.at - b.at);
+  const running = holding.filter((e) => e.at <= at && at < e.end);
+  const first = running[0];
+  if (!first) return null;
+  const keys = new Set(running.map((e) => e.key));
+  let until = Math.max(...running.map((e) => e.end));
+  for (const next of holding) {
+    if (next.at > until || next.end <= at) continue;
+    keys.add(next.key);
+    until = Math.max(until, next.end);
+  }
+  return { eventKey: first.key, title: first.title, until, keys };
+}
+
+const HELD_KINDS: ReadonlySet<DeskItem["kind"]> = new Set(["mail", "reminder"]);
+
+function holdFor(item: DeskItem, rules: InterruptRules, today: readonly DeskEvent[]): MeetingHold | null {
+  if (!rules.holdDuringMeetings || item.since === undefined || !HELD_KINDS.has(item.kind)) return null;
+  const chain = runningMeeting(today, item.since);
+  if (!chain || (item.eventKey !== undefined && chain.keys.has(item.eventKey))) return null;
+  return { eventKey: chain.eventKey, title: chain.title, until: chain.until };
 }
 
 function failure(sent: Delivery | undefined, now: number): string | null {
@@ -149,11 +183,13 @@ export function markInterrupts(items: DeskItem[], rules: InterruptRules, deliver
       const interrupt: DeskInterrupt = { delivery: "failed", error };
       return { ...item, urgency: "now", score: Math.max(item.score, 99), interrupt };
     }
-    const reason = interrupts(item, rules, now, context);
+    const held = holdFor(item, rules, context.today);
+    const reason = interrupts(item, rules, now, context, held?.until ?? item.since);
     if (reason === null) return item;
-    const delivery: DeskInterrupt["delivery"] = rules.transport === "none" ? "off" : sent?.status ?? "pending";
+    const holding = held !== null && sent === undefined && now < held.until;
+    const delivery: DeskInterrupt["delivery"] = holding ? "held" : rules.transport === "none" ? "off" : sent?.status ?? "pending";
     const feedback = context.feedback.get(item.key);
-    return { ...item, interrupt: { delivery, reason, ...(feedback ? { feedback } : {}) } };
+    return { ...item, interrupt: { delivery, reason, ...(held ? { held } : {}), ...(feedback ? { feedback } : {}) } };
   });
 }
 
@@ -171,10 +207,14 @@ export function readDeliveries(db: Database): Map<string, Delivery> {
   return new Map(rows.map((r) => [r.item_key, { key: r.item_key, transport: r.transport, status: r.status, error: r.error, ref: r.ref, createdAt: r.created_at }]));
 }
 
+const waitedSentence = (arrived: number, held: MeetingHold): string => `It arrived at ${clock(arrived)} during "${held.title}" and waited until the meeting ended.`;
+
 export function toPush(item: DeskItem): DeskPush {
   const primary = item.actions.find((a) => a.role === "primary" && a.url);
   const reason = item.interrupt?.reason;
-  return { key: item.key, title: item.title, why: item.why, ...(primary?.url ? { action: { label: primary.label, url: primary.url } } : {}), ...(reason ? { reason } : {}) };
+  const held = item.interrupt?.held;
+  const why = held && item.since !== undefined ? `${item.why} ${waitedSentence(item.since, held)}` : item.why;
+  return { key: item.key, title: item.title, why, ...(primary?.url ? { action: { label: primary.label, url: primary.url } } : {}), ...(reason ? { reason } : {}), ...(held ? { held } : {}) };
 }
 
 async function sendSafely(transport: DeskTransport, push: DeskPush): Promise<PushResult> {

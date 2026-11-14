@@ -45,7 +45,6 @@ export const listVips = (db: Database): DeskVip[] => listSenders(db, "vips");
 export function addVip(db: Database, address: string, label: string | null, now: number): void {
   addSender(db, "vips", address, label, now);
 }
-export const removeVip = (db: Database, address: string): boolean => removeSender(db, "vips", address);
 
 /** The list entry the sender matches: the exact address first, then its domain; null when neither is listed. */
 export function listedEntry(vips: ReadonlySet<string>, address: string): string | null {

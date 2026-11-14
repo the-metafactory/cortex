@@ -9,7 +9,7 @@ import { addVip } from "../desk/vips";
 import { handleDeskVips } from "../api/desk-vips";
 import { SourceCache, type CommandRunner } from "../desk/sources/command";
 import type { DeskEvent, DeskItem } from "../desk/types";
-import { FakeTransport, MIN, NOW, RULES } from "./desk-interrupt-fixture";
+import { FakeTransport, MIN, NOW, RULES, vipMail } from "./desk-interrupt-fixture";
 
 const mailItem = (over: Partial<DeskItem> = {}): DeskItem => ({
   key: "mail:m1",
@@ -79,7 +79,7 @@ describe("interruption switches on the Desk", () => {
   afterEach(() => { db.close(); });
 
   const desk: DeskOptions = { enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [], sources: [{ id: "mail", command: ["mail"], everySeconds: 300, timeoutSeconds: 5 }], interruptions: RULES };
-  const runner: CommandRunner = async () => JSON.stringify({ items: [{ kind: "mail", id: "vip", from: { name: "Boss", address: "boss@example.com" }, subject: "Budget", receivedAt: new Date(NOW - 5 * MIN).toISOString(), unread: true }] });
+  const runner: CommandRunner = async () => JSON.stringify({ items: [vipMail("vip", NOW - 5 * MIN)] });
 
   async function tick(transport: DeskTransport, at = NOW) {
     const view = await composeDesk(db, desk, undefined, { now: at, sourceCache: new SourceCache(runner) });
