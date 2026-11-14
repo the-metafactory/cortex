@@ -4,6 +4,7 @@ import type { DeskAction, DeskEvent, DeskInterrupt, DeskInterruptReason, DeskIte
 import type { DESK_TRANSPORTS } from "../../../common/types/config";
 import { reasonOn, type InterruptSwitches } from "./interrupt-switches";
 import { listedEntry } from "./vips";
+import { deadlineToday } from "./deadline";
 
 export type TransportId = (typeof DESK_TRANSPORTS)[number];
 
@@ -119,6 +120,7 @@ function mailReasons(item: DeskItem, context: InterruptContext, now: number): De
   const vip = item.suspicious ? null : listedEntry(context.vips, senderOf(item));
   return [
     ...(item.eventKey && meetingLaterToday(item.eventKey, context.today, now) ? [{ code: "mail.meeting-today" as const, eventKey: item.eventKey }] : []),
+    ...(!item.suspicious && item.dueAt && deadlineToday(item.dueAt, now) ? [{ code: "mail.deadline-today" as const, dueAt: item.dueAt }] : []),
     ...(vip ? [{ code: "mail.vip" as const, target: vip }] : []),
     ...(rankedForToday(item) ? [{ code: "mail.ranked" as const }] : []),
   ];
