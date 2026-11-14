@@ -9,6 +9,9 @@ const FIXTURES = join(ROOT, "src/conversations/domain-adapters/__tests__/fixture
 const GREENHOUSE = join(FIXTURES, "greenhouse");
 const CONSUMER_TIMEOUT_MS = 15_000;
 const TYPECHECK_TIMEOUT_MS = 60_000;
+const CONSUMERS = ["run.ts", "run-mail.ts"] as const;
+/** `run.ts` runs the capability and failure checks; `run-mail.ts` runs a Mail read package with listed mail on three connections. */
+export type ConformanceConsumer = (typeof CONSUMERS)[number];
 
 export async function collect(proc: Subprocess<"ignore", "pipe", "pipe">, timeoutMs = CONSUMER_TIMEOUT_MS): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   let timedOut = false;
@@ -28,7 +31,7 @@ async function runExternalConsumer(fixtureDir: string, argv: string[], timeoutMs
   const tmp = join(root, "tmp");
   try {
     await cp(resolve(fixtureDir), packageDir, { recursive: true, dereference: false });
-    await cp(join(import.meta.dir, "fixtures/desk-conformance-export/run.ts"), join(packageDir, "run.ts"));
+    for (const consumer of CONSUMERS) await cp(join(import.meta.dir, "fixtures/desk-conformance-export", consumer), join(packageDir, consumer));
     await writeFile(join(packageDir, "package.json"), JSON.stringify({ name: "external-desk-adapter-probe", private: true, type: "module" }));
     await mkdir(join(packageDir, "node_modules/@the-metafactory"), { recursive: true });
     await symlink(ROOT, join(packageDir, "node_modules/@the-metafactory/cortex"));
@@ -45,15 +48,17 @@ async function runExternalConsumer(fixtureDir: string, argv: string[], timeoutMs
 }
 
 export async function checkConformanceExportTypes(): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return await runExternalConsumer(GREENHOUSE, [join(ROOT, "node_modules/typescript/bin/tsc"), "--noEmit", "--skipLibCheck", "--module", "preserve", "--moduleResolution", "bundler", "--target", "esnext", "--types", join(ROOT, "node_modules/@types/bun"), "run.ts"], TYPECHECK_TIMEOUT_MS);
+  return await runExternalConsumer(GREENHOUSE, [join(ROOT, "node_modules/typescript/bin/tsc"), "--noEmit", "--skipLibCheck", "--module", "preserve", "--moduleResolution", "bundler", "--target", "esnext", "--types", join(ROOT, "node_modules/@types/bun"), ...CONSUMERS], TYPECHECK_TIMEOUT_MS);
 }
 
-export async function probeConformanceExport(fixtureDir = GREENHOUSE): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return await runExternalConsumer(fixtureDir, ["run.ts"], CONSUMER_TIMEOUT_MS);
+export async function probeConformanceExport(fixtureDir = GREENHOUSE, consumer: ConformanceConsumer = "run.ts"): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return await runExternalConsumer(fixtureDir, [consumer], CONSUMER_TIMEOUT_MS);
 }
 
 if (import.meta.main) {
-  const result = process.argv[2] === "--typecheck" ? await checkConformanceExportTypes() : await probeConformanceExport(process.argv[2]);
+  const mail = process.argv.includes("--mail");
+  const fixture = process.argv.slice(2).find(arg => !arg.startsWith("--"));
+  const result = process.argv[2] === "--typecheck" ? await checkConformanceExportTypes() : await probeConformanceExport(fixture, mail ? "run-mail.ts" : "run.ts");
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   process.exit(result.exitCode);

@@ -48,6 +48,22 @@ export interface OwnerCalls {
 	lookup: number;
 	readback: number;
 }
+/**
+ * What one query binding answered on one connection the run's Mail source binds, read through the host query
+ * runner. `pages` are the pages the host released to the reader, as it released them; `objects` holds each released
+ * object's `value`, in order. `dataPolicy` is the read restriction the run published for the connection's
+ * destinations, absent when no destination was listed and so none was published.
+ */
+export interface ConformanceMailQuery {
+	connectionId: string;
+	capabilityId: string;
+	verdict: Verdict;
+	code?: string;
+	detail: string;
+	dataPolicy?: "local" | "cloud";
+	pages: unknown[];
+	objects: unknown[];
+}
 export interface ConformanceReport {
 	packageDir: string;
 	packageId?: string;
@@ -60,9 +76,10 @@ export interface ConformanceReport {
 	ownerCalls: OwnerCalls;
 	networkRequests: number;
 	credentialRequests: number;
+	mailQueries?: ConformanceMailQuery[];
 }
 export declare function formatReport(report: ConformanceReport): string;
-export declare const DESK_ADAPTER_SDK_VERSION = "1.7.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.8.0";
 /** The connection id every conformance run uses for the package's one synthetic connection. */
 export declare const CONFORMANCE_CONNECTION_ID = "conformance-connection";
 export type ScenarioVerdict = "isolated" | "failed";
@@ -125,6 +142,10 @@ export declare function formatFailureReport(report: FailureReport): string;
  * package's adapter and `CONFORMANCE_CONNECTION_ID` makes `host.mail.listed()` serve that connection inside the
  * query and observation probes, and the binding's `dataPolicy` sets the read restriction the host publishes for the
  * connection's destinations, as `mailReadRestriction` does.
+ *
+ * The run also reads every query binding through the host query runner on each connection `mail` binds exactly once
+ * for the package's adapter, and reports what each answered in `mailQueries` (cortex#3627). A handler's read of
+ * another connection is refused as in the host, and a refused read there refuses the run.
  */
 export interface ConformanceOptions {
 	tempParent?: string;

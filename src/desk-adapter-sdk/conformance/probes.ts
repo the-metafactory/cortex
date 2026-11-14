@@ -88,13 +88,23 @@ function queryRefusal(env: ProbeEnv, binding: ReadBinding, source: QuerySource, 
   return { code: group?.reason?.code ?? result?.reason?.code ?? result?.status ?? "query_refused", detail: "The host withheld the read." };
 }
 
+// glossary-ignore: host, run
+/** A query probe's verdict and the pages the host released to the reader while it ran. */
+export interface QueryRun { report: CapabilityReport; pages: unknown[] }
+
 export async function probeQuery(env: ProbeEnv, binding: ReadBinding): Promise<CapabilityReport> {
+  return (await runQuery(env, binding)).report;
+}
+
+/** Reads one query binding through the host query runner, page by page, and keeps what the host released. */
+export async function runQuery(env: ProbeEnv, binding: ReadBinding): Promise<QueryRun> {
   const id = binding.capabilityId;
   const { rig } = env;
-  if (env.sample.destinations.length === 0) return refused(id, "query", "no_destination", "No destination could be listed, so no read is admitted.");
+  if (env.sample.destinations.length === 0) return { report: refused(id, "query", "no_destination", "No destination could be listed, so no read is admitted."), pages: [] };
   const source = sourceFor(env, binding);
   const runner = rig.host.readQueries(rig.registry, rig.bindings);
   const before = rig.sends.length;
+  const report = (outcome: CapabilityReport): QueryRun => ({ report: outcome, pages: rig.sends.slice(before) });
   try {
     let request = await runner.create(rig.context, [source], rig.sink);
     let pages = 0;
@@ -102,13 +112,13 @@ export async function probeQuery(env: ProbeEnv, binding: ReadBinding): Promise<C
       const result = await runner.run(rig.context, request, rig.sink);
       pages++;
       const clean = !result.restartRequired && result.groups.length > 0 && result.groups.every(group => group.status === "ok");
-      if (!clean) return refusedBy(id, "query", queryRefusal(env, binding, source, result));
+      if (!clean) return report(refusedBy(id, "query", queryRefusal(env, binding, source, result)));
       if (result.continuation === undefined || pages >= MAX_PAGES) break;
       request = { ...request, continuation: result.continuation };
     }
-    return conformant(id, "query", `${pages} page(s), ${rig.sends.length - before} release(s)`, rig.sends.length - before);
+    return report(conformant(id, "query", `${pages} page(s), ${rig.sends.length - before} release(s)`, rig.sends.length - before));
   } catch (error) {
-    return refused(id, "query", "query_failed", firstLine(messageOf(error)));
+    return report(refused(id, "query", "query_failed", firstLine(messageOf(error))));
   } finally {
     runner.close();
   }

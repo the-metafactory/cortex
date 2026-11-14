@@ -135,7 +135,7 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
     get sink() { return sink; },
     get conversationId() { return conversationId; },
     get cloudReader() { return cloud.context ? { context: cloud.context, sink: cloud.sink, sends: cloud.sends } : null; },
-    lease, sends, bindings, connection, registry: input.registry,
+    lease, sends, bindings, connection, restrictions, registry: input.registry,
     async revokeConnection(): Promise<void> {
       const revision = Number(connection.connectionRevision);
       connection.connectionRevision = String(revision + 1);
@@ -176,6 +176,7 @@ export interface ConformanceRig {
   sends: Json[];
   bindings: AuthorityBindings;
   connection: ConnectionRecord;
+  restrictions: readonly RestrictionRecord[];
   registry: DomainAdapterRegistry;
   revokeConnection(): Promise<void>;
   reopen(): Promise<void>;
