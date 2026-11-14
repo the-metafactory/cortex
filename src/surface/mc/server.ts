@@ -552,7 +552,7 @@ export function startServer(
       const line = keyMigrationLine(result);
       if (line) console.log(line);
     }).catch((err: unknown) => {
-      console.log(`desk: Studio keys not renamed yet; the next start tries again: ${err instanceof Error ? err.message : String(err)}`);
+      console.log(keyMigrationLine({ kind: "refused", error: err instanceof Error ? err.message : String(err) }));
     });
   }
 

@@ -116,7 +116,7 @@ Rules:
   - `because:` gives the reason for a `stand` proposal.
   - `relates:` (required for `relation`) names what the thread relates to, in the material item syntax: `thread: <slug>`, `goal: G5: one post a week`, `person: Ana`, or `link: [label](href)`. The note text says why.
   - `sample: true` marks an example note that no model wrote.
-- **Responses** are your answers to the assistant, as H3 entries headed by an ISO time with a zone. An optional first line `re: <time>` names the note answered; the rest is the text. **(name) waits on you** while the assistant's latest note has `status: open` and no response is dated at or after it.
+- **Responses** are your answers to the assistant, as H3 entries headed by an ISO time with a zone. An optional first line `re: <time>` names the note answered; the rest is the text. **the assistant waits on you** while the assistant's latest note has `status: open` and no response is dated at or after it.
 - **Material** and **Log** are bullet lists. A material item is `kind: [label](href)` or `kind: label`; without a kind it is a `link`. A log item may start with an ISO date.
 - Lines indented by two spaces under a material bullet are that item's **text**, with a leading `> ` removed; a blank line ends the text, so a paragraph break inside it is written as an indented `>` line, as the mail filer does: a mail filed with its text writes its first paragraph there, and you or the assistant can paste an excerpt under any item. Capture undo removes the bullet with these lines. Cortex never fetches a material link to get text.
 
@@ -201,7 +201,7 @@ Opening a thread on the board zooms the card into its thread page; `?desk=studio
 - **People**: material items of kind `person`, `people` or `contact`. Free text is never searched for names.
   A mail filed into a thread with Add to thread (or an attach rule) writes `- person: <display name>` under its capture line. Nothing is written for a mail without a display name, or with an address as its name, or when the thread already names that person: a `person`, `people` or `contact` item, or a kept person relation, whose label equals the name after lowercasing and folding punctuation and spaces. The address is not compared.
 - **Decision journal**: closed threads that share a material item, or that share an area and a rare word in the question, expectation or outcome. A word counts when it has at least 4 letters, is not a common English or German word, and appears in no more than a quarter of the Studio's threads (at least two). A decision opens in place.
-- **(the assistant's name) proposes**: open `relation` notes, each with Keep and Dismiss. A kept relation joins its group (`thread`, `goal`, `person`/`people`/`contact`) or **Also related** for any other kind; a dismissed one disappears.
+- **the assistant proposes**: open `relation` notes, each with Keep and Dismiss. A kept relation joins its group (`thread`, `goal`, `person`/`people`/`contact`) or **Also related** for any other kind; a dismissed one disappears.
 
 Goals, events and people link to their `href` when the material or the event has one.
 
@@ -291,7 +291,7 @@ If another tab saves the exchange while this tab still has a newer message, the 
 
 ## Renamed keys and the startup migration
 
-Studio files used to name the assistant "Ivy". When Mission Control starts with `mc.desk.studio` set, it renames those keys in every thread file:
+Studio files used to name the assistant "Ivy". The Desk now shows the name configured in `mc.desk.assistantName` wherever this page says "the assistant". When Mission Control starts with `mc.desk.studio` set, it renames those keys in every thread file:
 
 - `## Ivy's notes` becomes `## Assistant's notes`, and a second notes section, under either heading, moves into the first.
 - `trigger: Ivy conversation` becomes `trigger: Conversation`.
