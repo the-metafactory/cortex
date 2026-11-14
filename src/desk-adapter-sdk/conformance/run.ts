@@ -81,7 +81,7 @@ async function readMailConnection(loader: DeskPackageLoader, candidate: DeskPack
   const { connectionId } = mailBinding;
   const queries = manifest.readBindings.filter(binding => binding.mode === "query");
   const refusedAll = ({ code, detail }: { code: string; detail: string }): ConformanceMailQuery[] =>
-    queries.map(binding => ({ connectionId, capabilityId: binding.capabilityId, verdict: "refused", code, detail, pages: [], objects: [] }));
+    queries.map(binding => ({ connectionId, capabilityId: binding.capabilityId, verdict: "refused", code, detail, released: 0, objects: [] }));
   const built = loader.trustedConnector(adapterId, { adapterId, connectionId }, { authorizeConnection });
   if (!built.ok) return refusedAll({ code: built.error.code, detail: built.error.message });
   const plain = built.value.connector;
@@ -102,7 +102,7 @@ async function readMailConnection(loader: DeskPackageLoader, candidate: DeskPack
       const { report, pages } = await runQuery(env, binding);
       answered.push({
         connectionId, capabilityId: report.capabilityId, verdict: report.verdict, ...(report.code === undefined ? {} : { code: report.code }), detail: report.detail,
-        ...(dataPolicy === undefined ? {} : { dataPolicy }), pages, objects: releasedObjects(pages),
+        ...(dataPolicy === undefined ? {} : { dataPolicy }), released: pages.length, objects: releasedObjects(pages),
       });
     }
     return answered;
@@ -112,11 +112,10 @@ async function readMailConnection(loader: DeskPackageLoader, candidate: DeskPack
 }
 
 async function readMailConnections(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, mail: MailReadSource, outcome: Outcome): Promise<Outcome> {
-  const connectionIds = [...new Set(mail.connections().filter(binding => binding.adapterId === candidate.adapterId).map(binding => binding.connectionId))];
+  const byConnection = Map.groupBy(mail.connections().filter(binding => binding.adapterId === candidate.adapterId), binding => binding.connectionId);
   const mailQueries: ConformanceMailQuery[] = [];
-  for (const connectionId of connectionIds) {
-    const binding = mailBindingFor(mail, candidate.adapterId, connectionId);
-    if (binding) mailQueries.push(...await readMailConnection(loader, candidate, temp, binding));
+  for (const [binding, ...more] of byConnection.values()) {
+    if (binding && more.length === 0) mailQueries.push(...await readMailConnection(loader, candidate, temp, binding));
   }
   return { ...outcome, ...overallVerdict([...outcome.capabilities, ...mailQueries]), mailQueries };
 }

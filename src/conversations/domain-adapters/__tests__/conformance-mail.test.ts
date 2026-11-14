@@ -188,7 +188,7 @@ describe("a conformance run whose Mail source binds several connections", () => 
 
     const onFresh = searchOn(report.mailQueries, FRESH);
     expect(onFresh).toMatchObject({ verdict: "conformant", dataPolicy: "local" });
-    expect(onFresh?.pages.length).toBe(2);
+    expect(onFresh?.released).toBe(2);
     expect(names(onFresh)).toEqual(["Fresh subject one", "Fresh subject two", "Fresh subject three"]);
     expect(notes(onFresh)).toEqual(Array(3).fill("account fresh@example.invalid; fresh; peer read mail_read_unadmitted"));
 

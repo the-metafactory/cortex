@@ -20,8 +20,8 @@ export interface OwnerCalls {
 // glossary-ignore: host, run
 /**
  * What one query binding answered on one connection the run's Mail source binds, read through the host query
- * runner. `pages` are the pages the host released to the reader, as it released them; `objects` holds each released
- * object's `value`, in order. `dataPolicy` is the read restriction the run published for the connection's
+ * runner. `released` counts the pages the host released to the reader; `objects` holds each released object's
+ * `value`, in order. `dataPolicy` is the read restriction the run published for the connection's
  * destinations, absent when no destination was listed and so none was published.
  */
 export interface ConformanceMailQuery {
@@ -31,7 +31,7 @@ export interface ConformanceMailQuery {
   code?: string;
   detail: string;
   dataPolicy?: "local" | "cloud";
-  pages: unknown[];
+  released: number;
   objects: unknown[];
 }
 
