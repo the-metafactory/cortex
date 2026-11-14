@@ -1,11 +1,12 @@
 import { z } from "zod";
+import type { Residency } from "../common/residency";
 import { CLOUD_LANE_ID } from "../common/types/desk-conversations";
 import { CREATABLE_TYPES, type CreatableType } from "./catalog";
 
 export const OWNER_TYPES = CREATABLE_TYPES;
 export type OwnerType = CreatableType;
 export type ConversationId = string;
-export type Policy = "local" | "cloud";
+export type Policy = Residency;
 export type ModelRoute = Policy | `cloud:${string}`;
 export const ROUTE = new RegExp(`^(?:local|cloud|cloud:${CLOUD_LANE_ID})$`);
 export const isModelRoute = (value: unknown): value is ModelRoute => typeof value === "string" && ROUTE.test(value);
