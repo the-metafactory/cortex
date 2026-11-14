@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ActionButton, CorrectionNote, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, correctionStep, dismissesMenu, precedentText, withConfirm } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
-import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
+import { InterruptionsSection, reasonLine, switchInterruption } from "../components/desk-interruptions";
+import type { DeskItem, DeskView as DeskViewModel, InterruptReasonView } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import type { DeskProposal } from "../../desk/ask";
@@ -471,6 +472,86 @@ describe("ranking corrections on the Desk", () => {
     expect(html).toContain("Less like this: Goals that need a look, from vigil");
     expect(html).toContain('aria-label="Undo &quot;Less like this&quot; for Goals that need a look, from vigil"');
     expect(renderToStaticMarkup(<RankingSection corrections={[]} onUndo={() => {}} />)).toBe("");
+  });
+});
+
+describe("the Interruptions section in the margin", () => {
+  const reasons: InterruptReasonView[] = [
+    { code: "meeting.soon", label: "A meeting is about to start", on: true, available: true, setBy: "default" },
+    { code: "mail.vip", target: "boss@example.com", label: "Mail from Boss", on: true, available: true, setBy: "default" },
+    { code: "mail.ranked", label: "Other mail ranked for today", on: true, available: true, setBy: "switch" },
+    { code: "mail.deadline-today", label: "Mail with a deadline today", on: false, available: false, setBy: "default" },
+    { code: "reminder.due", label: "A reminder is due", on: false, available: true, setBy: "feedback" },
+  ];
+
+  const section = (list: InterruptReasonView[]): string => renderToStaticMarkup(<InterruptionsSection reasons={list} onMessage={() => {}} onChanged={() => {}} />);
+
+  it("lists one row per reason, in order, each with its label and a switch showing on or off", () => {
+    const html = section(reasons);
+    expect([...html.matchAll(/data-interrupt="([^"]*)"/g)].map((m) => m[1])).toEqual([
+      "meeting.soon:", "mail.vip:boss@example.com", "mail.ranked:", "mail.deadline-today:", "reminder.due:",
+    ]);
+    expect(html.indexOf("A meeting is about to start")).toBeLessThan(html.indexOf("Mail from Boss"));
+    expect(html).toContain('<input type="checkbox" aria-label="A meeting is about to start: on" checked=""/><span>on</span>');
+    expect(html).toContain('<input type="checkbox" aria-label="A reminder is due: off"/><span>off</span>');
+  });
+
+  it("sits directly below Ranking in the Desk margin", () => {
+    const corrections = [{ kind: "goal" as const, source: "vigil", mode: "less" as const, label: "Goals that need a look, from vigil", createdAt: NOW }];
+    const html = renderToStaticMarkup(<DeskBody view={{ ...view, corrections, interruptions: reasons }} error={null} onOpenMissionControl={() => {}} />);
+    const ranking = html.indexOf('<section class="desk-msec" aria-label="Ranking">');
+    const interruptions = html.indexOf('<section class="desk-msec" aria-label="Interruptions">');
+    expect(ranking).toBeGreaterThan(-1);
+    expect(interruptions).toBeGreaterThan(ranking);
+    expect(html.slice(html.indexOf("</section>", ranking), interruptions)).toBe("</section>");
+  });
+
+  it("posts the reason, its VIP target and the new state, shows the server's line and refreshes the view", async () => {
+    const calls: { path: string; body: unknown }[] = [];
+    const fake = async (path: string, init: RequestInit) => {
+      calls.push({ path, body: JSON.parse(String(init.body)) });
+      return Response.json({ ok: true, message: "\"Other mail ranked for today\" no longer interrupts you; it waits in the list." });
+    };
+    const messages: string[] = [];
+    let refreshed = 0;
+    const deps = { fetchImpl: fake, onMessage: (text: string) => messages.push(text), onChanged: () => { refreshed += 1; } };
+    const plain = await switchInterruption(reasons[2] as InterruptReasonView, false, deps);
+    const vip = await switchInterruption(reasons[1] as InterruptReasonView, false, deps);
+    expect(calls).toEqual([
+      { path: "/api/desk/interruptions", body: { code: "mail.ranked", on: false } },
+      { path: "/api/desk/interruptions", body: { code: "mail.vip", target: "boss@example.com", on: false } },
+    ]);
+    expect(plain.ok).toBe(true);
+    expect(messages).toEqual([
+      "\"Other mail ranked for today\" no longer interrupts you; it waits in the list.",
+      "\"Other mail ranked for today\" no longer interrupts you; it waits in the list.",
+    ]);
+    expect(refreshed).toBe(2);
+    expect(vip.on).toBe(false);
+  });
+
+  it("disables a reason this stack turns off, says why, and says when feedback switched a reason off", () => {
+    expect(section([reasons[3] as InterruptReasonView])).toContain('disabled=""');
+    expect(section([reasons[3] as InterruptReasonView])).toContain("Mail interruptions are turned off for this stack");
+    expect(reasonLine({ code: "meeting.soon", label: "A meeting is about to start", on: false, available: false, setBy: "default" })).toBe("Meeting interruptions are turned off for this stack (mc.desk.interruptions.meetingMinutes is 0).");
+    expect(section([reasons[4] as InterruptReasonView])).toContain("Switched off by your feedback.");
+    expect(section([reasons[2] as InterruptReasonView])).not.toContain("<small>");
+  });
+
+  it("leaves the switch where it was and shows the response's error when the write fails", async () => {
+    const fake = async () => Response.json({ ok: false, error: "Mail interruptions are turned off for this stack (mc.desk.interruptions.mail)." }, { status: 409 });
+    const messages: string[] = [];
+    let refreshed = 0;
+    const result = await switchInterruption(reasons[2] as InterruptReasonView, false, { fetchImpl: fake, onMessage: (text: string) => messages.push(text), onChanged: () => { refreshed += 1; } });
+    expect(result.ok).toBe(false);
+    expect(messages).toEqual(["Mail interruptions are turned off for this stack (mc.desk.interruptions.mail)."]);
+    expect(refreshed).toBe(0);
+    expect(section([reasons[2] as InterruptReasonView])).toContain('<input type="checkbox" aria-label="Other mail ranked for today: on" checked=""/>');
+  });
+
+  it("renders nothing when the view lists no reasons", () => {
+    expect(section([])).toBe("");
+    expect(renderToStaticMarkup(<DeskBody view={{ ...view, interruptions: [] }} error={null} onOpenMissionControl={() => {}} />)).not.toContain('aria-label="Interruptions"');
   });
 });
 

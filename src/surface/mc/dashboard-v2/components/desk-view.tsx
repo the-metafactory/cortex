@@ -6,6 +6,7 @@ import { scrollBelowDesk } from "../lib/desk-scroll";
 import { deskLinkMode, openDeskLink } from "../lib/desk-link";
 import { DeskLink } from "./desk-link";
 import { DeskBalance } from "./desk-balance";
+import { InterruptionsSection } from "./desk-interruptions";
 import { MailSweeps, SweepPreview } from "./desk-mail-sweeps";
 import { MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
 import type { MailSweepView } from "../../desk/mail-sweep";
@@ -963,6 +964,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           )}
 
           <RankingSection corrections={view.corrections} onUndo={(c) => void correct(c.kind, c.source, null)} />
+
+          <InterruptionsSection reasons={view.interruptions} onMessage={setNote} onChanged={onChanged} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">Systems</h3>

@@ -9,6 +9,7 @@ export const DESK_RULING_PATH = "/api/desk/ruling";
 export const DESK_MAIL_RULES_PATH = "/api/desk/mail/rules";
 export const DESK_DMARC_PATH = "/api/desk/mail/dmarc";
 export const DESK_ADAPTER_PATH = "/api/desk/adapter";
+export const DESK_INTERRUPTIONS_PATH = "/api/desk/interruptions";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 export type Outcome = { ok: boolean; text: string; recorded?: boolean; correction?: number; uncertain?: boolean; undo?: string; undoKind?: "move" | "snooze" | "trust"; block?: string; restored?: string; rule?: MailRuleView };
@@ -43,6 +44,10 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
 /** Asks the Cortex runtime's authority for one change a connected row declares, and returns one line for the page. Never throws. */
 export const submitAdapterAction = (body: { key: string; capability: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_ADAPTER_PATH, body, fetchImpl);
+
+/** Switches one interruption reason and returns one line for the page. Never throws. */
+export const submitInterruptSwitch = (body: { code: import("../../desk/types").InterruptReasonCode; target?: string; on: boolean }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+  postDesk(DESK_INTERRUPTIONS_PATH, body, fetchImpl);
 
 /** Sends one Desk action and returns one line for the page. Never throws. */
 export const submitDeskAction = (body: { action: string; key: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
