@@ -323,6 +323,9 @@ pi keeps one session per conversation and lane under the stack's conversation di
 
 <!-- glossary-ignore: path -->
 <!-- glossary-ignore: host -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: data -->
 
 `tools` is optional. Without it a conversation still answers through the assistant's Soma projection and the read-only pi tools `pi.tools` allows, and it discovers no project, graph or web source. With it, the assistant can investigate a configured checkout, its forge, a work graph and the public web, and prepare owner actions from what it finds.
 

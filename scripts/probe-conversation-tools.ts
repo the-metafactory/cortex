@@ -72,8 +72,12 @@ const github = githubFixture();
 const graph = graphFixture();
 const web = webFixture();
 const rangerFile = join(root, "ranger.json");
+let conversationHost: ConversationHost | undefined;
 let ranger: RangerFixture = await rangerFixture(rangerFile, PROBE_PRINCIPAL);
-let host: ConversationHost;
+const host = (): ConversationHost => {
+  if (!conversationHost) throw new Error("the conversation host is not open");
+  return conversationHost;
+};
 let script: Step[] = [];
 let collected: ToolOutcome[] = [];
 let label = "turn";
@@ -123,8 +127,8 @@ async function run(conversation: string, name: string, steps: Step[], transport:
   label = name;
   script = steps;
   collected = [];
-  await host.submit(conversation, { inputId: `probe-${++sequence}`, transport, text: `Probe ${name}.`, mode: "queue" });
-  await host.waitForIdle(conversation);
+  await host().submit(conversation, { inputId: `probe-${++sequence}`, transport, text: `Probe ${name}.`, mode: "queue" });
+  await host().waitForIdle(conversation);
   return collected;
 }
 
@@ -133,24 +137,24 @@ async function api(method: string, path: string, payload?: unknown, headers: Rec
   const url = new URL(`http://127.0.0.1:8767/api/conversations${path}`);
   const response = await handleConversations(
     new Request(url, { method, headers: { "content-type": "application/json", host: "127.0.0.1:8767", ...headers }, ...(payload === undefined ? {} : { body: JSON.stringify(payload) }) }),
-    url, guard, () => ({ state: "ready", host, tookOver: null, resumed: [], reconciled: [] }),
+    url, guard, () => ({ state: "ready", host: host(), tookOver: null, resumed: [], reconciled: [] }),
   );
   return { status: response.status, body: obj(await response.json()) };
 }
 const confirm = (conversation: string, proposal: Proposal, headers: Record<string, string> = {}) =>
   api("POST", `/${conversation}/proposals/${proposal.proposalId}/confirm`, { revision: proposal.revision, digest: proposal.digest }, headers);
-const transcript = async (conversation: string): Promise<string> => JSON.stringify((await host.entries(conversation, 500, undefined)).entries);
+const transcript = async (conversation: string): Promise<string> => JSON.stringify((await host().entries(conversation, 500, undefined)).entries);
 const activities = async (conversation: string): Promise<Record<string, unknown>[]> =>
-  (await host.entries(conversation, 500, undefined)).entries.filter(entry => entry.kind === "cortex.tool-activity").map(entry => obj(entry.data));
+  (await host().entries(conversation, 500, undefined)).entries.filter(entry => entry.kind === "cortex.tool-activity").map(entry => obj(entry.data));
 const evidence = (conversation: string, callId: string): string => `conversation:${conversation} cortex.tool-activity:${callId}`;
 
 async function main(): Promise<number> {
-  host = await open();
-  const cloud = (await host.create({ title: "Probe cloud investigation", links: [], origin: { kind: "web" }, policy: "cloud" }, PROBE_PRINCIPAL)).id;
-  const local = (await host.create({ title: "Probe local investigation", links: [], origin: { kind: "web" }, policy: "local" }, PROBE_PRINCIPAL)).id;
-  const history = (await host.create({ title: "Probe earlier context", links: [], origin: { kind: "web" }, policy: "cloud" }, PROBE_PRINCIPAL)).id;
-  const other = (await host.create({ title: "Probe other principal", links: [], origin: { kind: "web" }, policy: "cloud" }, OTHER_PRINCIPAL)).id;
-  const revoked = (await host.create({ title: "Probe revoked scope", links: [], origin: { kind: "web" }, policy: "cloud" }, PROBE_PRINCIPAL)).id;
+  conversationHost = await open();
+  const cloud = (await host().create({ title: "Probe cloud investigation", links: [], origin: { kind: "web" }, policy: "cloud" }, PROBE_PRINCIPAL)).id;
+  const local = (await host().create({ title: "Probe local investigation", links: [], origin: { kind: "web" }, policy: "local" }, PROBE_PRINCIPAL)).id;
+  const history = (await host().create({ title: "Probe earlier context", links: [], origin: { kind: "web" }, policy: "cloud" }, PROBE_PRINCIPAL)).id;
+  const other = (await host().create({ title: "Probe other principal", links: [], origin: { kind: "web" }, policy: "cloud" }, OTHER_PRINCIPAL)).id;
+  const revoked = (await host().create({ title: "Probe revoked scope", links: [], origin: { kind: "web" }, policy: "cloud" }, PROBE_PRINCIPAL)).id;
 
   await step("C1", "discovery lists configured projects and graphs with availability and blocking reasons", async () => {
     const [cloudOut] = await run(cloud, "discovery-cloud", [{ name: "capabilities", input: {} }]);
@@ -319,8 +323,8 @@ async function main(): Promise<number> {
   await step("C8", "each configured lane answers on its own route and the record names the lane", async () => {
     await run(cloud, "lane-cloud", [{ name: "capabilities", input: {} }]);
     await run(local, "lane-local", [{ name: "capabilities", input: {} }]);
-    const cloudTurns = await host.exchange(cloud);
-    const localTurns = await host.exchange(local);
+    const cloudTurns = await host().exchange(cloud);
+    const localTurns = await host().exchange(local);
     assert(cloudTurns.length > 0 && cloudTurns.every(turn => turn.model === "synthetic-cloud/probe-cloud"), `a cloud turn named another model: ${cloudTurns.map(turn => turn.model).join(",")}`);
     assert(localTurns.length > 0 && localTurns.every(turn => turn.model === "synthetic-local/probe-local"), `a local turn named another model: ${localTurns.map(turn => turn.model).join(",")}`);
     assert(routes.includes("cloud") && routes.includes("local"));
@@ -464,8 +468,8 @@ async function main(): Promise<number> {
     assert.equal(outcomes.length, 3);
     assert.equal(outcomes[0]!.outcome, "done");
     for (const outcome of outcomes.slice(1)) assert.equal(outcome.outcome, "refused");
-    await assert.rejects(() => host.detail(revoked), /revoked or changed/);
-    await assert.rejects(() => host.entries(revoked, 10, undefined), /revoked or changed/);
+    await assert.rejects(() => host().detail(revoked), /revoked or changed/);
+    await assert.rejects(() => host().entries(revoked, 10, undefined), /revoked or changed/);
     config.projects = projects;
     const recorded = await activities(revoked);
     assert(recorded.some(activity => activity.callId === "revoked-2" && activity.outcome === "refused"));
@@ -523,9 +527,10 @@ async function main(): Promise<number> {
   });
 
   await step("C17", "a restart reads the owner's recorded state and replays no duplicate effect", async () => {
-    await host.close();
+    await host().close();
+    conversationHost = undefined;
     ranger = await rangerFixture(rangerFile, PROBE_PRINCIPAL);
-    host = await open();
+    conversationHost = await open();
     const [status] = await run(cloud, "restart-status", [{ name: "worker_status", input: { node: "example/maps#101" } }]);
     assert(status, "the restart status turn made no tool call");
     assert.equal(status.outcome, "done");
@@ -569,8 +574,11 @@ try {
 } catch (error) {
   rows.push({ id: "X1", capability: "probe harness", status: "fail", basis: "probe harness", evidence: "-", note: failedText(error) });
 } finally {
-  await host!.close().catch(() => undefined);
-  await rm(root, { recursive: true, force: true });
+  try {
+    await conversationHost?.close().catch(() => undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 const removed = await stat(root).then(() => false, () => true);
 rows.push(removed

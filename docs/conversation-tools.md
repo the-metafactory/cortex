@@ -233,6 +233,7 @@ Tests drive both tools through the conversation host with controlled DNS, transp
 
 <!-- glossary-ignore: run -->
 <!-- glossary-ignore: host -->
+<!-- glossary-ignore: node -->
 <!-- glossary-ignore: owner -->
 <!-- glossary-ignore: path -->
 <!-- glossary-ignore: data -->
