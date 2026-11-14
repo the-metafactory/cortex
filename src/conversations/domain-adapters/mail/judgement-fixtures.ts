@@ -1,3 +1,4 @@
+import { recordWaiting } from "../../../surface/mc/desk/mail-waiting";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,7 +13,7 @@ import type { OperationIndex } from "./legacy-move";
 import { mailJudgementDeclaration, type MailJudgementInput } from "./judgement-contract";
 import { MailJudgementHost, type JudgementOutcome } from "./judgement-host";
 import { MailJudgementStore, type MailJudgementMoves } from "./judgement-store";
-import { mailReadBridge } from "../mail-read";
+import { mailJudgementBridge } from "../mail-read";
 import { adaptDeskBackend } from "../package-backend";
 import type { SourceReading } from "../../../surface/mc/desk/sources/command";
 
@@ -85,9 +86,8 @@ export async function openMailJudgementRig() {
   };
   const calls: DispatchRequest[] = [];
   let published = true;
-  const bridge = mailReadBridge({ connections: () => [JUDGEMENT_BINDING], listings: () => readings }, "mail", () => published, { dispatch: (...args) => owner.dispatch(...args) });
-  const judgementCall = bridge.changeJudgement?.bind(bridge);
-  if (!judgementCall) throw new Error("Expected a judgement bridge.");
+  const bridge = mailJudgementBridge({ connections: () => [JUDGEMENT_BINDING], listings: () => readings }, "mail", () => published, { dispatch: (...args) => owner.dispatch(...args) });
+  const judgementCall = bridge.changeJudgement.bind(bridge);
   let adapterCall = (request: DispatchRequest) => judgementCall(request);
   const dispatch = async (operationId: string) => {
     const stored = await fixture.journal.read(operationId);
@@ -110,6 +110,11 @@ export async function openMailJudgementRig() {
     get host() { return host; }, get db() { return db; }, get owner() { return owner; }, get journal() { return fixture.journal; },
     readings, folders, grants, approvals, calls, index, bridge, registry,
     press(input: MailJudgementInput, choice?: "always" | "once" | "cancel") { return host.press(input, JUDGEMENT_PROVENANCE, choice); },
+    recordSentWaiting() {
+      const reading = readings.find(item => item.id === JUDGEMENT_BINDING.sourceId);
+      if (!reading) throw new Error("The fixture Mail source is missing.");
+      recordWaiting(db, [{ ...reading, sent: [{ kind: "sent", id: "sent-example", from: { address: "me@example.net" }, to: [{ address: "sender@example.org" }], subject: "Example question?", text: "Can you answer?", sentAt: AT, account: JUDGEMENT_BINDING.account }] }], now);
+    },
     advance(ms: number) { now += ms; }, deny() { denied = true; }, allow() { denied = false; }, fence() { published = false; },
     adapter(call: typeof adapterCall) { adapterCall = call; },
     async reopen() { await fixture.close(); db.close(); db = initDatabase(path); owner = makeStore(); fixture = await openJournalFixture(join(directory, "journal.sqlite"), registry); host = makeHost(); },

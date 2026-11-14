@@ -1,5 +1,5 @@
 // glossary-ignore: host, run, data, message, body
-import type { DeskAdapterConnection, DeskListedMail, DeskMailHealth, DeskMailListing, DeskMailReadBridge } from "../../desk-sdk";
+import type { DeskAdapterConnection, DeskListedMail, DeskMailHealth, DeskMailListing, DeskMailReadBridge, DeskMailJudgementBridge } from "../../desk-sdk";
 import type { RestrictionRecord } from "../authority-records";
 import { admittedCallKey, admittedDispatch, connectionKey, DeskBackendUnavailableError } from "./package-backend";
 import { canonicalWire } from "./operations/validation";
@@ -57,7 +57,7 @@ function listingOf(binding: MailConnectionBinding, listing: MailSourceListing | 
  * adapter, only from inside a backend call the host admitted for that same connection, only mail the bound source
  * listed under the bound account, and refuses once the generation is fenced.
  */
-export function mailReadBridge(source: MailReadSource | undefined, adapterId: string, published: () => boolean, judgements?: Pick<MailJudgementStore, "dispatch">): DeskMailReadBridge {
+export function mailReadBridge(source: MailReadSource | undefined, adapterId: string, published: () => boolean): DeskMailReadBridge {
   return {
     listed(connection) {
       if (!published()) return Promise.reject(new DeskBackendUnavailableError(ADAPTER_UNAVAILABLE));
@@ -66,6 +66,11 @@ export function mailReadBridge(source: MailReadSource | undefined, adapterId: st
       if (!source || !binding) return Promise.resolve(null);
       return Promise.resolve(listingOf(binding, source.listings().find(listing => listing.id === binding.sourceId)));
     },
+  };
+}
+
+export function mailJudgementBridge(source: MailReadSource | undefined, adapterId: string, published: () => boolean, judgements?: Pick<MailJudgementStore, "dispatch">): DeskMailJudgementBridge {
+  return {
     changeJudgement(request) {
       if (!published()) return Promise.reject(new DeskBackendUnavailableError(ADAPTER_UNAVAILABLE));
       const admitted = admittedDispatch();

@@ -773,14 +773,14 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 		}, z.core.$strict>;
 		said: z.ZodEnum<{
 			archive: "archive";
-			junk: "junk";
 			trash: "trash";
-			reply: "reply";
-			plan: "plan";
 			todo: "todo";
+			plan: "plan";
+			reply: "reply";
 			keep: "keep";
-			"not-bulk": "not-bulk";
+			junk: "junk";
 			matters: "matters";
+			"not-bulk": "not-bulk";
 		}>;
 	}, z.core.$strict>,
 	z.ZodObject<{
@@ -840,10 +840,10 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 			canonicalId: z.ZodString;
 		}, z.core.$strict>;
 		op: z.ZodEnum<{
-			snooze: "snooze";
 			done: "done";
-			"no-answer": "no-answer";
 			expect: "expect";
+			snooze: "snooze";
+			"no-answer": "no-answer";
 		}>;
 	}, z.core.$strict>,
 	z.ZodObject<{
@@ -982,13 +982,16 @@ export interface DeskMailListing {
  */
 export interface DeskMailReadBridge {
 	listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;
-	changeJudgement?(request: DispatchRequest): Promise<OwnerResult>;
+}
+export interface DeskMailJudgementBridge {
+	changeJudgement(request: DispatchRequest): Promise<OwnerResult>;
 }
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {
 	readonly sdkVersion: string;
 	registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
 	readonly mail: DeskMailReadBridge;
+	readonly mailJudgements?: DeskMailJudgementBridge;
 }
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {

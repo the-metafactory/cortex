@@ -1,10 +1,10 @@
 import { strict as assert } from "node:assert";
-import { openMailJudgementRig, judgementMessage, judgementReceipt, JUDGEMENT_BINDING, JUDGEMENT_PROVENANCE } from "../src/conversations/domain-adapters/mail/judgement-fixtures";
+import { openMailJudgementRig, judgementMessage, judgementReceipt, JUDGEMENT_PROVENANCE } from "../src/conversations/domain-adapters/mail/judgement-fixtures";
 import { addVip, listSenders } from "../src/surface/mc/desk/vips";
 import { queryMailLog } from "../src/surface/mc/desk/mail-log";
 import { trustedViews } from "../src/surface/mc/desk/mail-trust";
 import { readSnooze } from "../src/surface/mc/desk/mail-snooze";
-import { readWaiting, recordWaiting } from "../src/surface/mc/desk/mail-waiting";
+import { readWaiting } from "../src/surface/mc/desk/mail-waiting";
 import type { MailJudgementInput } from "../src/conversations/domain-adapters/mail/judgement-contract";
 import { AT } from "../src/conversations/domain-adapters/operations/fixtures";
 
@@ -22,10 +22,12 @@ try {
     assert.equal(judgementReceipt(await rig.host.undo(id, JUDGEMENT_PROVENANCE)).state, "done");
   };
   for (const action of ["unimportant", "block-domain"] as const) {
+    const log = queryMailLog(rig.db);
     const receipt = await apply({ action, message });
     assert.equal(listSenders(rig.db, "unimportant").length, 1);
     await undo(receipt.operationId);
     assert.equal(listSenders(rig.db, "unimportant").length, 0);
+    assert.deepEqual(queryMailLog(rig.db), log);
   }
   const trusted = await apply({ action: "not-phishing", message });
   assert.equal(trustedViews(rig.db).length, 1);
@@ -40,7 +42,7 @@ try {
   assert.equal(judgementReceipt(await rig.host.undo(snoozed.operationId, JUDGEMENT_PROVENANCE)).state, "conflict");
   const fresh = await apply({ action: "snooze", message, until: { kind: "tomorrow" } });
   await undo(fresh.operationId);
-  recordWaiting(rig.db, [{ ...rig.readings[0]!, sent: [{ kind: "sent", id: "sent-example", from: { address: "me@example.net" }, to: [{ address: "sender@example.org" }], subject: "Example question?", text: "Can you answer?", sentAt: AT, account: JUDGEMENT_BINDING.account }] }], Date.parse(AT));
+  rig.recordSentWaiting();
   for (const op of ["snooze", "done", "no-answer", "expect"] as const) {
     const before = readWaiting(rig.db, "sent-example");
     const receipt = await apply({ action: "waiting", message: judgementMessage("sent-example"), op });

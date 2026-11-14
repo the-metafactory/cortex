@@ -3,7 +3,7 @@ import { oneLine } from "./actions";
 import { forgetClassification, saveUnimportant } from "./classify";
 import type { MailCorrection } from "./mail-action-schema";
 export { MAIL_CORRECTIONS, type MailCorrection } from "./mail-action-schema";
-import { logMailDecision, mailFeatures, type MailLogAction } from "./mail-log";
+import { logMailDecision, mailFeatures, type MailLogAction, type MailFeatures } from "./mail-log";
 import { loggedAction } from "./mail-similar";
 import { CORRECTION_MOVES } from "./mail-correction-schema";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult, type MoveTarget } from "./mail-move";
@@ -192,8 +192,7 @@ const loggedCorrection = (db: Database, id: number, mail: ListedMail, said: Mail
 const carriedOut = (db: Database, id: number): boolean =>
   db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM desk_mail_moves WHERE correction_id = ? AND undone_at IS NULL").get(id)?.n !== 0;
 
-export function recordMailCorrection(db: Database, mail: ListedMail, said: MailCorrection, now: number): number {
-  const features = mailFeatures(db, mail);
+export function recordMailCorrection(db: Database, mail: ListedMail, said: MailCorrection, now: number, features: MailFeatures = mailFeatures(db, mail)): number {
   const category = CORRECTED_CATEGORY[said];
   const id = logMailDecision(db, category ? { ...features, category } : features, correctionAction(said), "correction", now);
   forgetClassification(db, mail.id);
@@ -214,8 +213,8 @@ export async function correctMail(mail: ListedMail, said: MailCorrection, deps: 
     if (!target || !loggedCorrection(db, retry, mail, said)) return refuse(409, "The Desk has no record of that correction for this mail.");
     if (carriedOut(db, retry)) return refuse(409, "That correction was already carried out.");
   }
-  const correction = retry ?? recordMailCorrection(db, mail, said, now);
-  forgetClassification(db, mail.id);
+  const correction = retry ?? recordMailCorrection(db, mail, said, now, features);
+  if (retry !== undefined) forgetClassification(db, mail.id);
   if (!target) return { ok: true, message: `${CORRECTION_DONE[said]} The Desk sorts it and mail like it again with that in mind.` };
   const moved = await moveMail(mail, target, deps, correctionAction(said), features, { where: "correction", doneAction: "mail.move", title: CORRECTED_TITLE[target], correction });
   if (moved.ok) return { ...moved, message: `${moved.message} ${CORRECTION_DONE[said]}` };

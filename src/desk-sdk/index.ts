@@ -119,7 +119,10 @@ export interface DeskMailListing {
  */
 export interface DeskMailReadBridge {
   listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;
-  changeJudgement?(request: DispatchRequest): Promise<OwnerResult>;
+}
+
+export interface DeskMailJudgementBridge {
+  changeJudgement(request: DispatchRequest): Promise<OwnerResult>;
 }
 
 export { MAIL_JUDGEMENT_ACTIONS, judgementCapability, judgementHasUndo, mailJudgementDeclaration, mailJudgementSnapshot } from "../conversations/domain-adapters/mail/judgement-contract";
@@ -130,6 +133,7 @@ export interface DeskAdapterHost {
   readonly sdkVersion: string;
   registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
   readonly mail: DeskMailReadBridge;
+  readonly mailJudgements?: DeskMailJudgementBridge;
 }
 
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */

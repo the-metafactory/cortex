@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { openMailJudgementRig, judgementMessage, judgementReceipt, JUDGEMENT_BINDING, JUDGEMENT_PROVENANCE } from "../mail/judgement-fixtures";
 import { addSender, addVip, listSenders, removeSender } from "../../../surface/mc/desk/vips";
 import { saveClassification, readClassifications } from "../../../surface/mc/desk/classify";
-import { queryMailLog } from "../../../surface/mc/desk/mail-log";
+import { logMailDecision, mailFeatures, queryMailLog } from "../../../surface/mc/desk/mail-log";
 import { readSnooze, snoozeMail } from "../../../surface/mc/desk/mail-snooze";
-import { recordWaiting, readWaiting } from "../../../surface/mc/desk/mail-waiting";
+import { readWaiting } from "../../../surface/mc/desk/mail-waiting";
 import { trustedViews } from "../../../surface/mc/desk/mail-trust";
 import { UNDO_WINDOW_MS } from "../../../surface/mc/desk/mail-move";
 import { mailJudgementSnapshot } from "../mail/judgement-contract";
@@ -70,13 +70,15 @@ describe("Mail list ownership and exact Undo", () => {
       const receipt = judgementReceipt(await rig.press({ action, message }, "always"));
       const entry = action === "unimportant" ? "sender@example.org" : "@example.org";
       expect(listSenders(rig.db, "unimportant").map(row => row.address)).toContain(entry);
-      const log = queryMailLog(rig.db);
+      expect(queryMailLog(rig.db)).toHaveLength(1);
+      logMailDecision(rig.db, mailFeatures(rig.db, rig.readings[0]!.mail[0]!), "kept", "desk", Date.parse(AT));
+      const unrelatedLog = queryMailLog(rig.db).filter(row => row.action === "kept");
       await rig.reopen();
       const restored = judgementReceipt(await rig.host.undo(receipt.operationId, JUDGEMENT_PROVENANCE));
       expect(restored).toMatchObject({ state: "done", compensates: receipt.operationId, undo: false });
       expect(listSenders(rig.db, "unimportant").map(row => row.address)).toEqual(["other@example.net"]);
       expect(readClassifications(rig.db, [message.canonicalId]).get(message.canonicalId)?.category).toBe("fyi");
-      expect(queryMailLog(rig.db)).toEqual(log);
+      expect(queryMailLog(rig.db)).toEqual(unrelatedLog);
       expect(rig.folders.get(message.canonicalId)).toBe("INBOX");
       expect(await rig.host.receipt(receipt.operationId)).toMatchObject({ undone: true, undo: false });
       expect((await rig.host.undo(receipt.operationId, JUDGEMENT_PROVENANCE)).kind).toBe("unavailable");
@@ -146,7 +148,7 @@ describe("Mail trust, snooze, waiting and corrections read back from the native 
   for (const op of ["snooze", "done", "no-answer", "expect"] as const) {
     test(`waiting ${op} has a linked Undo of its native state and log`, async () => {
       const rig = await open();
-      recordWaiting(rig.db, [{ ...rig.readings[0]!, sent: [{ kind: "sent", id: "sent-example", from: { address: "me@example.net" }, to: [{ address: "sender@example.org" }], subject: "Example question?", text: "Can you answer?", sentAt: AT, account: JUDGEMENT_BINDING.account }] }], Date.parse(AT));
+      rig.recordSentWaiting();
       const before = readWaiting(rig.db, "sent-example");
       const receipt = judgementReceipt(await rig.press({ action: "waiting", message: judgementMessage("sent-example"), op }, "always"));
       expect(receipt).toMatchObject({ state: "done", undo: true });
@@ -219,6 +221,29 @@ describe("Mail judgement admission and replay", () => {
     expect(rig.folders.get(message.canonicalId)).toBe("INBOX");
   });
 
+  test("reopen prunes expired settled receipts without losing unresolved moves or Mail state", async () => {
+    const rig = await open();
+    await mark(rig, "once");
+    const expired = rig.calls[0]!;
+    judgementReceipt(await rig.press({ ...unimportant, message: judgementMessage("missing-example") }, "once"));
+    rig.db.run("CREATE TRIGGER fixture_receipt_failure BEFORE UPDATE OF result_json ON desk_mail_judgement_operations BEGIN SELECT RAISE(ABORT, 'receipt write failed'); END");
+    await expect(rig.press({ action: "correct", message, said: "archive" }, "once")).rejects.toThrow("receipt write failed");
+    const unresolved = rig.calls.at(-1)!;
+    rig.db.run("DROP TRIGGER fixture_receipt_failure");
+    const log = queryMailLog(rig.db);
+    rig.advance(UNDO_WINDOW_MS + 31_000);
+    const recent = judgementReceipt(await rig.press({ action: "block-domain", message }, "once"));
+    await rig.reopen();
+    const saved = rig.db.query<{ operation_id: string }, []>("SELECT operation_id FROM desk_mail_judgement_operations ORDER BY operation_id").all().map(row => row.operation_id);
+    expect(saved.sort()).toEqual([unresolved.operationId, recent.operationId].sort());
+    expect(listSenders(rig.db, "unimportant")).toHaveLength(2);
+    expect(queryMailLog(rig.db).filter(row => row.at === log[0]!.at)).toEqual(log);
+    expect((await rig.owner.dispatch(JUDGEMENT_BINDING, expired)).result).toMatchObject({ kind: "failed", error: { code: "mail.operation_expired" } });
+    expect((await rig.owner.dispatch(JUDGEMENT_BINDING, unresolved)).result).toMatchObject({ kind: "succeeded" });
+    expect(rig.folders.get(message.canonicalId)).toBe("Archive");
+    expect(queryMailLog(rig.db).filter(row => row.where === "correction")).toHaveLength(1);
+  });
+
   test("a granted repeated Unimportant is a true no-op without an irreversible log append", async () => {
     const rig = await open();
     await mark(rig, "always");
@@ -242,7 +267,7 @@ describe("Mail judgement admission and replay", () => {
 
   test("effects revalidate current authority after journal admission", async () => {
     const rig = await open();
-    rig.adapter(request => { rig.deny(); return rig.bridge.changeJudgement!(request); });
+    rig.adapter(request => { rig.deny(); return rig.bridge.changeJudgement(request); });
     expect(await mark(rig, "once")).toMatchObject({ state: "denied", undo: false });
     expect(listSenders(rig.db, "unimportant")).toEqual([]);
     expect(queryMailLog(rig.db)).toEqual([]);
@@ -253,8 +278,8 @@ describe("Mail judgement admission and replay", () => {
     const later = Promise.withResolvers<undefined>();
     let escaped: Promise<unknown> | undefined;
     rig.adapter(request => {
-      escaped = later.promise.then(() => rig.bridge.changeJudgement!(request));
-      return rig.bridge.changeJudgement!(request);
+      escaped = later.promise.then(() => rig.bridge.changeJudgement(request));
+      return rig.bridge.changeJudgement(request);
     });
     await mark(rig, "once");
     later.resolve(undefined);
@@ -266,13 +291,13 @@ describe("Mail judgement admission and replay", () => {
     const rig = await open();
     await mark(rig, "once");
     const request = rig.calls[0]!;
-    await expect(rig.bridge.changeJudgement!(request)).rejects.toMatchObject({ error: { code: "mail_judgement_unadmitted" } });
-    await expect(withAdmittedCall(JUDGEMENT_BINDING, () => rig.bridge.changeJudgement!(request))).rejects.toMatchObject({ error: { code: "mail_judgement_unadmitted" } });
+    await expect(rig.bridge.changeJudgement(request)).rejects.toMatchObject({ error: { code: "mail_judgement_unadmitted" } });
+    await expect(withAdmittedCall(JUDGEMENT_BINDING, () => rig.bridge.changeJudgement(request))).rejects.toMatchObject({ error: { code: "mail_judgement_unadmitted" } });
   });
 
   test("the adapter cannot substitute an action or message inside the admitted dispatch", async () => {
     const rig = await open();
-    rig.adapter(request => rig.bridge.changeJudgement!({ ...request, snapshot: mailJudgementSnapshot({ ...JUDGEMENT_BINDING, input: { action: "block-domain", message }, provenance: JUDGEMENT_PROVENANCE }) }));
+    rig.adapter(request => rig.bridge.changeJudgement({ ...request, snapshot: mailJudgementSnapshot({ ...JUDGEMENT_BINDING, input: { action: "block-domain", message }, provenance: JUDGEMENT_PROVENANCE }) }));
     await expect(rig.press(unimportant, "once")).rejects.toMatchObject({ error: { code: "mail_judgement_unadmitted" } });
     expect(listSenders(rig.db, "unimportant")).toEqual([]);
     expect(queryMailLog(rig.db)).toEqual([]);

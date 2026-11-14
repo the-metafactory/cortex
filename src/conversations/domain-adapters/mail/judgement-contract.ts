@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CORRECTION_MOVES } from "../../../surface/mc/desk/mail-correction-schema";
 import { MAIL_CORRECTIONS } from "../../../surface/mc/desk/mail-action-schema";
 import { ObjectReferenceSchema, type AdapterDeclaration } from "../types";
 import { adapterErrorSchema, objectReferenceSchema, objectSchema, schemaRef } from "../schema-primitives";
@@ -30,7 +31,7 @@ export const MAIL_JUDGEMENT_ACTIONS: readonly MailJudgementAction[] = ["unimport
 export const judgementCapability = (action: MailJudgementAction): string => `mail.judgement.${action}`;
 export const MailJudgementOutputSchema = z.object({ ref: message, message: z.string().min(1), undo: z.boolean() }).strict();
 export type MailJudgementOutput = z.infer<typeof MailJudgementOutputSchema>;
-export const judgementHasUndo = (input: MailJudgementInput): boolean => input.action !== "undo" && (input.action !== "correct" || ["archive", "junk", "trash"].includes(input.said));
+export const judgementHasUndo = (input: MailJudgementInput): boolean => input.action !== "undo" && (input.action !== "correct" || Boolean(CORRECTION_MOVES[input.said]));
 
 export function mailJudgementDeclaration(adapterId: string): AdapterDeclaration {
   const base = mailMoveDeclaration(adapterId, []);

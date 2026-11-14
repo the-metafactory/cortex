@@ -17,7 +17,7 @@ import { judgementCapability, judgementHasUndo, MailJudgementInputSchema, type M
 
 type Row = Record<string, string | number | null>;
 type Undo =
-  | { kind: "list"; address: string; token: string }
+  | { kind: "list"; address: string; token: string; logId?: number }
   | { kind: "trust"; dismissal: string }
   | { kind: "row"; table: "desk_mail_snoozes" | "desk_mail_waiting"; before: Row | null; after: Row | null; token: string; logs: number[] }
   | { kind: "correction"; logId: number; move: Json };
@@ -53,32 +53,10 @@ export class MailJudgementStore {
 
   constructor(private readonly options: MailJudgementStoreOptions) {
     this.db = options.db;
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS desk_mail_judgement_operations (
-        operation_id TEXT PRIMARY KEY, digest TEXT NOT NULL, request_id TEXT NOT NULL, scope TEXT NOT NULL,
-        message_id TEXT NOT NULL, mail_json TEXT, change_json TEXT, result_json TEXT, undone INTEGER NOT NULL DEFAULT 0, undo_operation TEXT
-      );
-      CREATE TABLE IF NOT EXISTS desk_mail_judgement_list_versions (address TEXT PRIMARY KEY, token TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS desk_mail_judgement_row_versions (table_name TEXT NOT NULL, message_id TEXT NOT NULL, token TEXT NOT NULL, PRIMARY KEY (table_name, message_id));
-      INSERT OR IGNORE INTO desk_mail_judgement_list_versions SELECT address, lower(hex(randomblob(16))) FROM desk_unimportant;
-      CREATE TRIGGER IF NOT EXISTS desk_mail_judgement_list_insert AFTER INSERT ON desk_unimportant BEGIN
-        INSERT INTO desk_mail_judgement_list_versions VALUES (NEW.address, lower(hex(randomblob(16)))) ON CONFLICT(address) DO UPDATE SET token = excluded.token;
-      END;
-      CREATE TRIGGER IF NOT EXISTS desk_mail_judgement_list_update AFTER UPDATE ON desk_unimportant BEGIN
-        INSERT INTO desk_mail_judgement_list_versions VALUES (NEW.address, lower(hex(randomblob(16)))) ON CONFLICT(address) DO UPDATE SET token = excluded.token;
-      END;
-      CREATE TRIGGER IF NOT EXISTS desk_mail_judgement_list_delete AFTER DELETE ON desk_unimportant BEGIN
-        DELETE FROM desk_mail_judgement_list_versions WHERE address = OLD.address;
-      END;
-    `);
-    for (const table of ["desk_mail_snoozes", "desk_mail_waiting"]) {
-      for (const event of ["INSERT", "UPDATE", "DELETE"]) {
-        const row = event === "DELETE" ? "OLD" : "NEW";
-        this.db.run(`CREATE TRIGGER IF NOT EXISTS ${table}_judgement_${event} AFTER ${event} ON ${table} BEGIN
-          INSERT INTO desk_mail_judgement_row_versions VALUES ('${table}', ${row}.message_id, lower(hex(randomblob(16)))) ON CONFLICT(table_name, message_id) DO UPDATE SET token = excluded.token;
-        END;`);
-      }
-    }
+    const cutoff = (options.now ?? Date.now)() - UNDO_WINDOW_MS;
+    this.db.query(`DELETE FROM desk_mail_judgement_operations
+      WHERE created_at > 0 AND created_at < ? AND (undo_operation IS NULL OR undone = 1)
+        AND json_extract(result_json, '$.kind') IN ('succeeded', 'failed', 'conflict')`).run(cutoff);
   }
 
   dispatch(binding: MailConnectionBinding, request: DispatchRequest, published: () => boolean = () => true): Promise<OwnerResult> {
@@ -110,12 +88,11 @@ export class MailJudgementStore {
       const existing = this.saved(request.operationId);
       if (existing) {
         if (existing.digest !== snapshot.digest || existing.request_id !== request.ownerRequestId || existing.scope !== scopeOf(binding)) return envelope(failure(new JudgementRefusal("judgement_conflict", "This operation identity was already used for another change.")));
-        if (existing.result_json) {
-          const previous = JSON.parse(existing.result_json) as OwnerResult["result"];
-          if (previous.kind !== "uncertain") return envelope(previous);
-        }
+        const previous = this.settledResult(existing);
+        if (previous) return envelope(previous);
       } else {
-        this.db.query("INSERT INTO desk_mail_judgement_operations (operation_id, digest, request_id, scope, message_id) VALUES (?, ?, ?, ?, ?)").run(request.operationId, snapshot.digest, request.ownerRequestId, scopeOf(binding), input.message.canonicalId);
+        if (Date.parse(request.deadlineAt) + UNDO_WINDOW_MS < now) return envelope(failure(new JudgementRefusal("operation_expired", "This operation is outside Mail's deduplication window. Nothing changed.")));
+        this.db.query("INSERT INTO desk_mail_judgement_operations (operation_id, digest, request_id, scope, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(request.operationId, snapshot.digest, request.ownerRequestId, scopeOf(binding), input.message.canonicalId, now);
       }
       reserved = true;
       if (!await this.options.authorize(binding, request) || !published()) {
@@ -126,10 +103,8 @@ export class MailJudgementStore {
       const moved = await this.prepareMove(binding, request, input, now);
       return this.db.transaction(() => {
         const current = this.saved(request.operationId);
-        if (current?.result_json) {
-          const previous = JSON.parse(current.result_json) as OwnerResult["result"];
-          if (previous.kind !== "uncertain") return envelope(previous);
-        }
+        const previous = this.settledResult(current);
+        if (previous) return envelope(previous);
         const changed = input.action === "undo" ? this.undo(binding, request, input, now) : this.change(binding, input, now, moved);
         const result: OwnerResult["result"] = { kind: "succeeded", output: changed.output, evidence: { kind: "effect", evidenceId: `mail-judgement:${request.operationId}`, ownerRequestId: request.ownerRequestId, observedAt: new Date(now).toISOString(), receipt: { operationId: request.operationId }, refs: [input.message] } };
         this.db.query("UPDATE desk_mail_judgement_operations SET change_json = ?, result_json = ? WHERE operation_id = ?").run(JSON.stringify(changed), JSON.stringify(result), request.operationId);
@@ -144,6 +119,12 @@ export class MailJudgementStore {
       })();
       return envelope(result);
     }
+  }
+
+  private settledResult(row: SavedRow | null): OwnerResult["result"] | null {
+    if (!row?.result_json) return null;
+    const result = JSON.parse(row.result_json) as OwnerResult["result"];
+    return result.kind === "uncertain" ? null : result;
   }
 
   private saved(id: string): SavedRow | null { return this.db.query<SavedRow, [string]>("SELECT * FROM desk_mail_judgement_operations WHERE operation_id = ?").get(id); }
@@ -203,8 +184,10 @@ export class MailJudgementStore {
         this.db.transaction(() => {
           const inserted = this.db.query("INSERT OR IGNORE INTO desk_unimportant (address, label, added_at) VALUES (?, ?, ?)").run(entry, input.action === "block-domain" ? "Blocked domain" : mail.from.name ?? null, now).changes;
           const token = this.listToken(entry);
-          if (inserted && token) undo = { kind: "list", address: entry, token };
-          if (inserted) logMailDecision(this.db, mailFeatures(this.db, mail), "unimportant", "desk", now);
+          if (inserted) {
+            const logId = logMailDecision(this.db, mailFeatures(this.db, mail), "unimportant", "desk", now);
+            if (token) undo = { kind: "list", address: entry, token, logId };
+          }
         })();
         message = `${entry} is unimportant.`;
       } else if (input.action === "not-phishing") {
@@ -254,6 +237,7 @@ export class MailJudgementStore {
       if (undo.kind === "list") {
         if (this.listToken(undo.address) !== undo.token) return refuse("judgement_conflict", "This list entry changed since the judgement. Nothing was removed.");
         this.db.query("DELETE FROM desk_unimportant WHERE address = ?").run(undo.address);
+        if (undo.logId !== undefined) this.db.query("DELETE FROM desk_mail_log WHERE id = ?").run(undo.logId);
       } else if (undo.kind === "trust") {
         const result = undoDismissal(this.db, undo.dismissal, now);
         if (!result.ok) return refuse("judgement_conflict", result.error);

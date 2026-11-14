@@ -11,7 +11,7 @@ import { containedRealPath, defaultArcListRunner, readArcPackageInventory, sha25
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskAdapterDefinition, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
-import { mailReadBridge, type MailReadSource } from "./mail-read";
+import { mailJudgementBridge, mailReadBridge, type MailReadSource } from "./mail-read";
 import type { MailJudgementStore } from "./mail/judgement-store";
 import { adaptDeskBackend, type DeskBackendConnector } from "./package-backend";
 import type { TrustedConnector } from "../authority";
@@ -738,13 +738,15 @@ export class DeskPackageLoader {
     const create = namespace.createDeskAdapter;
     if (typeof create !== "function") return failure("module_incompatible", "The backend module does not export createDeskAdapter(host).");
     const connectors = new Map<string, DeskConnectorFactory>();
+    const published = () => this.state.published.get(acting.adapterId)?.candidate === acting && this.admission(acting.adapterId).state === "available";
     const host: DeskAdapterHost = {
       sdkVersion: DESK_ADAPTER_SDK_VERSION,
       registerConnector(capabilityId, factory) {
         if (connectors.has(capabilityId)) throw new Error(`Connector ${capabilityId} is already registered.`);
         connectors.set(capabilityId, factory);
       },
-      mail: mailReadBridge(this.options.mail, acting.adapterId, () => this.state.published.get(acting.adapterId)?.candidate === acting && this.admission(acting.adapterId).state === "available", this.options.mailJudgements),
+      mail: mailReadBridge(this.options.mail, acting.adapterId, published),
+      mailJudgements: mailJudgementBridge(this.options.mail, acting.adapterId, published, this.options.mailJudgements),
     };
     let definition: DeskAdapterDefinition;
     try {
