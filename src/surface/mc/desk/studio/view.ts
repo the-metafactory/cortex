@@ -1,5 +1,6 @@
 import { DEFAULT_YES_FILTER } from "../yes-filter";
 import type { StudioThinking } from "./thinking";
+import type { ThreadThinking } from "./thinking-view";
 import { sparPersonas, type SparPersona } from "./relates";
 import type { AreaPolicy, DeskArea, StudioOptions } from "../types";
 import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioCapture, type StudioProposal, type StudioTarget, type StudioThread } from "./format";
@@ -27,6 +28,7 @@ export interface StudioThreadView extends StudioThread {
   place?: number;
   overCap: boolean;
   personas: SparPersona[];
+  thinking?: ThreadThinking;
 }
 
 export interface StudioProposalView extends StudioProposal {

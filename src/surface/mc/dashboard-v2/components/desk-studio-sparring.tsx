@@ -9,19 +9,13 @@ const MODES = [
   { mode: "first-principles", label: "First principles" },
 ];
 
-const BLOCKED = {
-  open: () => null,
-  spent: (policy: string) => `Today's ${policy} thinking budget is spent. Queued requests wait until tomorrow (UTC).`,
-  off: (policy: string) => `${policy[0]?.toUpperCase()}${policy.slice(1)} thinking is turned off: its daily run limit in Ranger is 0.`,
-} as const;
-
 const BUTTON_SUFFIX = { spent: "budget spent", off: "turned off" } as const;
 
 export function Sparring({ page, acts }: { page: ThreadPage; acts?: StudioActs }) {
   if (page.thread.state === "closed") return null;
   const thinking = page.thinking;
   const budget = thinking.kind === "ready" ? thinking.budget : "open";
-  const blocked = thinking.kind === "unavailable" ? thinking.reason : BLOCKED[budget](page.policy);
+  const blocked = thinking.reason;
   const modes = [...MODES, ...page.personas.map(({ name }) => ({ mode: `persona:${name}`, label: `What would ${name} say?` }))];
   return (
     <section className="dst-sparring" aria-label="Think with Ivy">
