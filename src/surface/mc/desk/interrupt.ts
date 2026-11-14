@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { clock } from "./time";
 import type { DeskAction, DeskEvent, DeskInterrupt, DeskItem } from "./types";
+import { currentGap, type CalendarAvailability } from "./calendar-availability";
 import type { DESK_TRANSPORTS } from "../../../common/types/config";
 
 export type TransportId = (typeof DESK_TRANSPORTS)[number];
@@ -99,7 +100,13 @@ export function interrupts(item: DeskItem, rules: InterruptRules, now: number): 
   if (item.kind === "meeting") return rules.meetingMinutes > 0;
   if (item.kind === "reminder") return rules.reminders && fresh;
   if (item.kind === "mail") return rules.mail && rankedForToday(item) && fresh;
+  if (item.kind === "adapter") return item.interruptRequested === true && rules.mail && item.freshness === "fresh";
   return false;
+}
+
+export function heldDuringMeeting(items: DeskItem[], availability: CalendarAvailability | undefined, now: number): DeskItem[] {
+  if (availability === undefined || currentGap(availability, now).kind !== "busy") return items;
+  return items.filter((item) => item.kind !== "adapter");
 }
 
 function failure(sent: Delivery | undefined, now: number): string | null {

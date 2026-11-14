@@ -348,7 +348,8 @@ export async function composeDesk(
     ...dmarcCards,
     ...waitingCards,
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
-  ], rules, readDeliveries(db), now), ...adapterRows], activeCorrections);
+    ...adapterRows,
+  ], rules, readDeliveries(db), now)], activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));

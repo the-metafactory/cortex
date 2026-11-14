@@ -105,6 +105,7 @@ export interface DeskItem {
   eventKey?: string;
   since?: number;
   interrupt?: DeskInterrupt;
+  interruptRequested?: boolean;
   correction?: DeskCorrectionMode;
   goal?: string;
   checking?: boolean;
