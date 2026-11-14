@@ -10,7 +10,7 @@ This is the canonical domain glossary for the **cortex** bounded context — one
 
 **Principal**:
 The human who owns and runs Cortex stacks — root of the trust and policy model, and the identity that scopes every subject the principal's stacks emit. One principal runs one or more **stacks** (e.g. `andreas` runs `andreas/meta-factory`, `andreas/work`, `andreas/halden`).
-_Avoid_: operator, user, owner, human, org
+_Avoid_: operator, user, human, org. `owner` is its own term (**Owner**, below) and never means the principal.
 
 **Stack**:
 One running cortex deployment under a **principal** — its own `cortex.yaml`, signing identity, subject sub-namespace, and JetStream consumers. A principal runs one or more stacks side by side, purpose-named. The second subject segment: `local.{principal}.{stack}.…`.
@@ -382,3 +382,9 @@ Reconciled in full in `compass/ecosystem/CONTEXT-MAP.md`:
 ### Desk Studio language
 
 A **Studio thread** is a persistent Markdown question, topic or making, with a stand, notes and an outcome. It is distinct from a substrate Session. A **Studio session** is a live discussion scoped to one Studio idea, proposed stand or whole Studio thread. Its turns persist locally until its exchange is saved as a Studio note. A Studio session is not an agent execution and owns no tools. In the Studio UI, a **message** is a conversational utterance, not a bus Envelope or Payload. The file `path` fields name filesystem paths, not bus Subjects.
+
+### Conversation writes
+
+**Owner**:
+The system of record that holds an object a conversation creates or changes: the graph, Balance, Studio, Calendar, Mail and the other `OWNER_TYPES` (`src/conversations/types.ts`). Each owner has one `OwnerWriter` that creates the object and reads it back. An owner is a system, never a person: the human behind a stack is the **principal**.
+_Avoid_: owner for the principal (#3199 renamed such a `setOwner(principal)`); backend, store.
