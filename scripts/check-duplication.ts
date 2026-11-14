@@ -1,7 +1,8 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitShow, resolveBaseRef } from "./lib/git";
+import { resolveBaseRef } from "./lib/git";
+import { type Baseline, baseRefBaseline, compare, grownFiles, inflatedAgainst, readBaseline, sortedCounts, total } from "./lib/ratchet";
 
 export const BASELINE = "scripts/duplication-baseline.json";
 const SCAN_ROOTS = ["src", "scripts"];
@@ -16,44 +17,12 @@ export interface Clone {
   firstFile: CloneSide;
   secondFile: CloneSide;
 }
-export type Baseline = Record<string, number>;
-
 export function clonesPerFile(clones: Clone[]): Baseline {
   const counts: Baseline = {};
   for (const { firstFile, secondFile } of clones) {
     for (const name of new Set([firstFile.name, secondFile.name])) counts[name] = (counts[name] ?? 0) + 1;
   }
-  return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
-}
-
-export interface Comparison {
-  grown: string[];
-  shrunk: string[];
-}
-
-export function compare(baseline: Baseline, current: Baseline): Comparison {
-  const grown: string[] = [];
-  const shrunk: string[] = [];
-  for (const file of new Set([...Object.keys(baseline), ...Object.keys(current)])) {
-    const before = baseline[file] ?? 0;
-    const now = current[file] ?? 0;
-    if (now > before) grown.push(`${file}: ${before} -> ${now}`);
-    else if (now < before) shrunk.push(`${file}: ${before} -> ${now}`);
-  }
-  return { grown, shrunk };
-}
-
-export function total(baseline: Baseline): number {
-  return Object.values(baseline).reduce((sum, n) => sum + n, 0);
-}
-
-/** Baseline entries raised above base: a file base already lists may not go up, and the total may not either. */
-export function inflatedAgainst(base: Baseline, head: Baseline): string[] {
-  const raised = Object.entries(head)
-    .filter(([file, n]) => base[file] !== undefined && n > base[file])
-    .map(([file, n]) => `${file}: ${String(base[file])} -> ${n}`);
-  if (total(head) > total(base)) raised.push(`total: ${total(base)} -> ${total(head)}`);
-  return raised;
+  return sortedCounts(counts);
 }
 
 function scan(): Clone[] {
@@ -68,15 +37,6 @@ function scan(): Clone[] {
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
-}
-
-function readBaseline(): Baseline {
-  return JSON.parse(readFileSync(BASELINE, "utf8")) as Baseline;
-}
-
-function baseRefBaseline(baseRef: string): Baseline | undefined {
-  const text = gitShow(baseRef, BASELINE);
-  return text === undefined ? undefined : (JSON.parse(text) as Baseline);
 }
 
 function clonesTouching(clones: Clone[], files: Set<string>): string[] {
@@ -95,13 +55,13 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  const { grown, shrunk } = compare(readBaseline(), current);
+  const { grown, shrunk } = compare(readBaseline(BASELINE), current);
   const baseRef = resolveBaseRef("DUPLICATION_BASE_REF", "check-duplication");
-  const base = baseRefBaseline(baseRef);
-  const inflated = base === undefined ? [] : inflatedAgainst(base, readBaseline());
+  const base = baseRefBaseline(baseRef, BASELINE);
+  const inflated = base === undefined ? [] : inflatedAgainst(base, readBaseline(BASELINE));
 
   if (grown.length > 0) {
-    const files = new Set(grown.map((line) => line.slice(0, line.lastIndexOf(":"))));
+    const files = grownFiles(grown);
     console.error(
       `Copied code: these files gained duplicated blocks against ${BASELINE}:\n${grown.map((g) => `  ${g}`).join("\n")}\n\n` +
         `The clones:\n${clonesTouching(clones, files).join("\n")}\n\n` +
