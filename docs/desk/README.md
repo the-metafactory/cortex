@@ -27,6 +27,8 @@ Everything personal comes from **sources**: commands that you list under `mc.des
 
 The Desk never hard-wires a provider. A calendar, a mail account, a model that sorts mail, a place to write notes and a push channel all plug in as commands in the stack config. Each contract is in [Command contracts](commands.md).
 
+`GET /api/desk` returns `ahead[]` with the calendar events and reminders that start from tomorrow through the sixth day after today (the window ends at the start of the seventh day). The Desk never fills in days a source did not read. To find them, read `calendarAvailability.sources[]`: each calendar source reports `to`, the end of its declared coverage. Days after that `to` are unread, not empty.
+
 ## How the Desk ranks items
 
 Fixed rules rank the items, and each reason comes from a template:
