@@ -13,6 +13,8 @@ import { runStudioTransaction, type ActResult } from "./studio/writer";
 import type { ActContext, ActPlan, ActRefusal } from "./studio/acts";
 import type { StudioOptions } from "./types";
 import { LOCAL_CONTENT, contentFrom, NOT_LOCAL_CONTENT, type LocalSources } from "./source-boundary";
+import { attachRefusal, linkStudioMail, type LinkTarget } from "./links";
+import type { StudioView } from "./studio/view";
 
 export const MAX_MAIL_REASON = 200;
 
@@ -117,13 +119,19 @@ function planMail(ctx: ActContext, item: MailForStudio, input: AddMailInput, id:
   return captureInThread(ctx, thread, id, [mailLine(item), ...(text ? quoted(text) : [])], `Filed capture ${id} from mail; ${why}`, `Added “${subject}” to “${oneLine(thread.question)}”.`);
 }
 
+const threadTarget = (studio: StudioView, slug: string): LinkTarget => ({ kind: "thread", key: slug, title: oneLine(studio.active.find((t) => t.slug === slug)?.question ?? slug) });
+
 export async function addMailToStudio(item: MailForStudio, input: AddMailInput, deps: MailStudioDeps): Promise<ActResult> {
   const id = captureId(input.requestId);
+  const refused = attachRefusal(deps.db, item.mail.id, id);
+  if (refused) return refused;
   const now = deps.now ?? new Date();
   const features = mailFeatures(deps.db, item.mail);
   const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, now }, (ctx) => planMail(ctx, item, input, id, contentFrom(deps.localSources, [item.mail.sourceId]).local));
-  if (!result.ok || result.replayed) return result;
+  if (!result.ok) return result;
   const at = now.getTime();
+  if (input.thread !== null) linkStudioMail(deps.db, item.mail, threadTarget(result.studio, input.thread), { id, requestId: id, origin: "desk", now: at });
+  if (result.replayed) return result;
   deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'studio.capture', ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")
     .run(`studio-capture:${id}`, id, result.message, result.message, at, at);
   logMailDecision(deps.db, features, "studio", "desk", at);
