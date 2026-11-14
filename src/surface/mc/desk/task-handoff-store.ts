@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { DeskDispatchConfig, DispatchPolicy } from "../../../common/types/desk-dispatch";
+import { unknownTargets, type DeskDispatchConfig, type DispatchPolicy, type UnknownDispatchAgent } from "../../../common/types/desk-dispatch";
 import { handoffWhen, OPEN_STATES, type HandoffState } from "./handoff";
 import { oneLine } from "./studio/edit";
 
@@ -120,12 +120,12 @@ export function expireTaskHandoffs(db: Database, dispatch: DispatchOptions, now:
  * `mc.desk.dispatch` resolved against the stack's merged agents (inline `agents[]` and agents.d fragments): each target gets its display name, and
  * an id that names no agent is left out and returned in `unknown`. With no target left there is nothing to hand to, so `options` is undefined.
  */
-export function deskDispatchOptions(config: DeskDispatchConfig, agents: readonly { id: string; displayName: string }[]): { options: DispatchOptions | undefined; unknown: string[] } {
+export function deskDispatchOptions(config: DeskDispatchConfig, agents: readonly { id: string; displayName: string }[]): { options: DispatchOptions | undefined; unknown: UnknownDispatchAgent[] } {
+  const unknown = unknownTargets(config, new Set(agents.map((agent) => agent.id)));
   const resolved = config.agents.flatMap((a) => {
     const agent = agents.find((candidate) => candidate.id === a.id);
     return agent ? [{ ...a, label: agent.displayName }] : [];
   });
-  const unknown = config.agents.filter((a) => !resolved.some((r) => r.id === a.id)).map((a) => a.id);
   return { options: resolved.length > 0 ? { ...config, agents: resolved } : undefined, unknown };
 }
 

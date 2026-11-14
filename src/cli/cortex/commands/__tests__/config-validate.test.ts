@@ -312,4 +312,14 @@ describe("cortex config validate — mc.desk.dispatch targets from inline agents
     expect(result.exitCode).toBe(1);
     expect(JSON.parse(result.stderr).errors).toEqual(['mc.desk.dispatch.agents.1.id: names "ghost", but no agent with that id is declared in agents[] or agents.d']);
   });
+
+  test("names the agents.d load failure next to the rejected target", async () => {
+    mkdirSync(join(testDir, "agents.d"), { recursive: true });
+    writeFileSync(join(testDir, "agents.d", "gorse.yaml"), "id: [not, an, id]\n");
+    const result = await dispatchConfig(["validate", "--config", withDispatch(["gorse"]), "--json"]);
+    expect(result.exitCode).toBe(1);
+    const errors = JSON.parse(result.stderr).errors as string[];
+    expect(errors[0]).toContain('names "gorse"');
+    expect(errors.some((e) => e.startsWith("NOTE agents.d: fragment"))).toBe(true);
+  });
 });

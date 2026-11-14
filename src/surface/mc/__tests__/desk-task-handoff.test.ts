@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DEFAULT_SETTINGS, findNode, type AppState } from "../../../balance";
 import { createDispatchTaskAbortedEvent, createDispatchTaskCompletedEvent, createDispatchTaskFailedEvent, createDispatchTaskStartedEvent } from "../../../bus/dispatch-events";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
-import { loadAgentsDirectory } from "../../../common/config/loader";
+import { loadAgentsDirectory, mergeAgents } from "../../../common/config/loader";
 import { CortexConfigSchema } from "../../../common/types/cortex-config";
 import { handleDeskTaskHandoff } from "../api/desk-task-handoff";
 import { initDatabase } from "../db/init";
@@ -274,9 +274,8 @@ describe("Hand-off targets defined only in agents.d", () => {
   const bootDispatch = (ids: string[]) => {
     const config = CortexConfigSchema.parse({ ...base, mc: { desk: { dispatch: { agents: ids.map((id) => ({ id, policy: "cloud" })) } } } });
     const inline = config.agents.map((a) => ({ id: a.id, displayName: a.displayName }));
-    const fragments = loadAgentsDirectory(agentsDir).filter((a) => !inline.some((i) => i.id === a.id));
     if (!config.mc.desk.dispatch) throw new Error("dispatch not parsed");
-    return deskDispatchOptions(config.mc.desk.dispatch, [...inline, ...fragments]);
+    return deskDispatchOptions(config.mc.desk.dispatch, mergeAgents(inline, loadAgentsDirectory(agentsDir)));
   };
 
   it("offers a fragment-only agent and accepts it as the target", async () => {
@@ -295,7 +294,7 @@ describe("Hand-off targets defined only in agents.d", () => {
 
   it("still refuses an id that names no agent, inline or in agents.d", async () => {
     const resolved = bootDispatch(["gorse", "ghost"]);
-    expect(resolved.unknown).toEqual(["ghost"]);
+    expect(resolved.unknown).toEqual([{ index: 1, id: "ghost" }]);
     expect(resolved.options?.agents.map((a) => a.id)).toEqual(["gorse"]);
     if (!resolved.options) throw new Error("no dispatch options");
     options = { ...options, dispatch: resolved.options };

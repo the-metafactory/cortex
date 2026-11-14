@@ -45,8 +45,7 @@
  *             · 2 CLI usage error (bad subcommand / unknown flag).
  */
 
-import { dirname, join } from "path";
-import { loadConfigWithAgents, expandTilde, loadAgentsDirectory, FragmentLoadError } from "../../../common/config/loader";
+import { loadConfigWithAgents, expandTilde, loadAgentsDirectory, FragmentLoadError, agentsDirBeside, mergeAgents } from "../../../common/config/loader";
 import { unknownDispatchAgentError, unknownDispatchAgents } from "../../../common/types/desk-dispatch";
 import { formatConfigLoadError } from "../../../common/config/validate-on-write";
 import { loadConfig as loadMcConfig } from "../../../surface/mc/config";
@@ -120,8 +119,8 @@ function runValidate(flags: FlagMap, json: boolean): ExitResult {
     // pure parse+validate of the same object the daemon would load.
     const loaded = loadConfigWithAgents(resolvedPath);
     const warnings: string[] = [];
-    const dispatchErrors = unknownDispatchTargets(loaded.config.mc, loaded.inlineAgents, dirname(resolvedPath), warnings);
-    if (dispatchErrors.length > 0) return invalid(resolvedPath, dispatchErrors, json);
+    const dispatchErrors = unknownDispatchTargets(loaded.config.mc, loaded.inlineAgents, resolvedPath, warnings);
+    if (dispatchErrors.length > 0) return invalid(resolvedPath, [...dispatchErrors, ...warnings], json);
 
     // A single loaded config resolves to exactly one merged stack identity when
     // a `stack:` block is present (cortex-shape). Legacy bot.yaml input yields
@@ -195,15 +194,15 @@ function invalid(resolvedPath: string, errors: string[], json: boolean): ExitRes
   };
 }
 
-function unknownDispatchTargets(mc: unknown, inlineAgents: readonly { id: string }[], configDir: string, warnings: string[]): string[] {
-  let fragmentIds: string[] = [];
+function unknownDispatchTargets(mc: unknown, inlineAgents: readonly { id: string }[], configPath: string, warnings: string[]): string[] {
+  let fragments: { id: string }[] = [];
   try {
-    fragmentIds = loadAgentsDirectory(join(configDir, "agents.d")).map((agent) => agent.id);
+    fragments = loadAgentsDirectory(agentsDirBeside(configPath));
   } catch (err) {
     if (!(err instanceof FragmentLoadError)) throw err;
     warnings.push(`NOTE agents.d: ${err.message}`);
   }
-  const agentIds = new Set([...inlineAgents.map((agent) => agent.id), ...fragmentIds]);
+  const agentIds = new Set(mergeAgents(inlineAgents, fragments).map((agent) => agent.id));
   return unknownDispatchAgents(mc, agentIds).map(unknownDispatchAgentError);
 }
 
