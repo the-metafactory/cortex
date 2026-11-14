@@ -32,7 +32,8 @@ import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
-import { backSnoozes, snoozedIds, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
+import { backSnoozes, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
+import { backLinks, loseTaskLinks, offDeskIds } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
 import { expireTaskHandoffs, openTaskHandoffs, type DispatchOptions } from "./task-handoff-store";
@@ -244,14 +245,19 @@ export async function composeDesk(
   const availability = calendarAvailability({ sources: desk.sources, readings, calendars: [...calendars.values()], now });
   const waitingConfig = desk.mailWaiting ?? DEFAULT_WAITING;
   recordWaitingOnce(db, readings, now, waitingConfig);
+  const { myDay, studio } = await withSyncedBalance(db, desk, now, async (source, studio) => {
+    const projection = deps.adapterDay ? await deps.adapterDay()?.projection() ?? null : null;
+    return { myDay: readMyDay(db, desk, now, source, projection ?? undefined), studio };
+  });
+  loseTaskLinks(db, myDay, now);
   wakeSnoozes(db, snoozeFacts(db, readings, availability), now);
-  const snoozed = snoozedIds(db);
-  const snoozeBack = backSnoozes(db, now);
+  const offDesk = offDeskIds(db);
+  const snoozeBack = new Map([...backSnoozes(db, now), ...backLinks(db, now)]);
   const digested = digestedIds(db, readings.flatMap((r) => r.mail.map((m) => m.id)));
   const canMove = Boolean(desk.mailActions?.move?.length);
   const mailGroups = canMove ? listMailGroups(db, readings, desk, deps.handled, now) : null;
   const held = mailGroups?.digests.held ?? new Set<string>();
-  const mail = readings.flatMap((r) => r.mail.filter((m) => !snoozed.has(m.id) && !digested.has(m.id) && !held.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const mail = readings.flatMap((r) => r.mail.filter((m) => !offDesk.has(m.id) && !digested.has(m.id) && !held.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const vipSet = new Set(vips.map((v) => v.address));
   const suspicion = suspicionContext(db, desk.mailOwnDomains);
@@ -261,10 +267,6 @@ export async function composeDesk(
   const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
   const localClassifier = desk.mailClassifier?.local ? deps.localMailClassifier : undefined;
-  const { myDay, studio } = await withSyncedBalance(db, desk, now, async (source, studio) => {
-    const projection = deps.adapterDay ? await deps.adapterDay()?.projection() ?? null : null;
-    return { myDay: readMyDay(db, desk, now, source, projection ?? undefined), studio };
-  });
   const adapters = await readAdapterAttention(deps.adapterAttention, now);
   const cloudAreas = new Set(desk.areas.filter((a) => a.policy === "cloud").map((a) => a.id));
   const boundary = sourceBoundary(desk);

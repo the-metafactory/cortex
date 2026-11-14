@@ -44,16 +44,10 @@ export const UNTRUSTED_CLOSE = "</untrusted-content>";
  * no-op — escaping never compounds.
  */
 export function neutraliseFenceBreakout(value: string): string {
-  return (
-    value
-      // Strip C0 controls FIRST (except \t \n \r) so a control char can't be
-      // used to split a delimiter past the bracket-escape.
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
-      // Escape the angle brackets that DEFINE any fence/pseudo-tag delimiter.
-      // No `<`/`>` survives ⇒ no literal `<untrusted-content>`/`</…>` can form,
-      // regardless of any later zero-width / whitespace normalisation.
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-  );
+  return stripControlCharacters(value).replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/** Remove NUL and the other C0 control characters, keeping tab, newline and carriage return. */
+export function stripControlCharacters(value: string): string {
+  return value.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
 }

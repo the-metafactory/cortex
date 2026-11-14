@@ -91,6 +91,7 @@ All keys below are under `interruptions`.
 | `everySeconds` | `60` | Integer from 15 to 3600. Background push interval. |
 | `chime` | `true` | Plays a sound in the Desk tab for a new interrupting item. |
 | `notifications` | `true` | Allows browser notifications after the person grants permission. |
+| `holdDuringMeetings` | `true` | Holds mail and reminder interruptions while a busy or unknown meeting runs, and pushes them once it ends. |
 
 These keys set the stack's defaults. A reason switched on the Desk overrides its default, except that `mail: false` keeps every mail reason off and `meetingMinutes: 0` keeps meeting interruptions off. See [How the Desk interrupts](README.md#how-the-desk-interrupts).
 

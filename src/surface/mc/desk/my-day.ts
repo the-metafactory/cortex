@@ -16,6 +16,7 @@ import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
+import { taskLinks, type DeskLinkView } from "./links";
 import { configuredState, isPersonDraft, loadMeta, loadMyDayState, retireStaleDraft, saveMeta, todayCap } from "./balance-sync";
 export { loadMeta } from "./balance-sync";
 
@@ -45,9 +46,10 @@ export interface MyDayView {
   undos: { receipt: string; title: string }[];
   dayUndo: { receipt: string; text: string } | null;
   handoffs?: TaskHandoffLines;
+  links: DeskLinkView[];
 }
 const withHandoffs = (view: MyDayView, db: Database, desk: DeskOptions, now: number): MyDayView => (desk.dispatch ? { ...view, handoffs: taskHandoffLines(db, desk.dispatch, now) } : view);
-function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection, projection?: BalanceDayProjection): MyDayView {
+function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection, projection?: BalanceDayProjection): Omit<MyDayView, "links"> {
   const state = configuredState(storedState, desk);
   if (projection) applyBalanceDayProjection(state.outline, projection.tasks);
   const day = state.dayState?.date === date ? state.dayState : null;
@@ -76,10 +78,11 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
     outline: state.outline, observation: projection ? { status: projection.status, observedAt: projection.observedAt } : null, sources: meta.sources, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
   };
 }
+const withLinks = (db: Database, view: Omit<MyDayView, "links">): MyDayView => ({ ...view, links: taskLinks(db, view) });
 export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?: StudioProjection, projection?: BalanceDayProjection): MyDayView {
   return db.transaction(() => {
     const meta = loadMeta(db);
-    return withHandoffs(viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio, projection), db, desk, now);
+    return withHandoffs(withLinks(db, viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio, projection)), db, desk, now);
   }).deferred();
 }
 export function movedKeys(db: Database): Set<string> {
@@ -117,7 +120,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       if (command.op === "source-plan" && meta.planned.some(p => p.filing === requestId && p.reversed)) throw new Error("This planning was undone. The source is back in Catch-up; start a new plan if needed.");
       saveBalanceState(db, state);
       saveMeta(db, meta);
-      return { view: withHandoffs(viewOf(state, meta, desk, localDay(now), studio), db, desk, now), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}), ...(receipt.location ? { location: receipt.location } : {}) };
+      return { view: withHandoffs(withLinks(db, viewOf(state, meta, desk, localDay(now), studio)), db, desk, now), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}), ...(receipt.location ? { location: receipt.location } : {}) };
     }
     if (date !== localDay(now)) throw new Error("The date changed. Refresh the Desk before changing your day.");
     let undo: string | undefined;
@@ -296,7 +299,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     }
     retireStaleDraft(meta, date);
     meta.revision += 1;
-    const view = withHandoffs(viewOf(state, meta, desk, date, studio), db, desk, now);
+    const view = withHandoffs(withLinks(db, viewOf(state, meta, desk, date, studio)), db, desk, now);
     const notice = [unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list.` : undefined, todayNotice].filter(Boolean).join(" ") || undefined;
     meta.receipts.push({ id: requestId, payload, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) });
     saveBalanceState(db, state);

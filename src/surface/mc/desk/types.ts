@@ -144,10 +144,17 @@ export interface DeskInterruptReason {
 
 export type InterruptFeedback = "yes" | "no";
 
+export interface MeetingHold {
+  eventKey: string;
+  title: string;
+  until: number;
+}
+
 export interface DeskInterrupt {
-  delivery: "off" | "pending" | "sending" | "sent" | "buffered" | "failed";
+  delivery: "off" | "held" | "pending" | "sending" | "sent" | "buffered" | "failed";
   error?: string;
   reason?: DeskInterruptReason;
+  held?: MeetingHold;
   feedback?: InterruptFeedback;
 }
 

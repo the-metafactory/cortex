@@ -3,7 +3,7 @@
 import { runSdkDts } from "./lib/sdk-dts";
 
 const HEADER = `// ============================================================================
-// glossary-ignore: host, run
+// glossary-ignore: host, run, message, body
 // GENERATED FILE — DO NOT EDIT BY HAND.
 //
 // Self-contained type artifact for the Desk adapter SDK. Out-of-tree Desk

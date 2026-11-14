@@ -11,6 +11,7 @@ import { containedRealPath, defaultArcListRunner, readArcPackageInventory, sha25
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskAdapterDefinition, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
+import { mailReadBridge, type MailReadSource } from "./mail-read";
 import { adaptDeskBackend, type DeskBackendConnector } from "./package-backend";
 import type { TrustedConnector } from "../authority";
 import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSIONS, type DraftingBinding } from "./drafting-binding";
@@ -152,6 +153,7 @@ export interface DeskPackageLoaderOptions {
   signature?: DeskAdapterSignaturePolicy;
   store?: DeskGenerationStore;
   now?: () => Date;
+  mail?: MailReadSource;
 }
 
 export interface DeskAdapterCatalogEntry {
@@ -740,6 +742,7 @@ export class DeskPackageLoader {
         if (connectors.has(capabilityId)) throw new Error(`Connector ${capabilityId} is already registered.`);
         connectors.set(capabilityId, factory);
       },
+      mail: mailReadBridge(this.options.mail, acting.adapterId, () => this.state.published.get(acting.adapterId)?.candidate === acting && this.admission(acting.adapterId).state === "available"),
     };
     let definition: DeskAdapterDefinition;
     try {

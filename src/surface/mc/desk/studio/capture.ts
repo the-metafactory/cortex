@@ -8,8 +8,9 @@ import type { StudioOptions } from "../types";
 import type { ActContext, ActPlan, ActRefusal } from "./acts";
 import { appendEntry, appendLog, localTime, oneLine } from "./edit";
 import { spawnGit } from "./git";
-import { STUDIO_SLUG } from "./format";
+import { entryBlock, STUDIO_SLUG } from "./format";
 import { runStudioTransaction, type ActResult } from "./writer";
+import { endLink } from "../links";
 import type { StudioArea, StudioThreadView } from "./view";
 
 const FilerAnswer = z.object({
@@ -51,14 +52,6 @@ export async function askFiler(config: ClassifierConfig | undefined, threads: re
   } catch {
     return { answer: null, reason: "The filer did not answer; saved in the Studio inbox." };
   }
-}
-
-const continuation = (line: string | undefined): boolean => line !== undefined && line.startsWith("  ") && line.trim() !== "";
-
-function entryBlock(lines: readonly string[], at: number): string[] {
-  let end = at + 1;
-  while (continuation(lines[end])) end++;
-  return lines.slice(at, end);
 }
 
 export function captureInThread(ctx: ActContext, thread: StudioThreadView, id: string, entry: readonly string[], log: string, message: string): ActPlan | ActRefusal {
@@ -146,7 +139,10 @@ async function undoPlan(ctx: ActContext, dir: string, id: string): Promise<ActPl
 
 export async function undoStudioCapture(input: Omit<CaptureInput, "text" | "model"> & { id: string }): Promise<ActResult> {
   const result = await runStudioTransaction(input, (ctx) => undoPlan(ctx, input.options.dir, input.id));
-  if (result.ok) input.db.query("UPDATE desk_done SET action = 'studio.capture.undone', message = ?, updated_at = ? WHERE action = 'studio.capture' AND item_key = ?")
-    .run(result.message, (input.now ?? new Date()).getTime(), input.id);
+  if (result.ok) {
+    const at = (input.now ?? new Date()).getTime();
+    endLink(input.db, input.id, "undone", null, at);
+    input.db.query("UPDATE desk_done SET action = 'studio.capture.undone', message = ?, updated_at = ? WHERE action = 'studio.capture' AND item_key = ?").run(result.message, at, input.id);
+  }
   return result;
 }

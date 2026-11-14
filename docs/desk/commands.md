@@ -311,7 +311,7 @@ With `interruptions.transport: command`, the transport receives:
 }
 ```
 
-`key`, `title`, and `why` are strings. `reason` is the interruption reason: a `code` from [How the Desk interrupts](README.md#how-the-desk-interrupts), with `target` for a VIP and `eventKey` for a meeting, so a command can phrase it itself. `action` is optional. Cortex includes an action only when its URL is a valid HTTP or HTTPS URL without whitespace or angle brackets. The command exits 0 after accepting the notification. Its stdout is ignored. Nonzero exit or timeout becomes a failed delivery shown on the Desk. Cortex records delivery per item, so a transport must not rely on automatic retries.
+`key`, `title`, and `why` are strings. `reason` is the interruption reason: a `code` from [How the Desk interrupts](README.md#how-the-desk-interrupts), with `target` for a VIP and `eventKey` for a meeting, so a command can phrase it itself. `held` (`eventKey`, `title`, `until` in milliseconds) is present when the item waited for a meeting to end; `why` then ends with a sentence saying so. `action` is optional. Cortex includes an action only when its URL is a valid HTTP or HTTPS URL without whitespace or angle brackets. The command exits 0 after accepting the notification. Its stdout is ignored. Nonzero exit or timeout becomes a failed delivery shown on the Desk. Cortex records delivery per item, so a transport must not rely on automatic retries.
 
 For example, the `desk-ntfy` adapter in cortex-desk-adapters posts this notification to an ntfy topic:
 
