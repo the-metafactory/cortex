@@ -54,6 +54,11 @@ export async function escalationRulingTarget(somaBin: string, ref: string, run: 
   }
 }
 
+export const RULING_STATUS_FRESH_MS = 30 * 60_000;
+export const RULING_STATUS_RETRY_MS = 10 * 60_000;
+
+const statusLifetime = (refusal: string | null): number => refusal === NODE_UNREADABLE ? RULING_STATUS_RETRY_MS : RULING_STATUS_FRESH_MS;
+
 export class EscalationRulings {
   private readonly cache = new Map<string, { at: number; refusal: string | null }>();
   private refreshing: Promise<void> | null = null;
@@ -69,7 +74,10 @@ export class EscalationRulings {
 
   warm(refs: string[]): Promise<void> {
     if (this.refreshing) return this.refreshing.then(() => this.warm(refs));
-    const stale = [...new Set(refs)].filter(ref => this.clock() - (this.cache.get(ref)?.at ?? -Infinity) >= 30_000);
+    const stale = [...new Set(refs)].filter(ref => {
+      const cached = this.cache.get(ref);
+      return !cached || this.clock() - cached.at >= statusLifetime(cached.refusal);
+    });
     if (!stale.length) return Promise.resolve();
     this.refreshing = this.refresh(stale).finally(() => { this.refreshing = null; });
     return this.refreshing;
