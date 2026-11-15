@@ -7,6 +7,7 @@ import { GRAPH_REPOSITORY_SQL } from "../desk/graph-repository-schema";
 import { GRAPH_WRITER_SQL } from "../desk/graph-writer-schema";
 import { DMARC_SQL } from "../desk/mail-dmarc-schema";
 import { MAIL_LOOP_SQL } from "../desk/mail-loop-schema";
+import { MAIL_SWEEP_ADAPTER_SQL } from "../desk/mail-sweep-adapter-schema";
 import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
 import { DIGEST_SQL } from "../desk/mail-digest-schema";
 import { UNSUBSCRIBE_SQL } from "../desk/mail-unsubscribe-schema";
@@ -173,6 +174,9 @@ export const TABLE_NAMES = [
   "desk_mail_digest_kept",
   "desk_mail_digest_flags",
   "desk_mail_sweep_mails",
+  "desk_mail_sweep_grants",
+  "desk_mail_sweep_sets",
+  "desk_mail_sweep_set_mails",
   "desk_mail_trusted",
   "desk_graph_repositories",
   "desk_worker_handoffs",
@@ -191,6 +195,7 @@ export const SCHEMA_SQL: string[] = [
   ...MAIL_VECTORS_SQL,
   ...DMARC_SQL,
   ...MAIL_LOOP_SQL,
+  ...MAIL_SWEEP_ADAPTER_SQL,
   ...ROUTINE_DISPLAY_SQL,
   ...DIGEST_SQL,
   ...UNSUBSCRIBE_SQL,
