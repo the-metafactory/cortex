@@ -13,7 +13,7 @@ import { conversationSources } from "../../../../surface/mc/desk/conversation-so
 import { initDatabase } from "../../../../surface/mc/db/init";
 import type { DeskOptions } from "../../../../surface/mc/desk/compose";
 import { flowSaveDefinition, flowSaveRequest, openFlowSaveRig, FLOW_SAVE_NOW } from "./flow-save-fixtures";
-import { openFixtureAuthority } from "./lifecycle-rig";
+import { openFixtureAuthority } from "../../operations/lifecycle-fixtures";
 
 export const flowCutoverConfirm = (view: ProposalView) => ({ revision: view.proposal.revision, digest: view.digest });
 

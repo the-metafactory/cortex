@@ -1,7 +1,13 @@
 import type { ApprovedSnapshot } from "../operations/types";
 import { canonicalWire } from "../operations/validation";
+import type { CapabilityMutationPolicy } from "../../authority";
 
 export const MAIL_REPLY_DRAFT_CAPABILITY = "mail.reply-draft.create";
+
+export const mailReplyDraftPolicy: CapabilityMutationPolicy = {
+  scopeMatches: (snapshot, connection) => mailReplyDraftScopeMatches(snapshot, (connection.accountScope as { account?: unknown } | null)?.account),
+  requiresExactConfirmation: conversationPolicy => conversationPolicy === "local",
+};
 
 export function mailReplyDraftScopeMatches(snapshot: ApprovedSnapshot, account: unknown): boolean {
   const input = snapshot.input;

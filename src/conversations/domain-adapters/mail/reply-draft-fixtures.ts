@@ -21,7 +21,7 @@ import { writerLease } from "../operations/writer-authority";
 import { syntheticWriterPlan, syntheticWriterSteps } from "../operations/writer-fixtures";
 import { legacyFixture } from "../operations/legacy-fixtures";
 import type { LegacyContext } from "../operations/legacy";
-import { openFixtureAuthority } from "../__tests__/fixtures/lifecycle-rig";
+import { openFixtureAuthority } from "../operations/lifecycle-fixtures";
 import { mailAccountRef, mailMoveDeclaration } from "./move-contract";
 import { createMailReplyDraftFacade, MAIL_REPLY_DRAFT_CAPABILITY, type MailReplyDraftConnection } from "./reply-draft-host";
 

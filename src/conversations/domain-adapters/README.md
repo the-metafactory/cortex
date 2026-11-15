@@ -167,14 +167,16 @@ The same enabled connection owns the My Day projection. Every My Day read first 
 
 Run `bun scripts/probe-desk-balance-connection.ts` with a Playwright Chromium installation available through `PLAYWRIGHT_BROWSERS_PATH`. The probe uses temporary host state and a local Balance, enables and disables the connection through the actual settings component, and compares both browser reads with the Balance store.
 
-## Mail reply draft host
+## Mail reply drafts in the Cortex runtime
 
-`mail/reply-draft-host.ts` provides the inactive compatibility facade for `mail.reply-draft.create`. With `active` omitted or false, it calls the supplied native writer unchanged. Activation and the helm-mail binding are separate slices; this module changes no production routing.
+`mail/reply-draft-host.ts` provides the inactive compatibility facade for `mail.reply-draft.create`. With `active` omitted or false, it calls the supplied native writer unchanged. Production routing remains native; activation and the helm-mail binding are separate slices. The authority policy and legacy import mapping described below are installed independently of the facade's `active` flag.
 
-The active facade resolves the proposal's listed Mail key through the host lookup, requires the configured source and account, and confirms a snapshot containing `{ message, body }`. The message is a connection-qualified `message` reference and the body retains the exact reviewed text. The snapshot also binds that message as its target and the connection's `account` reference as its only destination. Schema references come from the binding's declared action capability. Lifecycle owner request IDs use `studioRequestId(operationId)`.
+<!-- glossary-ignore: message, body, owner -->
+The active facade resolves the proposal's listed Mail key through the Cortex runtime's lookup, requires the configured source and account, and confirms a snapshot containing `{ message, body }`. These fields hold a connection-qualified Mail message reference and the exact reviewed reply text. The snapshot also binds that reference as its target and the connection's `account` reference as its only destination. Schema references come from the binding's declared action capability. Lifecycle owner request IDs use `studioRequestId(operationId)`.
 
-The connection's host-owned `accountScope.account` must match the snapshot destination. Local-only conversations require exact confirmation for each operation; connection grants, grants after creation and use of earlier cloud grants are refused. The authority repeats scope and current-policy admission at dispatch. The facade offers no standing-grant path.
+The Cortex runtime registers the Mail mutation policy when constructing lifecycle authority. The connection's runtime-controlled `accountScope.account` must match the snapshot destination. Local-only conversations require exact confirmation for each operation; connection grants, grants after creation and use of earlier cloud grants are refused. The generic authority mediator applies the registered scope and exact-confirmation hooks, including scope and current-policy admission at dispatch. The facade offers no standing grants.
 
+<!-- glossary-ignore: owner -->
 The legacy importer accepts a `mail-draft` mapping to `mail.reply-draft.create` with one account destination and, when present, a `draft` canonical reference. It retains the original operation ID as the historic owner request ID because the native command had no request-ID contract. Every imported operation remains raw evidence with dispatch and retry blocked. An empty draft ID remains in that evidence as uncertain history and cannot be projected as a canonical success.
 
-Run `bun scripts/probe-desk-mail-reply-draft.ts` for the fixture binding through real host authority, lifecycle dispatch and a reopened journal, including native fallback, the local account rule and legacy drafts with and without IDs.
+Execute `bun scripts/probe-desk-mail-reply-draft.ts` for the fixture binding through real Cortex runtime authority, lifecycle dispatch and a reopened journal, including native fallback, the local account rule and legacy drafts with and without IDs.

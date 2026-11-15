@@ -53,6 +53,13 @@ export interface LegacyPreview {
   ownerRequestId: string;
 }
 
+function ownerIdentity(owner: OperationRecord["owner"]): ((operationId: string) => string) | undefined {
+  if (owner.startsWith("balance-")) return operationUuid;
+  if (owner.startsWith("studio-") || owner.startsWith("graph-") || owner === "flow") return studioRequestId;
+  if (owner === "mail-draft") return operationId => operationId;
+  return undefined;
+}
+
 const isCanonicalProjectId = (value: string): boolean => value.trim().length > 0 && value.trim() === value && isBalanceProjectId(value);
 const canonicalProject = (value: string | undefined): string | undefined => value !== undefined && isCanonicalProjectId(value) ? value : undefined;
 const storableReference = (ref: ObjectReference): boolean => ref.objectType !== "project" || isCanonicalProjectId(ref.canonicalId);
@@ -133,9 +140,10 @@ export function previewLegacyOperation(raw: LegacySource, mapping?: LegacyContex
   }
   if (source.createResult?.state === "created" && source.createResult.canonicalId !== canonical) issues.push("legacy_result_identity_conflict");
   if (source.readback?.found && source.readback.canonicalId !== canonical) issues.push("legacy_readback_identity_conflict");
-  if (!record.owner.startsWith("balance-") && !record.owner.startsWith("studio-") && !record.owner.startsWith("graph-") && record.owner !== "flow" && record.owner !== "mail-draft") issues.push("legacy_owner_identity_mapping_missing");
+  const identity = ownerIdentity(record.owner);
+  if (!identity) issues.push("legacy_owner_identity_mapping_missing");
   const evidence = { source, context, issues };
-  const ownerRequestId = record.owner.startsWith("balance-") ? operationUuid(record.operationId) : record.owner.startsWith("studio-") || record.owner.startsWith("graph-") || record.owner === "flow" ? studioRequestId(record.operationId) : record.operationId;
+  const ownerRequestId = identity ? identity(record.operationId) : record.operationId;
   return { ...evidence, sourceDigest: hash(evidence), state: record.state === "created" && validCanonical ? "succeeded" : "uncertain", dispatchAllowed: false, retryAllowed: false, ownerRequestId };
 }
 

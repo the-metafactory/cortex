@@ -4,9 +4,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import type { DomainAdapterRegistry } from "../../registry";
-import type { AuthorityBindings, HostContext, TrustedConnector, WriterLease } from "../../../authority";
-import type { ConversationHost } from "../../../host";
-import type { ConnectionRecord, PrincipalBinding } from "../../../authority-records";
+import type { HostContext, TrustedConnector, WriterLease } from "../../../authority";
 import { OperationJournalStore } from "../../operations/journal";
 import { OperationBridge, type DispatchAuthority } from "../../operations/dispatch";
 import type { Authority, OwnerSupport } from "../../operations/types";
@@ -20,13 +18,6 @@ export const confirmationAuthority = (now: number): Authority => ({
   decisionRef: "decision-example",
   authorizedAt: new Date(now).toISOString(),
 });
-
-export async function openFixtureAuthority(host: ConversationHost, registry: DomainAdapterRegistry, bindings: AuthorityBindings, principal: PrincipalBinding, connection: ConnectionRecord) {
-  const authority = host.lifecycleAuthority(registry, bindings);
-  await authority.publishHostRecord({ kind: "principal", value: principal }, 0);
-  await authority.publishHostRecord({ kind: "connection", value: connection }, 0);
-  return authority;
-}
 
 export interface LiveBinding {
   readonly support: OwnerSupport;

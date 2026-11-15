@@ -4,7 +4,6 @@ import { QuerySourceSchema, type QueryDispatch, type QueryFetchRequest } from ".
 import { validateQueryPage, type ValidatedQueryPage } from "./domain-adapters/reads/query-validation";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
-import { MAIL_REPLY_DRAFT_CAPABILITY, mailReplyDraftScopeMatches } from "./domain-adapters/mail/reply-draft-policy";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Context } from "@earendil-works/chord";
@@ -80,7 +79,11 @@ interface Resolved { binding: AuthenticatedBinding; principal: PrincipalBinding;
 interface Basis { kind: "confirmation"; confirmationId: string } 
 interface GrantBasis { kind: "grant"; grantId: string }
 type ApprovalInput = Omit<Approval, "authority" | "at">;
-export interface AuthorityCollaborators { fences?: FenceGate; diagnostics?: DiagnosticRecorder }
+export interface CapabilityMutationPolicy {
+  scopeMatches(snapshot: ApprovedSnapshot, connection: ConnectionRecord): boolean;
+  requiresExactConfirmation(conversationPolicy: PolicyInputs["conversationPolicy"]): boolean;
+}
+export interface AuthorityCollaborators { fences?: FenceGate; diagnostics?: DiagnosticRecorder; mutationPolicies: ReadonlyMap<string, CapabilityMutationPolicy> }
 
 const HOST_DATA_SUBJECT = "host-data";
 
@@ -91,7 +94,7 @@ export class AuthorityMediator {
   private readonly active = new Map<string, { controller: AbortController; heads: Set<string> }>();
   private readonly journal: OperationJournalStore;
 
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority, private readonly collaborators: AuthorityCollaborators = {}) {
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority, private readonly collaborators: AuthorityCollaborators) {
     this.journal = new OperationJournalStore(engine, registry, context, collaborators.fences, collaborators.diagnostics);
     this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
       ...(connector.observation ? { observation: Object.freeze({ ...connector.observation, fetch: connector.observation.fetch.bind(connector.observation) }) } : {}),
@@ -231,15 +234,20 @@ export class AuthorityMediator {
   }
 
   private grantMatches(grant: GrantRecord, resolved: Resolved, snapshot: ApprovedSnapshot, purpose: "mutation" | "cancellation"): boolean {
-    if (snapshot.capabilityId === MAIL_REPLY_DRAFT_CAPABILITY && resolved.policy.conversationPolicy === "local") return false;
+    if (this.requiresExactConfirmation([snapshot.capabilityId], resolved.policy.conversationPolicy)) return false;
     const c = grant.constraints;
     const selector = c.context;
     return c.adapterId === snapshot.adapterId && c.connectionId === snapshot.connectionId && grant.purpose === purpose && c.capabilityIds.includes(snapshot.capabilityId) && (c.selection === "connection" || exactReferences(c.destinations, snapshot.destinations) && canonicalWire(c.target ?? null) === canonicalWire(snapshot.target ?? null)) && (selector.kind === "principal" || selector.kind === "conversation" && selector.conversationId === resolved.binding.conversationId || selector.kind === "area" && resolved.policy.areaId !== undefined && selector.areaId === resolved.policy.areaId) && !(c.sourceReleaseCeiling === "local" && snapshot.policy === "cloud");
   }
 
   private canMutate(resolved: Resolved, snapshot: ApprovedSnapshot): boolean {
-    if (snapshot.capabilityId === MAIL_REPLY_DRAFT_CAPABILITY && !mailReplyDraftScopeMatches(snapshot, (resolved.connection.accountScope as { account?: unknown } | null)?.account)) return false;
+    const policy = this.collaborators.mutationPolicies.get(snapshot.capabilityId);
+    if (policy && !policy.scopeMatches(snapshot, resolved.connection)) return false;
     return !resolved.binding.maintenance && resolved.policy.operationVisible && resolved.policy.readsAllowed && resolved.policy.writesAllowed && resolved.connection.writeCapabilityIds.includes(snapshot.capabilityId) && withinLimits(resolved.connection.writeDestinations, snapshot.destinations) && !(snapshot.policy === "cloud" && (resolved.policy.conversationPolicy === "local" || resolved.restrictions.some(record => record.egress === "local")));
+  }
+
+  private requiresExactConfirmation(capabilityIds: readonly string[], conversationPolicy: PolicyInputs["conversationPolicy"]): boolean {
+    return capabilityIds.some(id => this.collaborators.mutationPolicies.get(id)?.requiresExactConfirmation(conversationPolicy));
   }
 
   private decision(state: AuthorityState, resolved: Resolved, purpose: string, reference: string, basis: Json, snapshot?: ApprovedSnapshot): DecisionRecord {
@@ -276,7 +284,7 @@ export class AuthorityMediator {
       const snapshot = stored.journal.snapshot;
       const resolved = await this.resolve(context, snapshot.connectionId, snapshot);
       if (!this.canMutate(resolved, snapshot)) return null;
-      if (snapshot.capabilityId === MAIL_REPLY_DRAFT_CAPABILITY && resolved.policy.conversationPolicy === "local") return null;
+      if (this.requiresExactConfirmation([snapshot.capabilityId], resolved.policy.conversationPolicy)) return null;
       return this.commit(state => {
         const approval = stored.journal.events[0]?.event;
         if (approval?.kind !== "approved" || approval.authority.principalRef !== resolved.principal.principalRef || approval.authority.basis.kind !== "confirmation") return null;
@@ -293,7 +301,7 @@ export class AuthorityMediator {
       let resolved: Resolved;
       try { resolved = await this.resolve(context, connectionId); } catch { return null; }
       const { connection, policy, binding } = resolved;
-      if (policy.conversationPolicy === "local" && wanted.includes(MAIL_REPLY_DRAFT_CAPABILITY)) return null;
+      if (this.requiresExactConfirmation(wanted, policy.conversationPolicy)) return null;
       if (binding.maintenance || !policy.operationVisible || !policy.readsAllowed || !policy.writesAllowed || !wanted.every(id => connection.writeCapabilityIds.includes(id))) return null;
       return this.commit(state => {
         const constraints: GrantRecord["constraints"] = exact
