@@ -10,11 +10,12 @@ import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
 import { classifierDeadline, isDeadlineForm } from "./deadline";
-import type { MailSimilarity, MailText, SimilarDecisions, SimilarityBasis, SimilarityContext } from "./mail-similar";
+import type { MailSimilarity, MailText, SimilarDecisions, SimilarityContext } from "./mail-similar";
+import { SIMILARITY_BASES, type SimilarityBasis } from "./mail-prediction-schema";
 import { PREDICTED_ACTIONS, type PredictedAction } from "./mail-action-schema";
 export { PREDICTED_ACTIONS, type PredictedAction } from "./mail-action-schema";
 
-export const SIMILARITY_BASES = ["content", "sender"] as const;
+export { SIMILARITY_BASES } from "./mail-prediction-schema";
 
 export const MAIL_COMMITMENTS = ["request", "invitation", "none", "unknown"] as const;
 export type MailCommitment = (typeof MAIL_COMMITMENTS)[number];

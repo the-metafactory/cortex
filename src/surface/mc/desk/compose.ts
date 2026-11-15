@@ -529,14 +529,14 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
     if (item.kind !== "agent-failed") return item;
     const last = done.find((d) => d.itemKey === item.key && d.status !== "running");
     if (!last) return item;
-    const why = last.status === "failed"
+    const failed = last.status === "failed";
+    const why = failed
       ? `The Desk tried to retry it on its own ${ago(now, last.createdAt)}. ${last.message ?? "Ranger gave no reason."}`
       : `The Desk retried it on its own ${ago(now, last.createdAt)}, and it failed again.`;
     return {
       ...item, urgency: "today", why,
-      whyPhrase: { code: last.status === "failed" ? "ranger.retry-failed" : "ranger.retried", params: { at: new Date(last.createdAt).toISOString() } },
-      reason: last.status === "failed" ? last.message ?? undefined : undefined,
-      sourceStatusReason: undefined,
+      whyPhrase: { code: failed ? "ranger.retry-failed" : "ranger.retried", params: { at: new Date(last.createdAt).toISOString() } },
+      whyContent: failed && last.message != null ? { reason: last.message } : undefined,
       detail: { ...item.detail, history: [...item.detail.history, why] },
     };
   });

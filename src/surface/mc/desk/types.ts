@@ -79,6 +79,17 @@ export interface DeskCorrection {
   createdAt: number;
 }
 
+export interface DeskWhyContent {
+  reason?: string;
+  sourceStatusReason?: string;
+  goalWording?: string;
+  precedentNote?: string;
+  precedentSenders?: string[];
+  unsubscribeFailure?: string;
+  unsubscribeUrl?: string;
+  meetingTitle?: string;
+}
+
 export interface DeskItem {
   readOnly?: boolean;
   badge?: string;
@@ -98,12 +109,7 @@ export interface DeskItem {
   title: string;
   why: string;
   whyPhrase?: import("./phrases").DeskPhrase;
-  reason?: string;
-  sourceStatusReason?: string;
-  goalWording?: string;
-  precedentNote?: string;
-  precedentSenders?: string[];
-  unsubscribeFailure?: string;
+  whyContent?: DeskWhyContent;
   score: number;
   actions: DeskAction[];
   more?: DeskAction[];

@@ -135,19 +135,21 @@ export function rankItems(input: RankInput): DeskItem[] {
     if (task?.kind === "closed") return;
     if (item.source === "ranger" && listedTasks.has(rangerItemKey(ref))) return;
     if (item.source === "ranger") listedTasks.add(rangerItemKey(ref));
+    const question = task?.kind === "open" ? task.question ?? item.question?.condition ?? item.question?.reason : undefined;
+    const repo = ref.split("#")[0] ?? ref;
     const enriched = task?.kind === "open" ? {
       ...item,
       title: `"${task.title}" needs you.`,
-      why: `${task.question ?? item.question?.condition ?? item.question?.reason ?? QUESTION_UNAVAILABLE} In ${repoName(ref.split("#")[0] ?? ref)}.`,
-      ...questionPhrase(task.question ?? item.question?.condition ?? item.question?.reason, ref.split("#")[0] ?? ref),
+      why: `${question ?? QUESTION_UNAVAILABLE} In ${repoName(repo)}.`,
+      ...questionPhrase(question, repo),
       detail: { ...item.detail, links: issueLinks(task.url) },
     } : item;
     const unavailable = item.kind === "grilling" && !input.conversations;
     const why = unavailable ? "Conversations are not set up on this stack." : enriched.why;
     if (!items.has(item.key)) items.set(item.key, {
       ...enriched,
-      ...(unavailable ? { whyPhrase: { code: "ranger.conversations-unavailable" } as const, reason: undefined } : {}),
-      ...(task?.kind === "unavailable" ? { sourceStatusReason: task.reason } : {}),
+      ...(unavailable ? { whyPhrase: { code: "ranger.conversations-unavailable" } as const, whyContent: undefined } : {}),
+      ...(task?.kind === "unavailable" ? { whyContent: { ...enriched.whyContent, sourceStatusReason: task.reason } } : {}),
       why: task?.kind === "unavailable" ? `${why} ${task.reason}` : why,
     });
   };
@@ -315,7 +317,7 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks, explanati
         title: `"${goalShort(s.goalWording)}" ${state}.`,
         why: `This reading is ${reading}. ${s.goalWording ?? "Its description is not available, so open it to see which goal this is."}`,
         whyPhrase: { code: "goal.reading", params: { at: new Date(s.lastEndedAt).toISOString(), wordingAvailable: s.goalWording !== null } },
-        ...(s.goalWording !== null ? { goalWording: s.goalWording } : {}),
+        ...(s.goalWording !== null ? { whyContent: { goalWording: s.goalWording } } : {}),
         score: s.value === "off-track" ? 75 : s.value === "at-risk" ? 70 : 55,
         actions: [canCheck(goalId) ? CHECK_AGAIN : { ...LOOK, role: "primary" }, ...(canPause(goalId) ? [PAUSE] : []), LATER],
         detail: { summary: s.goalWording ?? "This goal has no description.", history: [`Last report ${ago(now, s.lastEndedAt)}`], refs: [goalId, ...refs], links: [] },
@@ -338,7 +340,7 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks, explanati
         title: known ? `"${known.title}" ${task.kind === "closed" ? "is closed" : "needs you"}.` : `Task details are unavailable in ${repoName(repo)}.`,
         why: `${question} In ${repoName(repo)}.`,
         ...questionPhrase(task.kind === "unavailable" ? null : task.question, repo),
-        ...(task.kind === "unavailable" ? { sourceStatusReason: task.reason } : {}),
+        ...(task.kind === "unavailable" ? { whyContent: { sourceStatusReason: task.reason } } : {}),
         score: s.value === "needs-principal" ? 50 : 35,
         actions: [answerOnIssue === null ? action(RULING_ACTION, "Give your ruling", "primary", true) : action("detail", "Look first", "primary", true), ...(answerOnIssue === null ? [LOOK] : []), LATER],
         detail: { summary, history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url ?? escalationUrl(s.ref)) },
@@ -348,8 +350,8 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks, explanati
   }
 }
 
-function questionPhrase(reason: string | null | undefined, repo: string): Pick<DeskItem, "whyPhrase" | "reason"> {
-  return { whyPhrase: { code: "ranger.question", params: { repo: repoName(repo), questionAvailable: reason != null } }, ...(reason != null ? { reason } : {}) };
+function questionPhrase(reason: string | null | undefined, repo: string): Pick<DeskItem, "whyPhrase" | "whyContent"> {
+  return { whyPhrase: { code: "ranger.question", params: { repo: repoName(repo), questionAvailable: reason != null } }, ...(reason != null ? { whyContent: { reason } } : {}) };
 }
 
 export function fold(rest: DeskItem[]): DeskFoldedGroup[] {
@@ -411,7 +413,7 @@ interface MailVerdict {
   pressing: boolean;
   why: string | null;
   whyPhrase?: Extract<DeskPhrase, { code: "mail.meeting-linked" | "mail.meeting-possible" | "mail.unimportant" }>;
-  reason?: string;
+  whyContent?: DeskItem["whyContent"];
   sorted?: MailCategory;
 }
 
@@ -421,7 +423,7 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
   if (!c) {
     const meeting = meetingFor(m.subject, events, now);
     if (!meeting) return { score: 15, pressing: false, why: null };
-    return { score: LINKED_MEETING_SCORE, pressing: true, why: `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.`, whyPhrase: { code: "mail.meeting-possible", params: { meetingTitle: meeting.title, meetingStart: new Date(meeting.start).toISOString() } } };
+    return { score: LINKED_MEETING_SCORE, pressing: true, why: `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.`, whyPhrase: { code: "mail.meeting-possible", params: { meetingStart: new Date(meeting.start).toISOString() } }, whyContent: { meetingTitle: meeting.title } };
   }
   const linked = c.meetingKey && c.category !== "bulk" ? upcomingMeetings(events, now).find((e) => eventKey(e) === c.meetingKey) : undefined;
   const reason = sentence(c.reason);
@@ -431,12 +433,12 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
       score: LINKED_MEETING_SCORE,
       pressing: true,
       why: `${reason} The meeting is ${dayName(Date.parse(linked.start), now)}.`,
-      whyPhrase: { code: "mail.meeting-linked", params: { meetingTitle: linked.title, meetingStart: new Date(linked.start).toISOString() } },
-      reason: c.reason,
+      whyPhrase: { code: "mail.meeting-linked", params: { meetingStart: new Date(linked.start).toISOString() } },
+      whyContent: { reason: c.reason, meetingTitle: linked.title },
       sorted: c.category,
     };
   }
-  return { score: CATEGORY_SCORE[c.category], pressing: c.category === "action" || c.category === "reply", why: reason, reason: c.reason, sorted: c.category };
+  return { score: CATEGORY_SCORE[c.category], pressing: c.category === "action" || c.category === "reply", why: reason, whyContent: { reason: c.reason }, sorted: c.category };
 }
 
 const SEEN = action("mail.seen", "Seen, delete", "primary", true);
@@ -508,22 +510,27 @@ function mailWhyPhrase({ verdict, vip, sender, receivedAt, learned, triage, unsu
     ...(unsubscribe ? { unsubscribeKind: unsubscribe.kind, unsubscribeHost: unsubscribe.host } : {}),
     ...(unsubscribe?.kind === "rule" ? { unsubscribeAt: new Date(unsubscribe.at).toISOString() } : {}),
     ...(unsubscribe && unsubscribe.kind !== "rule" ? { dismissed: unsubscribe.dismissed } : {}),
-    ...(unsubscribe?.kind === "page" ? { unsubscribeUrl: unsubscribe.url } : {}),
     ...(unsubscribe?.kind === "one-click" ? { unsubscribeFailed: Boolean(unsubscribe.failed) } : {}),
   };
-  const content = {
-    ...(!learned && verdict.reason !== undefined ? { reason: verdict.reason } : {}),
+  const whyContent = {
+    ...(!learned && (!vip || verdict.sorted) ? verdict.whyContent : {}),
+    ...(unsubscribe?.kind === "page" ? { unsubscribeUrl: unsubscribe.url } : {}),
     ...(unsubscribe?.kind === "one-click" && unsubscribe.failed ? { unsubscribeFailure: unsubscribe.failed } : {}),
   };
-  if (learned && triage?.predictedAction && triage.precedents) return {
-    ...content,
-    whyPhrase: { code: "mail.precedent", params: {
-      action: triage.predictedAction, basis: triage.precedents.basis,
-      count: triage.precedents.items.filter(p => p.action === triage.predictedAction).length, ...modifiers,
-    } },
-    ...(triage.precedents.note ? { precedentNote: triage.precedents.note } : {}),
-    precedentSenders: triage.precedents.items.filter(p => p.action === triage.predictedAction).map(p => p.sender),
-  };
+  if (learned && triage?.predictedAction && triage.precedents) {
+    const matching = triage.precedents.items.filter(p => p.action === triage.predictedAction);
+    return {
+      whyPhrase: { code: "mail.precedent", params: {
+        action: triage.predictedAction, basis: triage.precedents.basis, count: matching.length, ...modifiers,
+      } },
+      whyContent: {
+        ...whyContent,
+        ...(triage.precedents.note ? { precedentNote: triage.precedents.note } : {}),
+        precedentSenders: matching.map(p => p.sender),
+      },
+    };
+  }
+  const content = Object.keys(whyContent).length ? { whyContent } : {};
   if (verdict.whyPhrase && (!vip || verdict.sorted)) return { ...content, whyPhrase: withMailModifiers(verdict.whyPhrase, modifiers) };
   const arrived = !verdict.why || (vip && !verdict.sorted);
   if (vip) return { ...content, whyPhrase: { code: "mail.vip", params: { target: sender, ...(arrived ? { receivedAt: new Date(receivedAt).toISOString() } : {}), ...modifiers } } };

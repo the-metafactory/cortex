@@ -15,7 +15,7 @@ import { SourceCache, type SourceMail } from "../desk/sources/command";
 import type { RangerState } from "../desk/sources/ranger";
 import type { WaitingTask } from "../desk/sources/waiting";
 import { addSender, addVip } from "../desk/vips";
-import type { DeskItem, DeskView } from "../desk/types";
+import type { DeskItem, DeskView, DeskWhyContent } from "../desk/types";
 import { clock } from "../desk/time";
 import { writeVigilSubject } from "../../../vigil/db";
 import { RULES } from "./desk-interrupt-fixture";
@@ -77,6 +77,17 @@ function item(view: DeskView, key: string): DeskItem {
   return found;
 }
 
+function expectWhyContent(found: DeskItem | undefined, content: DeskWhyContent): void {
+  expect(found).toBeDefined();
+  if (!found) throw new Error("Missing item with content");
+  expect(found.whyContent).toEqual(content);
+  const phrase = JSON.stringify(found.whyPhrase) ?? "";
+  for (const [field, value] of Object.entries(content)) {
+    expect(found).not.toHaveProperty(field);
+    for (const text of [value].flat()) expect(phrase).not.toContain(text);
+  }
+}
+
 function seedSubject(vocab: "check" | "goal" | "escalation", ref: string, value: string, goal: string | null): string {
   const key = `state:${vocab}:default:${ref}`;
   writeVigilSubject(db, {
@@ -136,8 +147,8 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
   check(view, "ranger:example/app#4", "Agents in app will not start it without you.", { code: "ranger.approval-needed", params: { repo: "app" } });
   check(view, "ranger:example/app#5", "It blocks work in app until you have talked it through.", { code: "ranger.discussion-needed", params: { repo: "app" } });
   check(view, sensor, `Without it, nobody can tell whether this goal is on track. It last ran today at ${clock(EARLIER)}.`, { code: "goal.check-regressed", params: { lastRanAt: iso(EARLIER) } });
-  expect(check(view, goal, `This reading is as of ${clock(EARLIER)} today. ${WORDING}`, { code: "goal.reading", params: { at: iso(EARLIER), wordingAvailable: true } }).goalWording).toBe(WORDING);
-  expect(check(view, escalation, "Original agent question? In other.", { code: "ranger.question", params: { repo: "other", questionAvailable: true } }).reason).toBe("Original agent question?");
+  expectWhyContent(check(view, goal, `This reading is as of ${clock(EARLIER)} today. ${WORDING}`, { code: "goal.reading", params: { at: iso(EARLIER), wordingAvailable: true } }), { goalWording: WORDING });
+  expectWhyContent(check(view, escalation, "Original agent question? In other.", { code: "ranger.question", params: { repo: "other", questionAvailable: true } }), { reason: "Original agent question?" });
 
   options().rangerCli = { bin: "unused-ranger", config: "" };
   view = await read();
@@ -150,7 +161,7 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
   check(view, "ranger:example/app#5", "Conversations are not set up on this stack.", { code: "ranger.conversations-unavailable" });
   noteRetry("failed", "Original command failure");
   view = await read();
-  expect(check(view, "ranger:example/app#2", `The Desk tried to retry it on its own today at ${clock(EARLIER)}. Original command failure`, { code: "ranger.retry-failed", params: { at: iso(EARLIER) } }).reason).toBe("Original command failure");
+  expectWhyContent(check(view, "ranger:example/app#2", `The Desk tried to retry it on its own today at ${clock(EARLIER)}. Original command failure`, { code: "ranger.retry-failed", params: { at: iso(EARLIER) } }), { reason: "Original command failure" });
   noteRetry("done", null);
   view = await read();
   check(view, "ranger:example/app#2", `The Desk retried it on its own today at ${clock(EARLIER)}, and it failed again.`, { code: "ranger.retried", params: { at: iso(EARLIER) } });
@@ -163,7 +174,10 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
     organizer: { address: "organizer@example.test" }, attendee: { address: "reader@example.test", status: "NEEDS-ACTION" }, attendees: 2,
   } }), letter("suspicious", { headers: { authResults: { dmarc: "fail" } } })];
   for (const id of ["linked", "ranked", "deadline", "unsubscribe"]) classify(id, id === "linked" ? { category: "meeting", meetingKey: "cal:fixture:review" } : {});
-  classify("precedent", { predictedAction: "archive", precedents: { basis: "sender", note: "Original precedent note", items: [{ subject: "Old mail", at: EARLIER, correction: false, action: "archive", sender: "news@example.test" }] } });
+  classify("precedent", { predictedAction: "archive", precedents: { basis: "sender", note: "Original precedent note", items: [
+    { subject: "Old mail", at: EARLIER, correction: false, action: "archive", sender: "news@example.test" },
+    { subject: "Other action", at: EARLIER, correction: false, action: "keep", sender: "other@example.test" },
+  ] } });
   addVip(db, "vip@example.test", null, NOW);
   addSender(db, "unimportant", "quiet@example.test", null, NOW);
   const unsub = source.items.find(m => m.id === "unsubscribe")!;
@@ -173,12 +187,12 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
   check(view, `reminder:${reminder.id}`, `You asked to be reminded today at ${clock(NOW - 60_000)}.`, { code: "reminder.due", params: { dueAt: iso(NOW - 60_000) } });
   check(view, `meeting:cal:fixture:review@${NOW + 5 * 60_000}`, "It starts in 5 minutes.", { code: "meeting.soon", params: { startsAt: meetingStart } });
   check(view, "mail:received", `It arrived today at ${clock(EARLIER)}.`, { code: "mail.received", params: { receivedAt: iso(EARLIER) } });
-  check(view, "mail:possible", `It may be about "Budget review" today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-possible", params: { meetingTitle: "Budget review", meetingStart } });
-  expect(check(view, "mail:linked", `${CLASSIFIER_REASON}. The meeting is today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-linked", params: { meetingTitle: "Budget review", meetingStart } }).reason).toBe(CLASSIFIER_REASON);
+  expectWhyContent(check(view, "mail:possible", `It may be about "Budget review" today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-possible", params: { meetingStart } }), { meetingTitle: "Budget review" });
+  expectWhyContent(check(view, "mail:linked", `${CLASSIFIER_REASON}. The meeting is today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-linked", params: { meetingStart } }), { reason: CLASSIFIER_REASON, meetingTitle: "Budget review" });
   check(view, "mail:vip", `Sender is on your VIP list. It arrived today at ${clock(EARLIER)}.`, { code: "mail.vip", params: { target: "Sender", receivedAt: iso(EARLIER), vip: "Sender" } });
   check(view, "mail:quiet", "You marked mail from this sender unimportant.", { code: "mail.unimportant", params: {} });
-  expect(check(view, "mail:precedent", "Archived like the last mail from this sender (Original precedent note).", { code: "mail.precedent", params: { action: "archive", basis: "sender", count: 1 } }).precedentNote).toBe("Original precedent note");
-  check(view, "mail:unsubscribe", `${CLASSIFIER_REASON}. You archived or deleted 5 of its mails unread. Its unsubscribe page is https://lists.example.test/leave; the Desk does not open it for you.`, { code: "mail.unsubscribe", params: { unsubscribeKind: "page", unsubscribeHost: "lists.example.test", dismissed: 5, unsubscribeUrl: "https://lists.example.test/leave" } });
+  expectWhyContent(check(view, "mail:precedent", "Archived like the last mail from this sender (Original precedent note).", { code: "mail.precedent", params: { action: "archive", basis: "sender", count: 1 } }), { precedentNote: "Original precedent note", precedentSenders: ["news@example.test"] });
+  expectWhyContent(check(view, "mail:unsubscribe", `${CLASSIFIER_REASON}. You archived or deleted 5 of its mails unread. Its unsubscribe page is https://lists.example.test/leave; the Desk does not open it for you.`, { code: "mail.unsubscribe", params: { unsubscribeKind: "page", unsubscribeHost: "lists.example.test", dismissed: 5 } }), { reason: CLASSIFIER_REASON, unsubscribeUrl: "https://lists.example.test/leave" });
   const invite = item(view, "mail:invite");
   expect(invite.why).toBe(`${invite.invitation!.organizer} invites you to "Invitation content", ${invite.invitation!.when}. ${invite.invitation!.conflictLine}`);
   expect(invite.whyPhrase).toEqual({ code: "mail.invitation", params: { start: meetingStart, attendee: true } });
@@ -188,6 +202,7 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
   seen.add("mail.suspicious");
   expect(item(view, "mail:ranked").why).toBe(`${CLASSIFIER_REASON}.`);
   expect(item(view, "mail:ranked").whyPhrase).toBeUndefined();
+  expectWhyContent(item(view, "mail:ranked"), { reason: CLASSIFIER_REASON });
   for (const key of ["mail:linked", "mail:deadline", "mail:vip", "mail:ranked", `reminder:${reminder.id}`, `meeting:cal:fixture:review@${NOW + 5 * 60_000}`]) {
     const reason = item(view, key).interrupt?.reason;
     expect(reason).toBeDefined();
@@ -199,19 +214,22 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
   expect([...seen].sort()).toEqual([...DESK_PHRASE_CODES].sort());
 });
 
-test("mixed mail wording keeps raw content out of params and uses ISO values for every suffix", () => {
+test("mixed mail wording separates prose, titles and URLs from named VIP and ISO parameters", () => {
   const classified = new Map<string, MailClassification>([["m", { category: "meeting", reason: CLASSIFIER_REASON, meetingKey: "cal:fixture:review" }]]);
   const input = { now: NOW, mail: [{ ...letter("m"), sourceId: "fixture", area: null }], vips: new Set(["m@example.test"]), events: [{ id: "review", sourceId: "fixture", title: "Budget review", start: iso(NOW + 3_600_000) }], classified };
   const found = mailItems(input)[0]!;
   expect(found.why).toBe(`Sender is on your VIP list. ${CLASSIFIER_REASON}. The meeting is today at ${clock(NOW + 3_600_000)}.`);
-  expect(found.reason).toBe(CLASSIFIER_REASON);
-  expect(found.whyPhrase).toEqual({ code: "mail.meeting-linked", params: { meetingTitle: "Budget review", meetingStart: iso(NOW + 3_600_000), vip: "Sender" } });
+  expectWhyContent(found, { reason: CLASSIFIER_REASON, meetingTitle: "Budget review" });
+  expect(found.whyPhrase).toEqual({ code: "mail.meeting-linked", params: { meetingStart: iso(NOW + 3_600_000), vip: "Sender" } });
   const [rule] = mailItems({ ...input, vips: new Set(), unsubscribe: new Map([["m", { kind: "rule", at: EARLIER, host: "lists.example.test" }]]) });
-  expect(rule?.whyPhrase).toEqual({ code: "mail.meeting-linked", params: { meetingTitle: "Budget review", meetingStart: iso(NOW + 3_600_000), unsubscribeKind: "rule", unsubscribeHost: "lists.example.test", unsubscribeAt: iso(EARLIER) } });
+  expectWhyContent(rule, { reason: CLASSIFIER_REASON, meetingTitle: "Budget review" });
+  expect(rule?.whyPhrase).toEqual({ code: "mail.meeting-linked", params: { meetingStart: iso(NOW + 3_600_000), unsubscribeKind: "rule", unsubscribeHost: "lists.example.test", unsubscribeAt: iso(EARLIER) } });
+  const [page] = mailItems({ ...input, vips: new Set(), unsubscribe: new Map([["m", { kind: "page", dismissed: 5, host: "lists.example.test", url: "https://lists.example.test/leave" }]]) });
+  expectWhyContent(page, { reason: CLASSIFIER_REASON, meetingTitle: "Budget review", unsubscribeUrl: "https://lists.example.test/leave" });
+  expect(page?.whyPhrase).toEqual({ code: "mail.meeting-linked", params: { meetingStart: iso(NOW + 3_600_000), unsubscribeKind: "page", unsubscribeHost: "lists.example.test", dismissed: 5 } });
   const [failed] = mailItems({ ...input, vips: new Set(), unsubscribe: new Map([["m", { kind: "one-click", dismissed: 5, host: "lists.example.test", url: "https://lists.example.test/leave", failed: "Original transport failure" }]]) });
-  expect(failed?.unsubscribeFailure).toBe("Original transport failure");
-  expect(failed?.whyPhrase).toMatchObject({ code: "mail.meeting-linked", params: { unsubscribeFailed: true } });
-  expect(JSON.stringify(failed?.whyPhrase)).not.toContain("Original");
+  expectWhyContent(failed, { reason: CLASSIFIER_REASON, meetingTitle: "Budget review", unsubscribeFailure: "Original transport failure" });
+  expect(failed?.whyPhrase).toEqual({ code: "mail.meeting-linked", params: { meetingStart: iso(NOW + 3_600_000), unsubscribeKind: "one-click", unsubscribeHost: "lists.example.test", dismissed: 5, unsubscribeFailed: true } });
 });
 
 test("task enrichment, unavailable content and retry replacement keep the phrase aligned with the sentence", async () => {
@@ -222,18 +240,17 @@ test("task enrichment, unavailable content and retry replacement keep the phrase
   found = item(await read(), "ranger:example/app#2");
   expect(found.why).toBe("A person's question? In app.");
   expect(found.whyPhrase).toEqual({ code: "ranger.question", params: { repo: "app", questionAvailable: true } });
-  expect(found.reason).toBe("A person's question?");
+  expectWhyContent(found, { reason: "A person's question?" });
   waiting.set("example/app#2", { kind: "unavailable", reason: "Original lookup error" });
   found = item(await read(), "ranger:example/app#2");
   expect(found.why).toBe(`It stopped today at ${clock(NOW)} in app, and nothing moves until it is retried or parked. Original lookup error`);
-  expect(found.sourceStatusReason).toBe("Original lookup error");
+  expectWhyContent(found, { sourceStatusReason: "Original lookup error" });
   expect(found.whyPhrase?.code).toBe("ranger.stopped");
   noteRetry("failed", null);
   found = item(await read(), "ranger:example/app#2");
   expect(found.why).toBe(`The Desk tried to retry it on its own today at ${clock(EARLIER)}. Ranger gave no reason.`);
   expect(found.whyPhrase).toEqual({ code: "ranger.retry-failed", params: { at: iso(EARLIER) } });
-  expect(found.sourceStatusReason).toBeUndefined();
-  expect(found.reason).toBeUndefined();
+  expect(found.whyContent).toBeUndefined();
 });
 
 test("a running stack serves composed why phrases through curl without changing the bundled Desk sentence", async () => {

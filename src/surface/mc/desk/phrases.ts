@@ -1,12 +1,10 @@
-import type { PredictedAction } from "./classify";
-import type { SimilarityBasis } from "./mail-similar";
+import type { PredictedAction, SimilarityBasis } from "./mail-prediction-schema";
 import type { InviteReply, InviteStatus } from "./mail-invitation-schema";
 
 export interface MailPhraseModifiers {
   vip?: string;
   unsubscribeKind?: "one-click" | "page" | "rule";
   unsubscribeHost?: string;
-  unsubscribeUrl?: string;
   unsubscribeAt?: string;
   dismissed?: number;
   unsubscribeFailed?: boolean;
@@ -33,8 +31,8 @@ export type DeskPhrase =
   | { code: "mail.vip"; params: { target: string; receivedAt?: string } & MailPhraseModifiers }
   | { code: "mail.ranked" }
   | { code: "mail.received"; params: { receivedAt: string } & MailPhraseModifiers }
-  | { code: "mail.meeting-possible"; params: { meetingTitle: string; meetingStart: string } & MailPhraseModifiers }
-  | { code: "mail.meeting-linked"; params: { meetingTitle: string; meetingStart: string } & MailPhraseModifiers }
+  | { code: "mail.meeting-possible"; params: { meetingStart: string } & MailPhraseModifiers }
+  | { code: "mail.meeting-linked"; params: { meetingStart: string } & MailPhraseModifiers }
   | { code: "mail.unimportant"; params: MailPhraseModifiers }
   | { code: "mail.precedent"; params: { action: PredictedAction; basis: SimilarityBasis; count: number } & MailPhraseModifiers }
   | { code: "mail.unsubscribe"; params: MailPhraseModifiers }
