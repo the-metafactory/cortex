@@ -51,6 +51,11 @@ export interface DeskLink {
   url: string;
 }
 
+export interface DeskMention {
+  text: string;
+  url: string;
+}
+
 export interface JunkReviewMail {
   key: string;
   from: { name?: string; address: string };
@@ -124,6 +129,7 @@ export interface DeskItem {
   urgency: DeskUrgency;
   title: string;
   why: string;
+  mentions?: DeskMention[];
   whyPhrase?: import("./phrases").DeskPhrase;
   whyContent?: DeskWhyContent;
   score: number;

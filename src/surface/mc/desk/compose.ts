@@ -67,6 +67,8 @@ import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type G
 import { studioBriefing } from "./studio/overseer";
 import { routeOf, sourceBoundary } from "./source-boundary";
 import { AUTO_LINK_GRANT, autoLinkMeeting } from "./mail-auto-link";
+import type { ToolProject } from "../../../common/types/desk-conversations";
+import { mentionRepositories, withMentions } from "./mentions";
 
 export interface AdapterCapabilityRequest {
   adapterId: string;
@@ -130,6 +132,7 @@ export interface DeskOptions {
   rangerCli?: RangerCli;
   somaBin?: string;
   areas: AreaRule[];
+  conversationProjects?: readonly Pick<ToolProject, "forge">[];
   studio?: StudioOptions;
   sources: DeskSourceConfig[];
   ask?: DeskAskOptions;
@@ -402,7 +405,8 @@ export async function composeDesk(
   if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects).map((goal) => { const areas = desk.areas.filter((area) => area.goals.includes(goal.id)); return { ...goal, local: areas.length === 0 || areas.some((area) => area.policy !== "cloud") }; }), now, cloudAreas), localSources, now);
   const digestFlags = readDigestFlags(db, digests.map((g) => g.id));
   const moved = movedKeys(db);
-  const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
+  const repositories = mentionRepositories(desk.areas, desk.conversationProjects ?? [], rangerResult?.state ?? null);
+  const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => withMentions({ ...i, todoFingerprint: sourceIdentity(i) }, repositories));
   return {
     ...(routines ? { routines } : {}),
     calendarAvailability: availability,
