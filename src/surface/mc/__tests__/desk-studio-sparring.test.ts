@@ -9,6 +9,7 @@ import { buildStudioView, type StudioView } from "../desk/studio/view";
 import { handleGetDeskStudio } from "../api/desk-studio";
 import { threadThinking } from "../desk/studio/thinking-view";
 import { parseThreadFile } from "../desk/studio/format";
+import { planAct } from "../desk/studio/acts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { force: true, recursive: true }); });
@@ -42,11 +43,11 @@ function rig() {
   return { studio, calls, post, runtime, run, dir };
 }
 
-test("every requested sparring mode enqueues native ivy-think with its explicit trigger and durable request id", async () => {
+test("every requested sparring mode enqueues native assistant-think with its explicit trigger and durable request id", async () => {
   const r = rig();
   for (const mode of ["think", "grill", "other-side", "red-team", "first-principles", "persona:A skeptic"]) {
     expect((await r.post(mode)).status).toBe(200);
-    expect(r.calls.at(-2)).toEqual(["ranger", "job", "enqueue", "ivy-think", "--param", "thread=alpha", "--param", `mode=${mode}`, "--param", `trigger=You asked: ${mode}`, "--param", "requestId=request-sparring", "--config", "/tmp/ranger-test.yaml"]);
+    expect(r.calls.at(-2)).toEqual(["ranger", "job", "enqueue", "assistant-think", "--param", "thread=alpha", "--param", `mode=${mode}`, "--param", `trigger=You asked: ${mode}`, "--param", "requestId=request-sparring", "--config", "/tmp/ranger-test.yaml"]);
   }
   expect((await r.post("persona:Not configured")).status).toBe(400);
   expect((await r.post("bogus")).status).toBe(400);
@@ -106,6 +107,12 @@ test("an unreadable or unconfigured Ranger marks each thread unavailable with th
   const { rangerCli: _, ...withoutRanger } = options;
   const bare: DeskRuntime = { ...r.runtime, options: withoutRanger };
   expect(await threadThinkingOf(await handleGetDeskStudio(bare))).toEqual({ kind: "unavailable", reason: "Thinking needs Ranger configured on this stack." });
+});
+
+test("a spar that reaches the Studio writer is refused and names the native assistant-think queue", () => {
+  const files = { threads: [{ path: "threads/alpha.md", text }], inbox: [], proposals: [] };
+  const view = buildStudioView(files, { dir: "/fixture", maxActive: 5, personas: [] }, areas);
+  expect(planAct({ files, view, now: new Date("2026-10-31T12:00:00Z"), assistantName: "Assistant" }, { act: "spar", thread: "alpha", mode: "think" })).toMatchObject({ status: 400, error: "Sparring requires the native assistant-think queue." });
 });
 
 test("the spar answer carries the same per-thread thinking", async () => {

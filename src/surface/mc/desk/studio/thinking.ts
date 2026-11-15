@@ -53,7 +53,7 @@ export async function enqueueSparring(input: { studio: StudioView; dir: string; 
   const receipt = thinking.runs.find(run => run.params.requestId === input.requestId);
   if (receipt && (receipt.params.thread !== act.thread || receipt.params.mode !== act.mode)) return { ok: false, status: 409, error: "This request id already belongs to another thinking request." };
   try {
-    const result = await (input.run ?? nativeRun)(command(cli, ["enqueue", "ivy-think", "--param", `thread=${act.thread}`, "--param", `mode=${act.mode}`, "--param", `trigger=You asked: ${act.mode}`, "--param", `requestId=${input.requestId}`]));
+    const result = await (input.run ?? nativeRun)(command(cli, ["enqueue", "assistant-think", "--param", `thread=${act.thread}`, "--param", `mode=${act.mode}`, "--param", `trigger=You asked: ${act.mode}`, "--param", `requestId=${input.requestId}`]));
     if (result.code !== 0) return { ok: false, status: 503, error: "Ranger did not confirm this request. Retry uses the same request id." };
     z.object({ runId: z.number().int().positive(), queued: z.boolean() }).parse(JSON.parse(result.stdout));
     return { ok: true, message: `Asked ${input.assistantName}: ${act.mode.replaceAll("-", " ")}. The note will appear here when it lands.` };
