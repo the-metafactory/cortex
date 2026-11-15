@@ -176,7 +176,7 @@ export function attachRefusal(db: Database, messageId: string, requestId: string
   return active && active.requestId !== requestId ? refuse(409, `This mail is already attached to ${quoted(active.toTitle)}. Undo that first.`) : null;
 }
 
-const snapshot = (mail: ListedMail): MailSnapshot => ({ sender: mail.from.address.toLowerCase(), senderName: mail.from.name ?? null, receivedAt: mail.receivedAt, url: mail.url ?? null, account: mail.account ?? null });
+const snapshot = (mail: ListedMail): MailSnapshot => ({ sourceId: mail.sourceId, sender: mail.from.address.toLowerCase(), senderName: mail.from.name ?? null, receivedAt: mail.receivedAt, url: mail.url ?? null, account: mail.account ?? null });
 
 export const mailSubject = (mail: ListedMail): LinkSubject => ({ kind: "mail", key: mailKey(mail.id), title: mail.subject.slice(0, 300), mail: snapshot(mail) });
 

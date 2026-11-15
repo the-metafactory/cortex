@@ -118,6 +118,7 @@ export type DeskPhrase =
   | { code: "brief.gap-access-denied"; params: { kind: string } }
   | { code: "brief.gap-read-failed"; params: { kind: string } }
   | { code: "brief.gap-no-linked-material"; params: { kind: string } }
+  | { code: "brief.gap-relink-required" }
   | { code: "brief.refresh-required" }
   | { code: "brief.previous-unidentified" }
   | { code: "brief.synthesis-not-configured" };
@@ -148,7 +149,7 @@ export const DESK_ACT_PHRASE_CODES = [
 
 export const DESK_BRIEF_PHRASE_CODES = [
   "brief.gap-no-adapter", "brief.gap-access-denied", "brief.gap-read-failed", "brief.gap-no-linked-material",
-  "brief.refresh-required", "brief.previous-unidentified", "brief.synthesis-not-configured",
+  "brief.gap-relink-required", "brief.refresh-required", "brief.previous-unidentified", "brief.synthesis-not-configured",
 ] as const satisfies readonly DeskPhrase["code"][];
 
 export const DESK_PHRASE_CODES = [

@@ -10,7 +10,7 @@ import { initDatabase } from "../db/init";
 import { saveBalanceState } from "../desk/balance-store";
 import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { linkToMeeting, type LinkSubject } from "../desk/links";
+import { linkToMeeting, mailSubject, type LinkSubject } from "../desk/links";
 import { BRIEF_GAP_REASONS, BRIEF_PREVIOUS_MEETING_STATES, BRIEF_SYNTHESIS_STATES, type MeetingBrief } from "../desk/meeting-brief-contract";
 import { type BriefRead } from "../desk/meeting-brief";
 import { addNote } from "../desk/notes";
@@ -23,7 +23,7 @@ import { meetingBriefHttpProbe } from "./fixtures/meeting-brief-http";
 const BASE_URL = "http://localhost/api/desk/meeting-brief";
 
 const subject = (kind: LinkSubject["kind"], key: string, mail: LinkSubject["mail"] = null): LinkSubject => ({ kind, key, title: SECRET_TITLE, mail });
-const MAIL_SNAPSHOT = { sender: "ada@example.org", senderName: "Ada Lovelace", receivedAt: new Date(NOW).toISOString(), url: null, account: "work" };
+const MAIL_SNAPSHOT = { sourceId: "cal", sender: "ada@example.org", senderName: "Ada Lovelace", receivedAt: new Date(NOW).toISOString(), url: null, account: "work" };
 
 let db: Database;
 let dir: string;
@@ -79,7 +79,7 @@ describe("POST and GET /api/desk/meeting-brief", () => {
     expect(brief).toMatchObject({ event: EVENT, preparedAt: new Date(NOW).toISOString(), gaps: [] });
     expect(brief.revision).toMatch(/^[0-9a-f]{64}$/);
     expect(brief.facts.map((f) => f.sources[0])).toEqual([
-      { kind: "mail", adapter: null, connection: "cal", item: "mail:m1", excerpt: "The venue costs 900.", link: "https://mail.example.test/m1" },
+      { kind: "mail", adapter: null, owner: "desk-source-command", connection: "cal", item: "mail:m1", excerpt: "The venue costs 900.", link: "https://mail.example.test/m1" },
       { kind: "task", adapter: null, owner: "balance", item: "task:kickoff", excerpt: "Kickoff prep" },
       { kind: "note", adapter: null, owner: "desk-notes", item: "note:1", excerpt: "Bring the budget sheet" },
     ]);
@@ -145,7 +145,7 @@ describe("POST and GET /api/desk/meeting-brief", () => {
     const rt = await runtime();
     const empty = briefOf((await call(post({ event: EVENT }), rt)).json);
     expect(empty.facts).toEqual([]);
-    expect(empty.gaps).toEqual([expect.objectContaining({ reason: "no-linked-material", source: { kind: "meeting", adapter: null, connection: "cal", item: EVENT } })]);
+    expect(empty.gaps).toEqual([expect.objectContaining({ reason: "no-linked-material", source: { kind: "meeting", adapter: null, owner: "desk-source-command", connection: "cal", item: EVENT } })]);
     link(subject("mail", "mail:m9", { ...MAIL_SNAPSHOT, account: "elsewhere" }));
     const other = briefOf((await call(post({ event: EVENT, refresh: true }), rt)).json);
     expect(other.gaps.map((g) => [g.source.item, g.reason])).toEqual([["mail:m9", "read-failed"]]);
@@ -157,6 +157,26 @@ describe("POST and GET /api/desk/meeting-brief", () => {
     const rt = await runtime(fixture({ items: [mail("work", "from work"), mail("home", "from home")] }));
     const brief = briefOf((await call(post({ event: EVENT }), rt)).json);
     expect(brief.facts.map((f) => f.sources[0]?.excerpt)).toEqual(["from work"]);
+  });
+
+  it("keeps the linked Mail connection when another connection has the same account and item key", async () => {
+    const data = fixture();
+    const rt = await runtime(data);
+    const listed = rt.sourceCache?.cached()[0]?.mail[0];
+    if (!listed) throw new Error("Fixture mail missing");
+    const linked = mailSubject({ ...listed, sourceId: "cal" });
+    expect(linked.mail?.sourceId).toBe("cal");
+    link(linked);
+    rt.options = { ...options, sources: [...options.sources, { ...options.sources[0]!, id: "other" }] };
+    const bound = briefOf((await call(post({ event: EVENT }), rt)).json);
+    expect(bound.facts).toHaveLength(1);
+    expect(bound.facts[0]?.sources[0]?.connection).toBe("cal");
+    rt.options = { ...options, sources: [{ ...options.sources[0]!, id: "other" }] };
+    const otherMeeting = "cal:other:standup";
+    db.query("UPDATE desk_links SET to_key = ? WHERE id = ?").run(otherMeeting, "link-1");
+    const removed = briefOf((await call(post({ event: otherMeeting }), rt)).json);
+    expect(removed.facts).toEqual([]);
+    expect(removed.gaps).toEqual([expect.objectContaining({ reason: "no-adapter", source: expect.objectContaining({ connection: "cal", item: "mail:m1" }) })]);
   });
 
   it("distinguishes a denied read and a successful empty read, and redacts both", async () => {
@@ -231,10 +251,12 @@ describe("POST and GET /api/desk/meeting-brief", () => {
     expect(model).not.toHaveBeenCalled();
   });
 
-  it("refuses retained cache entries after their connection is removed, and fails closed on ambiguous Mail identity", async () => {
-    link(subject("mail", "mail:m1", MAIL_SNAPSHOT));
+  it("refuses retained cache entries after their connection is removed, and fails closed on legacy unbound Mail identity", async () => {
+    link(subject("mail", "mail:m1", { ...MAIL_SNAPSHOT, sourceId: undefined }));
     const rt = await runtime();
-    await call(post({ event: EVENT }), rt);
+    const unbound = briefOf((await call(post({ event: EVENT }), rt)).json);
+    expect(unbound.facts).toEqual([]);
+    expect(unbound.gaps[0]).toMatchObject({ reason: "read-failed", phrase: { code: "brief.gap-relink-required" }, source: { kind: "mail", adapter: null, owner: "desk-source-command" } });
     const sources = [...options.sources, { ...options.sources[0]!, id: "other" }];
     rt.options = { ...options, sources };
     const ambiguous = briefOf((await call(post({ event: EVENT }), rt)).json);

@@ -8,6 +8,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import { oneLine } from "./studio/edit";
 import type { StudioView } from "./studio/view";
+import { workReaders } from "./work-readers";
 import { withSyncedBalance } from "./studio-my-day";
 import type { SourceReading } from "./sources/command";
 import {
@@ -30,7 +31,7 @@ type UnreadableReason = Exclude<BriefGapReason, "no-linked-material">;
 
 export type BriefRead =
   | { ok: true; identity: BriefSourceIdentity; text: string; excerpt: string; link?: string; fingerprint: string }
-  | { ok: false; reason: UnreadableReason; identity: BriefSourceIdentity };
+  | { ok: false; reason: UnreadableReason; identity: BriefSourceIdentity; needsRelink?: true };
 
 type BriefReader = (row: LinkRow) => BriefRead | Promise<BriefRead>;
 
@@ -49,13 +50,15 @@ const clip = (text: string): string => oneLine(text).slice(0, EXCERPT_CHARS);
 
 const unreadable = (reason: UnreadableReason, identity: BriefSourceIdentity): BriefRead => ({ ok: false, reason, identity });
 
-const mailIdentity = (item: string, connection?: string): BriefSourceIdentity => ({ kind: "mail", adapter: null, item, ...(connection ? { connection } : {}) });
+const mailIdentity = (item: string, connection?: string): BriefSourceIdentity => ({ kind: "mail", adapter: null, owner: "desk-source-command", item, ...(connection ? { connection } : {}) });
 
-function readMail(row: LinkRow, readings: readonly SourceReading[], configured: number): BriefRead {
+function readMail(row: LinkRow, readings: readonly SourceReading[], configured: readonly string[]): BriefRead {
   const account = row.mail?.account ?? null;
   const item = row.fromKey;
-  if (configured === 0) return unreadable("no-adapter", mailIdentity(item, account ?? undefined));
-  const hits = readings.flatMap((reading) =>
+  const connection = row.mail?.sourceId;
+  if (configured.length === 0 || connection !== undefined && !configured.includes(connection)) return unreadable("no-adapter", mailIdentity(item, connection));
+  if (connection === undefined) return { ok: false, reason: "read-failed", identity: mailIdentity(item), needsRelink: true };
+  const hits = readings.filter(reading => connection === undefined || reading.id === connection).flatMap((reading) =>
     reading.mail.filter((m) => `mail:${m.id}` === item && (account === null || (m.account ?? null) === account)).map((mail) => ({ reading, mail })),
   );
   const [hit] = hits;
@@ -67,7 +70,7 @@ function readMail(row: LinkRow, readings: readonly SourceReading[], configured: 
       ...(mail.url ? { link: mail.url } : {}), fingerprint: digest([mail.subject, mail.from.address, mail.receivedAt, mail.firstParagraph ?? null, mail.url ?? null]),
     };
   }
-  return unreadable("read-failed", mailIdentity(item, hit?.reading.id ?? account ?? undefined));
+  return unreadable("read-failed", mailIdentity(item, connection ?? hit?.reading.id));
 }
 
 const taskIdentity = (item: string): BriefSourceIdentity => ({ kind: "task", adapter: null, owner: BALANCE_OWNER, item });
@@ -121,15 +124,22 @@ async function defaultReaders(db: Database, runtime: DeskRuntime, now: number): 
   const readings = currentReadings(runtime);
   const loaded = await loadDay(db, runtime, now);
   const openNotes = new Map(listOpenNotes(db).map((n) => [`note:${n.id}`, n]));
+  const policyReaders = workReaders({ db, desk: () => runtime.options, studioView: () => loaded?.studio ? Promise.resolve(loaded.studio) : null, now: () => now });
   return {
-    mail: (row) => readMail(row, readings, desk?.sources.length ?? 0),
-    task: (row) => readTask(row, loaded),
+    mail: (row) => readMail(row, readings, desk?.sources.map(source => source.id) ?? []),
+    task: async (row) => {
+      const policy = await policyReaders["balance-task"]?.read(row.fromKey.slice("task:".length));
+      return policy?.state === "unavailable" && policy.reason === "unauthorized" ? unreadable("access-denied", taskIdentity(row.fromKey)) : readTask(row, loaded);
+    },
     thread: (row) => readThread(row, loaded, desk?.studio !== undefined),
     note: (row) => readNote(openNotes, row),
   };
 }
 
-const gapOf = (reason: BriefGapReason, source: BriefSourceIdentity): BriefGap => ({ id: `gap-${digest([reason, identityKey(source)]).slice(0, 16)}`, reason, source, ...gapWording(reason, source.kind) });
+const gapOf = (reason: BriefGapReason, source: BriefSourceIdentity, needsRelink = false): BriefGap => ({
+  id: `gap-${digest([reason, identityKey(source)]).slice(0, 16)}`, reason, source,
+  ...(needsRelink ? { phrase: { code: "brief.gap-relink-required" as const }, message: "This older Mail link has no recorded source connection. Relink the Mail to read it." } : gapWording(reason, source.kind)),
+});
 
 const refOf = (read: Extract<BriefRead, { ok: true }>): BriefSourceRef => ({ ...read.identity, excerpt: read.excerpt, ...(read.link ? { link: read.link } : {}) });
 
@@ -160,7 +170,7 @@ interface BriefEvidence {
 }
 
 const emptyMeetingGap = (eventKey: string, meeting: MeetingFacts): BriefGap =>
-  gapOf("no-linked-material", { kind: "meeting", adapter: null, ...(meeting.connection ? { connection: meeting.connection } : {}), item: eventKey });
+  gapOf("no-linked-material", { kind: "meeting", adapter: null, owner: "desk-source-command", ...(meeting.connection ? { connection: meeting.connection } : {}), item: eventKey });
 
 export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKey: string, meeting: MeetingFacts, deps: BriefDeps = {}): Promise<BriefEvidence> {
   const rows = linksToMeeting(db, eventKey);
@@ -175,7 +185,7 @@ export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKe
     for (const row of rows) {
       const read = await readRow(readers, row);
       if (!read.ok || read.excerpt.trim() === "") {
-        const gap = gapOf(read.ok ? "no-linked-material" : read.reason, read.identity);
+        const gap = gapOf(read.ok ? "no-linked-material" : read.reason, read.identity, !read.ok && read.needsRelink === true);
         gaps.set(gap.id, gap);
       } else {
         const fact = factOf(read);
@@ -199,7 +209,7 @@ const readRow = async (readers: BriefReaders, row: LinkRow): Promise<BriefRead> 
     return await readers[row.fromKind](row);
   } catch (err) {
     process.stderr.write(`[meeting-brief] a ${row.fromKind} read threw: ${err instanceof Error ? err.name : "error"}\n`);
-    return unreadable("read-failed", { kind: row.fromKind, adapter: null, item: row.fromKey });
+    return unreadable("read-failed", row.fromKind === "mail" ? mailIdentity(row.fromKey, row.mail?.sourceId) : row.fromKind === "task" ? taskIdentity(row.fromKey) : row.fromKind === "thread" ? threadIdentity(row.fromKey) : noteIdentity(row.fromKey));
   }
 };
 

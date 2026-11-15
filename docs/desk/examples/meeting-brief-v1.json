@@ -18,7 +18,7 @@
         "preparedAt": "2026-11-04T09:00:00.000Z",
         "facts": [
           {
-            "id": "fact-f2ee69f64143abe0",
+            "id": "fact-ca037282dfed214e",
             "text": "Mail from Ada Lovelace: Venue quote",
             "sources": [
               {
@@ -27,7 +27,8 @@
                 "item": "mail:m1",
                 "connection": "cal",
                 "excerpt": "The venue costs 900.",
-                "link": "https://mail.example.test/m1"
+                "link": "https://mail.example.test/m1",
+                "owner": "desk-source-command"
               }
             ]
           },

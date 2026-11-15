@@ -17,7 +17,7 @@ export async function meetingBriefHttpProbe() {
   saveBalanceState(db, seed());
   const note = addNote(db, "note", "Bring the budget sheet", null, NOW);
   const subjects: LinkSubject[] = [
-    { kind: "mail", key: "mail:m1", title: "Untrusted saved title", mail: { sender: "ada@example.org", senderName: "Ada Lovelace", receivedAt: new Date(NOW).toISOString(), url: null, account: "work" } },
+    { kind: "mail", key: "mail:m1", title: "Untrusted saved title", mail: { sourceId: "cal", sender: "ada@example.org", senderName: "Ada Lovelace", receivedAt: new Date(NOW).toISOString(), url: null, account: "work" } },
     { kind: "task", key: "task:kickoff", title: "Untrusted saved title", mail: null },
     { kind: "note", key: `note:${note.id}`, title: "Untrusted saved title", mail: null },
   ];
@@ -28,7 +28,8 @@ export async function meetingBriefHttpProbe() {
   }
   const write = (data: ReturnType<typeof fixture>) => writeFileSync(join(dir, "source.json"), JSON.stringify(data));
   write(fixture());
-  const ctx = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: [PRINCIPAL], localPrincipal: PRINCIPAL } }, db, { desk: briefOptions(dir) });
+  const options = briefOptions(dir);
+  const ctx = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: [PRINCIPAL], localPrincipal: PRINCIPAL } }, db, { desk: options });
   const base = `http://localhost:${ctx.server.port}`;
   const exchanges: { request: { method: string; path: string; body?: unknown }; status: number; response: unknown }[] = [];
   const send = async (method: string, body?: unknown, email = PRINCIPAL, origin = base, host?: string) => {
@@ -66,6 +67,17 @@ export async function meetingBriefHttpProbe() {
     assert.equal(refreshed.facts.length, 2);
     assert.deepEqual(refreshed.gaps.map(gap => [gap.source.kind, gap.source.item, gap.reason]), [["mail", "mail:m1", "read-failed"]]);
     assert.deepEqual((await send("GET")).json, refreshed);
+    const areas = options.areas;
+    options.areas = [];
+    const revoked = await send("GET");
+    assert.equal(revoked.status, 409);
+    assert.equal(JSON.stringify(revoked.json).includes("Kickoff"), false);
+    const denied = await send("POST", { event: EVENT, refresh: true });
+    assert.equal(denied.status, 200);
+    const deniedBrief = denied.json as MeetingBrief;
+    assert.ok(deniedBrief.gaps.some(gap => gap.source.kind === "task" && gap.reason === "access-denied"));
+    assert.equal(JSON.stringify(deniedBrief).includes("Kickoff prep"), false);
+    options.areas = areas;
     write(fixture({ events: [] }));
     assert.equal((await send("GET")).status, 404);
     const pins = JSON.parse(readFileSync(new URL("../../../../../docs/desk/examples/meeting-brief-v1.json", import.meta.url), "utf8")) as { fixtureVersion: number; cases: typeof exchanges };
