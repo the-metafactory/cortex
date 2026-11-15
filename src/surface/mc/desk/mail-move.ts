@@ -191,17 +191,20 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
   if (!row) return refuse(404, "The Desk has no record of that move.");
   if (row.undone_at !== null) return refuse(409, "That move is already undone.");
   if (deps.now - row.created_at > UNDO_WINDOW_MS) return refuse(409, "That move is too old to undo from the Desk. Move the mail back in your mail client.");
-  const notSpam = row.target === "inbox";
-  const request: Record<string, string> = notSpam ? { action: "move", account: row.account, messageId: row.message_id, target: "junk" } : { action: "restore", account: row.account, messageId: row.message_id, from: row.target };
-  const claimed: Claimed = { key: claimKey(row.message_id), argv, request, command: "move", failed: (line) => `The mail was not moved back: ${line}`, timedOut: `The mail may be back; check ${notSpam ? "Junk" : "INBOX"}.` };
+  const movedFrom: MoveTarget | null = row.target === "inbox" ? null : row.target;
+  const backTo = movedFrom === null ? "Junk" : "INBOX";
+  const request: Record<string, string> = movedFrom === null
+    ? { action: "move", account: row.account, messageId: row.message_id, target: "junk" }
+    : { action: "restore", account: row.account, messageId: row.message_id, from: movedFrom };
+  const claimed: Claimed = { key: claimKey(row.message_id), argv, request, command: "move", failed: (line) => `The mail was not moved back: ${line}`, timedOut: `The mail may be back; check ${backTo}.` };
   return runClaimed(deps, config.timeoutSeconds, claimed, (stdout) => {
-    const { message } = printed(stdout, notSpam ? "Moved back to Junk." : "Moved back to INBOX.");
-    if (row.target === "inbox") deps.ledger.add(movedKey("junk", row.message_id), deps.now);
-    else deps.ledger.forget(movedKey(row.target, row.message_id));
+    const { message } = printed(stdout, `Moved back to ${backTo}.`);
+    if (movedFrom === null) deps.ledger.add(movedKey("junk", row.message_id), deps.now);
+    else deps.ledger.forget(movedKey(movedFrom, row.message_id));
     const withdrawn = deps.db.transaction((): boolean => {
       const features = loggedFeatures(deps.db, row.message_id) ?? movedFeatures(row);
       const deleted = retireMove(deps.db, id, row.correction_id, message, deps.now, ".undone");
-      logMailDecision(deps.db, features, notSpam ? "junk" : "restore", "desk", deps.now, notSpam ? "Junk" : "INBOX");
+      logMailDecision(deps.db, features, movedFrom === null ? "junk" : "restore", "desk", deps.now, backTo);
       return deleted;
     })();
     return { ok: true, message: withdrawn ? `${message} Your correction is withdrawn.` : message, restored: `mail:${row.message_id}` };

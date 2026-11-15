@@ -8,6 +8,7 @@ import { HandledLedger } from "../desk/actions";
 import { MailClassifier, type ClassifierConfig } from "../desk/classify";
 import { composeDesk, type DeskRuntime } from "../desk/compose";
 import { CommandTimeout } from "../common/spawn";
+import type { WriterRunner } from "../desk/create";
 import { parseSourceOutput, SourceCache, type SourceMail } from "../desk/sources/command";
 import { DAY_MS } from "../desk/time";
 import type { DeskView } from "../desk/types";
@@ -33,6 +34,8 @@ async function junkKey(rt: DeskRuntime): Promise<string> {
   if (!key) throw new Error("Fixture has no junk review mail");
   return key;
 }
+const act = (rt: DeskRuntime, body: unknown, run?: WriterRunner, now = NOW): Promise<Response> =>
+  handleDeskMail(mailPost(body), db, rt, { ...(run ? { run } : {}), now: () => now });
 
 describe("junk source readings", () => {
   it("retains the twenty newest mails within seven days, deduplicates and removes body-bearing fields", () => {
@@ -128,9 +131,9 @@ describe("Not spam", () => {
     expect(db.query("SELECT origin, action FROM desk_mail_log WHERE origin = 'correction'").all()).toEqual([{ origin: "correction", action: "kept" }]);
     expect((await view(rt)).autonomy.done[0]).toMatchObject({ action: "mail.move", undo: "notspam-one" });
     const restarted = { ...rt, ledger: new HandledLedger() };
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, restarted, { run: mover.run, now: () => NOW })).status).toBe(409);
+    expect((await act(restarted, { action: "mail.notspam", key }, mover.run)).status).toBe(409);
     expect(mover.calls).toHaveLength(1);
-    const undone = await handleDeskMail(mailPost({ action: "undo", move: "notspam-one" }), db, restarted, { run: mover.run, now: () => NOW + 1 });
+    const undone = await act(restarted, { action: "undo", move: "notspam-one" }, mover.run, NOW + 1);
     expect(undone.status).toBe(200);
     expect(mover.calls[1]?.stdin).toEqual({ action: "move", account: "work", messageId: "one", target: "junk" });
     expect(trustedViews(db)).toEqual([]);
@@ -142,16 +145,16 @@ describe("Not spam", () => {
   it("pins symmetric spam and notspam action names and inverse move requests", async () => {
     const rt = await runtime();
     const mover = queue();
-    for (const action of ["spam", "notspam"]) expect((await handleDeskMail(mailPost({ action, key: "mail:inbox" }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(400);
-    expect((await handleDeskMail(mailPost({ action: "mail.spam", key: "mail:inbox" }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key: await junkKey(rt) }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
+    for (const action of ["spam", "notspam"]) expect((await act(rt, { action, key: "mail:inbox" }, mover.run)).status).toBe(400);
+    expect((await act(rt, { action: "mail.spam", key: "mail:inbox" }, mover.run)).status).toBe(200);
+    expect((await act(rt, { action: "mail.notspam", key: await junkKey(rt) }, mover.run)).status).toBe(200);
     expect(mover.calls.map(c => c.stdin)).toEqual([{ action: "move", account: "work", messageId: "inbox", target: "junk" }, { action: "restore", account: "work", messageId: "one", from: "junk" }]);
   });
 
   it("withdraws sender trust when removed in Settings without undoing the mailbox move", async () => {
     const rt = await runtime();
     const mover = queue();
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key: await junkKey(rt) }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
+    expect((await act(rt, { action: "mail.notspam", key: await junkKey(rt) }, mover.run)).status).toBe(200);
     expect(suspicionOf(mail("one"), suspicionContext(db))).toEqual([]);
     expect((await handleDeskMail(mailPost({ action: "not-phishing.remove", sender: "one@example.org" }), db, rt, { now: () => NOW + 1 })).status).toBe(200);
     expect(suspicionOf(mail("one"), suspicionContext(db)).map(r => r.code)).toContain("reply-to");
@@ -167,14 +170,14 @@ describe("Not spam", () => {
     const mover = queue();
     const moves: string[] = [];
     for (const key of keys) {
-      const response = await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run: mover.run, now: () => NOW });
+      const response = await act(rt, { action: "mail.notspam", key }, mover.run);
       expect(response.status).toBe(200);
       moves.push((await response.json() as { undo: string }).undo);
     }
     expect(mover.calls.map(c => (c.stdin as { account: string }).account)).toEqual(["first", "second"]);
     expect(db.query("SELECT * FROM desk_mail_trusted WHERE code = 'notspam'").all()).toHaveLength(2);
     expect((await reviews(rt))).toEqual([]);
-    expect((await handleDeskMail(mailPost({ action: "undo", move: moves[0] }), db, rt, { run: mover.run, now: () => NOW + 1 })).status).toBe(200);
+    expect((await act(rt, { action: "undo", move: moves[0] }, mover.run, NOW + 1)).status).toBe(200);
     expect(trustedViews(db)[0]?.notSpam).toBe(true);
     expect((await reviews(rt))[0]?.junkReview?.mails).toHaveLength(1);
   });
@@ -182,31 +185,30 @@ describe("Not spam", () => {
   it("allows another Not spam after the same mail is later moved to Junk again", async () => {
     const rt = await runtime([mail("one")]);
     const mover = queue();
-    const act = (body: unknown) => handleDeskMail(mailPost(body), db, rt, { run: mover.run, now: () => NOW });
-    expect((await act({ action: "mail.notspam", key: await junkKey(rt) })).status).toBe(200);
+    expect((await act(rt, { action: "mail.notspam", key: await junkKey(rt) }, mover.run)).status).toBe(200);
     rt.sourceCache = new SourceCache(() => Promise.resolve(JSON.stringify({ items: [mail("one")] })));
     await rt.sourceCache.read(MOVE_DESK.sources, NOW);
-    expect((await act({ action: "mail.spam", key: "mail:one" })).status).toBe(200);
+    expect((await act(rt, { action: "mail.spam", key: "mail:one" }, mover.run)).status).toBe(200);
     expect(trustedViews(db)).toEqual([]);
     rt.sourceCache = new SourceCache(() => Promise.resolve(JSON.stringify({ junk: [mail("one")] })));
     await rt.sourceCache.read(MOVE_DESK.sources, NOW);
     expect((await reviews(rt))[0]?.junkReview?.mails).toHaveLength(1);
-    expect((await act({ action: "mail.notspam", key: await junkKey(rt) })).status).toBe(200);
+    expect((await act(rt, { action: "mail.notspam", key: await junkKey(rt) }, mover.run)).status).toBe(200);
     expect(trustedViews(db)[0]?.notSpam).toBe(true);
   });
 
   it("honors a fresh junk listing after restoration and replaces its correction only after another successful move", async () => {
     const rt = await runtime([mail("one")]);
     const mover = queue();
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key: await junkKey(rt) }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
+    expect((await act(rt, { action: "mail.notspam", key: await junkKey(rt) }, mover.run)).status).toBe(200);
     rt.sourceCache = new SourceCache(() => Promise.resolve(JSON.stringify({ junk: [mail("one")] })));
     await rt.sourceCache.read(MOVE_DESK.sources, NOW + 1);
     const key = await junkKey(rt);
     const before = db.query("SELECT * FROM desk_mail_trusted").all();
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run: queue([{ code: 3, stdout: "", stderr: "Fixture refusal" }]).run, now: () => NOW + 2 })).status).toBe(502);
+    expect((await act(rt, { action: "mail.notspam", key }, queue([{ code: 3, stdout: "", stderr: "Fixture refusal" }]).run, NOW + 2)).status).toBe(502);
     expect(db.query("SELECT * FROM desk_mail_trusted").all()).toEqual(before);
     expect((await reviews(rt))[0]?.junkReview?.mails).toHaveLength(1);
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run: mover.run, now: () => NOW + 3 })).status).toBe(200);
+    expect((await act(rt, { action: "mail.notspam", key }, mover.run, NOW + 3)).status).toBe(200);
     expect(db.query("SELECT * FROM desk_mail_trusted").all()).toHaveLength(1);
     expect(db.query("SELECT * FROM desk_mail_log WHERE origin = 'correction'").all()).toHaveLength(1);
     expect((await reviews(rt))).toEqual([]);
@@ -219,20 +221,20 @@ describe("Not spam", () => {
     await rt.sourceCache.read(MOVE_DESK.sources, NOW);
     const key = await junkKey(rt);
     const mover = queue();
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
+    expect((await act(rt, { action: "mail.notspam", key }, mover.run)).status).toBe(200);
     failed = true;
     await rt.sourceCache.read(MOVE_DESK.sources, NOW + 301_000);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(rt.sourceCache.cached()[0]?.error).toBe("Fixture source unavailable");
     expect((await reviews(rt))).toEqual([]);
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run: mover.run, now: () => NOW + 302_000 })).status).toBe(409);
+    expect((await act(rt, { action: "mail.notspam", key }, mover.run, NOW + 302_000)).status).toBe(409);
     expect(mover.calls).toHaveLength(1);
   });
 
   it.each([{ code: 3, stdout: "", stderr: "Junk is unavailable" }, new CommandTimeout("timed out"), new Error("Fixture move failed")])("keeps refused or failed moves listed and records no trust: %p", async failure => {
     const rt = await runtime();
     const mover = queue([failure]);
-    const response = await handleDeskMail(mailPost({ action: "mail.notspam", key: await junkKey(rt) }), db, rt, { run: mover.run, now: () => NOW });
+    const response = await act(rt, { action: "mail.notspam", key: await junkKey(rt) }, mover.run);
     expect(response.status).toBeGreaterThanOrEqual(500);
     expect((await response.json() as { error: string }).error).toBeTruthy();
     expect((await reviews(rt))[0]?.junkReview?.mails).toHaveLength(2);
@@ -243,8 +245,8 @@ describe("Not spam", () => {
   it("refuses an unlisted key, an inbox key and an unconfigured mover", async () => {
     const rt = await runtime();
     const mover = queue();
-    for (const key of ["junk:forged", "mail:inbox"]) expect((await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(409);
-    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key: await junkKey(rt) }), db, { ...rt, options: { ...MOVE_DESK, mailActions: undefined } }, { run: mover.run, now: () => NOW })).status).toBe(409);
+    for (const key of ["junk:forged", "mail:inbox"]) expect((await act(rt, { action: "mail.notspam", key }, mover.run)).status).toBe(409);
+    expect((await act({ ...rt, options: { ...MOVE_DESK, mailActions: undefined } }, { action: "mail.notspam", key: await junkKey(rt) }, mover.run)).status).toBe(409);
     expect(mover.calls).toHaveLength(0);
     expect(trustedViews(db)).toEqual([]);
   });
@@ -257,13 +259,13 @@ describe("Not spam", () => {
     const run = () => pending;
     const first = handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run, now: () => NOW, newId: () => "pending" });
     await new Promise(resolve => setTimeout(resolve, 0));
-    const second = await handleDeskMail(mailPost({ action: "mail.notspam", key }), db, rt, { run, now: () => NOW });
+    const second = await act(rt, { action: "mail.notspam", key }, run);
     expect(second.status).toBe(409);
     expect(trustedViews(db)).toEqual([]);
     if (!finish) throw new Error("Fixture mover did not start");
     finish({ code: 0, stdout: "", stderr: "" });
     expect((await first).status).toBe(200);
-    const refused = await handleDeskMail(mailPost({ action: "undo", move: "pending" }), db, rt, { run: queue([{ code: 3, stdout: "", stderr: "INBOX unavailable" }]).run, now: () => NOW + 1 });
+    const refused = await act(rt, { action: "undo", move: "pending" }, queue([{ code: 3, stdout: "", stderr: "INBOX unavailable" }]).run, NOW + 1);
     expect(refused.status).toBe(502);
     expect(trustedViews(db)[0]?.notSpam).toBe(true);
     expect((await reviews(rt))[0]?.junkReview?.mails).toHaveLength(1);
