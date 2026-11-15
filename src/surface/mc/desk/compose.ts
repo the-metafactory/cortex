@@ -47,7 +47,7 @@ import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli 
 import { escalationEntries, RULING_NO_MODEL, RULING_POLICY_REFUSED, splitExplanations, type EscalationRulings, type RulingExplainLoop, type RulingLedger } from "./ruling";
 import type { ParserPermissions } from "../../../common/types/desk-parser";
 import type { AskMap } from "./ask";
-import { writableKinds, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
+import { writableKinds, type DeskWriterLabels, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry, type PromotableAction } from "./autonomy";
@@ -113,6 +113,7 @@ export interface DeskAskOptions {
   timeoutSeconds: number;
   writers: DeskWriters;
   writerOwners?: DeskWriterOwners;
+  writerLabels?: DeskWriterLabels;
   taskMaps: AskMap[];
   taskCloser?: string[];
 }

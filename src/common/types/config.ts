@@ -531,6 +531,8 @@ export const DeskMailMirrorSchema = z.object({
 
 const DeskWriterArgvSchema = z.array(z.string().min(1)).min(1);
 const DeskWriterOwnerSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
+const DeskLabelSchema = (key: string) => z.string().trim().min(1, `mc.desk.ask.writerLabels.note.${key} must not be empty`);
+const DeskNoteLabelsSchema = z.strictObject({ objects: DeskLabelSchema("objects"), noun: DeskLabelSchema("noun"), fallback: DeskLabelSchema("fallback") });
 const DeskWriterSchema = z.union([DeskWriterArgvSchema, z.strictObject({ command: DeskWriterArgvSchema, owner: DeskWriterOwnerSchema.optional() })]);
 type DeskWriterEntry = z.infer<typeof DeskWriterSchema>;
 const DeskWritersSchema = z.object({
@@ -611,6 +613,7 @@ export const DeskSchema = z.object({
       timeoutSeconds: z.number().int().min(1).max(120).default(30),
       writers: DeskWritersSchema.default({}),
       writerOwners: z.partialRecord(DeskWritersSchema.keyof(), DeskWriterOwnerSchema).optional(),
+      writerLabels: z.strictObject({ note: DeskNoteLabelsSchema.optional() }).optional(),
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
       taskCloser: z.array(z.string().min(1)).min(1).optional(),
     })
