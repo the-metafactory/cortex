@@ -154,6 +154,12 @@ describe("the Desk decisions list", () => {
     expect(db.query("SELECT operation_key FROM desk_decisions").all()).toEqual([{ operation_key: "ruling:new" }]);
   });
 
+  it("prunes expired entries on a read with no new decision", () => {
+    new DecisionStore(db, () => NOW).record({ operationKey: "ruling:old", itemKey: KEY, action: "ranger.rule", target: { repo: "example/app", nodeId: "12" }, title: "T", text: "old", outcome: { state: "accepted" } });
+    readDecisions(db, NOW + DECISION_RETENTION_MS + 1);
+    expect(db.query("SELECT operation_key FROM desk_decisions").all()).toEqual([]);
+  });
+
   it("follows the stack's calendar day across midnight and a DST change", () => {
     const saved = process.env.TZ;
     process.env.TZ = "America/New_York";

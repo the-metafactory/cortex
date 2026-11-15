@@ -108,7 +108,7 @@ export class DecisionStore {
   }
 
   private prune(): void {
-    this.db.run("DELETE FROM desk_decisions WHERE decided_at < ?", [this.clock() - DECISION_RETENTION_MS]);
+    pruneDecisions(this.db, this.clock());
   }
 
   has(operationKey: string, itemKey: string): boolean {
@@ -137,13 +137,17 @@ export class DecisionStore {
   }
 
   today(now: number = this.clock()): DeskDecision[] {
-    this.guard("prune", undefined, () => { this.prune(); });
     return this.guard("read", [], () => readDecisions(this.db, now));
   }
 }
 
+function pruneDecisions(db: Database, now: number): void {
+  db.run("DELETE FROM desk_decisions WHERE decided_at < ?", [now - DECISION_RETENTION_MS]);
+}
+
 /** Every retained decision from the current stack calendar day, newest first with the id as tie-break. */
 export function readDecisions(db: Database, now: number): DeskDecision[] {
+  pruneDecisions(db, now);
   const { start, end } = decisionDay(now);
   const rows = db.query<Row, [number, number]>("SELECT id, operation_key, item_key, action, repo, node_id, title, text, decided_at, outcome, outcome_detail, outcome_at FROM desk_decisions WHERE decided_at >= ? AND decided_at <= ?").all(now - DECISION_RETENTION_MS, now);
   const later = new Map<string, DeskDecision["supersededBy"]>();
