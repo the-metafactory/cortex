@@ -1,4 +1,4 @@
-import { ancestorIndex, findNode, findParent, MAX_FOCUS_PER_MONTH, type AppState, type OutlineNode } from "../../../balance";
+import { ancestorIndex, completeCalendarOccurrence, findNode, isCalendarRepeat, reopenCalendarOccurrence, findParent, MAX_FOCUS_PER_MONTH, type AppState, type OutlineNode } from "../../../balance";
 import type { BalanceCommand } from "./balance-command";
 import type { DeskOptions } from "./compose";
 import type { MyDayMeta } from "./my-day-schema";
@@ -19,6 +19,11 @@ export function setOutlineFocus(state: AppState, node: OutlineNode, focus: boole
   if (focus) node.focusMonth = month;
   else delete node.focusMonth;
 }
+export function reopenOutlineLeaf(state: AppState, node: OutlineNode): void {
+  if (node.repeat && isCalendarRepeat(node.repeat) && node.completedAt) reopenCalendarOccurrence(state, node.id, node.repeat, node.completedAt);
+  delete node.done;
+  delete node.completedAt;
+}
 export function completeOutlineLeaf(state: AppState, node: OutlineNode, date: string): void {
   if (node.children.length > 0) throw new Error("Only a task without subtasks can receive completion credit. Refresh My day to see its current state.");
   const area = ancestorIndex(state.outline).get(node.id)?.[1];
@@ -26,6 +31,7 @@ export function completeOutlineLeaf(state: AppState, node: OutlineNode, date: st
   node.done = true;
   node.completedAt = date;
   stampTouched(node, date);
+  if (node.repeat && isCalendarRepeat(node.repeat)) completeCalendarOccurrence(state, node.id, node.repeat, date);
   if (state.log.some(event => event.taskId === node.id && event.date === date)) return;
   if (node.repeat) node.repeat.timesDone = (node.repeat.timesDone ?? 0) + 1;
   state.log.push({ taskId: node.id, areaId: area.id, effort: node.effort ?? 1, date, title: node.title });
@@ -117,8 +123,7 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
     return node.id;
   }
   if (command.op === "outline-reopen") {
-    delete node.done;
-    delete node.completedAt;
+    reopenOutlineLeaf(state, node);
     stampTouched(node, date);
     return node.id;
   }
