@@ -532,7 +532,13 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
     const why = last.status === "failed"
       ? `The Desk tried to retry it on its own ${ago(now, last.createdAt)}. ${last.message ?? "Ranger gave no reason."}`
       : `The Desk retried it on its own ${ago(now, last.createdAt)}, and it failed again.`;
-    return { ...item, urgency: "today", why, detail: { ...item.detail, history: [...item.detail.history, why] } };
+    return {
+      ...item, urgency: "today", why,
+      whyPhrase: { code: last.status === "failed" ? "ranger.retry-failed" : "ranger.retried", params: { at: new Date(last.createdAt).toISOString() } },
+      reason: last.status === "failed" ? last.message ?? undefined : undefined,
+      sourceStatusReason: undefined,
+      detail: { ...item.detail, history: [...item.detail.history, why] },
+    };
   });
 }
 
@@ -626,6 +632,7 @@ function reminderItems(reminders: DeskNote[], now: number): DeskItem[] {
     urgency: "now",
     title: r.text,
     why: `You asked to be reminded ${ago(now, r.dueAt)}.`,
+    whyPhrase: { code: "reminder.due", params: { dueAt: new Date(r.dueAt).toISOString() } },
     score: 90,
     actions: [
       { id: "reminder.done", label: "Done", role: "primary", wired: true, target: String(r.id) },

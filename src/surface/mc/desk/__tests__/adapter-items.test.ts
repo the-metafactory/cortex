@@ -42,6 +42,7 @@ test("two unknown adapters produce distinct canonical items and use existing Cat
     expect(card).toMatchObject({ kind: "adapter", title: "Synthetic review", why: "Review the synthetic observation.", dueAt: "2026-11-01", area: "lab", urgency: "today", score: 55, actions: [], readOnly: true, freshness: "fresh", detail: { links: [{ label: "Open source", url: "https://example.test/synthetic" }] } });
     expect(card.key).toBe(`adapter:${canonicalWire({ adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: "item-0" })}`);
     expect(card.attention).toBeUndefined();
+    expect(card.whyPhrase).toBeUndefined();
     expect(card.interrupt).toBeUndefined();
     expect(catchupItems(view.items, "lab", "all", "adapter", source.adapterId)).toEqual([card]);
     expect(catchupItems(view.items, "lab", "update", "adapter")).toEqual([]);

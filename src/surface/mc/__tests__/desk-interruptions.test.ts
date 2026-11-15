@@ -105,7 +105,7 @@ describe("/api/desk/interruptions/feedback", () => {
     expect(((await res.json()) as { message: string }).message).toBe("Kept. Mail like this still interrupts you.");
     expect(readSwitches(db).size).toBe(0);
     const item = (await compose()).items.find((i) => i.key === "mail:m1");
-    expect(item?.interrupt).toEqual({ delivery: "off", reason: { code: "mail.vip", target: "boss@example.com" }, feedback: "yes" });
+    expect(item?.interrupt).toEqual({ delivery: "off", reason: { code: "mail.vip", target: "boss@example.com", phrase: { code: "mail.vip", params: { target: "boss@example.com" } } }, feedback: "yes" });
   });
 
   it("switches the reason off on a no, so the next compose does not mark a matching item", async () => {

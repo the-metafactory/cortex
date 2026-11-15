@@ -89,7 +89,7 @@ describe("interruption switches on the Desk", () => {
   it("pushes VIP mail with its reason, and nothing once that VIP's switch is off", async () => {
     addVip(db, "boss@example.com", "Boss", NOW);
     const before = await tick(new FakeTransport());
-    expect(before.view.items.find((i) => i.key === "mail:vip")?.interrupt?.reason).toEqual({ code: "mail.vip", target: "boss@example.com" });
+    expect(before.view.items.find((i) => i.key === "mail:vip")?.interrupt?.reason).toEqual({ code: "mail.vip", target: "boss@example.com", phrase: { code: "mail.vip", params: { target: "boss@example.com" } } });
     expect(before.view.interruptions.filter((r) => r.code === "mail.vip")).toEqual([{ code: "mail.vip", target: "boss@example.com", label: "Mail from Boss", on: true, available: true, setBy: "default" }]);
     db.query("DELETE FROM desk_deliveries").run();
     setSwitch(db, RULES, { code: "mail.vip", target: "boss@example.com", on: false, setBy: "switch" }, NOW);
@@ -113,7 +113,7 @@ describe("interruption switches on the Desk", () => {
   it("gives the command transport the reason on stdin", async () => {
     const seen: string[] = [];
     const transport = commandTransport(["notify"], 1000, async (_argv, stdin) => { seen.push(stdin); return { code: 0, stdout: "", stderr: "" }; });
-    await transport.send({ key: "mail:vip", title: "t", why: "w", reason: { code: "mail.vip", target: "boss@example.com" } });
-    expect(JSON.parse(seen[0] ?? "{}")).toEqual({ key: "mail:vip", title: "t", why: "w", reason: { code: "mail.vip", target: "boss@example.com" } });
+    await transport.send({ key: "mail:vip", title: "t", why: "w", reason: { code: "mail.vip", target: "boss@example.com", phrase: { code: "mail.vip", params: { target: "boss@example.com" } } } });
+    expect(JSON.parse(seen[0] ?? "{}")).toEqual({ key: "mail:vip", title: "t", why: "w", reason: { code: "mail.vip", target: "boss@example.com", phrase: { code: "mail.vip", params: { target: "boss@example.com" } } } });
   });
 });

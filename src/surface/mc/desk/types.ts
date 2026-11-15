@@ -97,6 +97,13 @@ export interface DeskItem {
   urgency: DeskUrgency;
   title: string;
   why: string;
+  whyPhrase?: import("./phrases").DeskPhrase;
+  reason?: string;
+  sourceStatusReason?: string;
+  goalWording?: string;
+  precedentNote?: string;
+  precedentSenders?: string[];
+  unsubscribeFailure?: string;
   score: number;
   actions: DeskAction[];
   more?: DeskAction[];
@@ -138,6 +145,7 @@ export type InterruptReasonCode = (typeof INTERRUPT_REASON_CODES)[number];
 
 export interface DeskInterruptReason {
   code: InterruptReasonCode;
+  phrase: Extract<import("./phrases").DeskPhrase, { code: InterruptReasonCode }>;
   target?: string;
   eventKey?: string;
   dueAt?: string;

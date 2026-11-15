@@ -86,6 +86,7 @@ export function meetingItems(events: DeskEvent[], now: number, minutes: number):
         urgency: "now",
         title: `"${e.title}" starts at ${clock(e.at)}.`,
         why: `It starts in ${left} ${left === 1 ? "minute" : "minutes"}.`,
+        whyPhrase: { code: "meeting.soon", params: { startsAt: new Date(e.at).toISOString() } },
         score: 95,
         actions: [...join, look].slice(0, 2),
         detail: {
@@ -117,7 +118,16 @@ function meetingLaterToday(eventKey: string, today: readonly DeskEvent[], now: n
   return today.some((e) => e.key === eventKey && e.kind === "meeting" && e.at > now);
 }
 
-function mailReasons(item: DeskItem, context: InterruptContext, now: number): DeskInterruptReason[] {
+type InterruptCandidate = (
+  | { code: "meeting.soon" }
+  | { code: "reminder.due" }
+  | { code: "mail.meeting-today"; eventKey: string }
+  | { code: "mail.deadline-today"; dueAt: string }
+  | { code: "mail.vip"; target: string }
+  | { code: "mail.ranked" }
+) & { target?: string };
+
+function mailReasons(item: DeskItem, context: InterruptContext, now: number): InterruptCandidate[] {
   const vip = item.suspicious ? null : listedEntry(context.vips, senderOf(item));
   return [
     ...(item.eventKey && meetingLaterToday(item.eventKey, context.today, now) ? [{ code: "mail.meeting-today" as const, eventKey: item.eventKey }] : []),
@@ -127,7 +137,7 @@ function mailReasons(item: DeskItem, context: InterruptContext, now: number): De
   ];
 }
 
-function firingReasons(item: DeskItem, rules: InterruptRules, context: InterruptContext, now: number, freshFrom: number | undefined): DeskInterruptReason[] {
+function firingReasons(item: DeskItem, rules: InterruptRules, context: InterruptContext, now: number, freshFrom: number | undefined): InterruptCandidate[] {
   const fresh = freshFrom !== undefined && now - freshFrom <= rules.maxAgeMinutes * MINUTE;
   if (item.kind === "meeting") return [{ code: "meeting.soon" }];
   if (item.kind === "adapter") return item.interruptRequested === true && item.freshness === "fresh" ? [{ code: "mail.ranked" }] : [];
@@ -138,8 +148,19 @@ function firingReasons(item: DeskItem, rules: InterruptRules, context: Interrupt
 }
 
 /** The item's interruption reason: the first reason that fires and is switched on, or null when it does not interrupt. */
-export function interrupts(item: DeskItem, rules: InterruptRules, now: number, context: InterruptContext = NO_SWITCHES, freshFrom: number | undefined = item.since): DeskInterruptReason | null {
+export function interrupts(item: DeskItem, rules: InterruptRules, now: number, context: InterruptContext = NO_SWITCHES, freshFrom: number | undefined = item.since): InterruptCandidate | null {
   return firingReasons(item, rules, context, now, freshFrom).find((r) => reasonOn(rules, context.switches, r.code, r.target)) ?? null;
+}
+
+function reasonPhrase(reason: InterruptCandidate): DeskInterruptReason["phrase"] {
+  switch (reason.code) {
+    case "mail.meeting-today": return { code: reason.code, params: { eventKey: reason.eventKey } };
+    case "mail.deadline-today": return { code: reason.code, params: { dueAt: reason.dueAt } };
+    case "mail.vip": return { code: reason.code, params: { target: reason.target } };
+    case "mail.ranked": return { code: reason.code };
+    case "meeting.soon": return { code: reason.code };
+    case "reminder.due": return { code: reason.code };
+  }
 }
 
 const holdsInterruptions = (e: DeskEvent): e is DeskEvent & { end: number } => e.kind === "meeting" && e.end !== undefined && e.availability?.status !== "free";
@@ -207,7 +228,7 @@ export function markInterrupts(items: DeskItem[], rules: InterruptRules, deliver
     const holding = held !== null && sent === undefined && now < held.until;
     const delivery: DeskInterrupt["delivery"] = holding ? "held" : rules.transport === "none" ? "off" : sent?.status ?? "pending";
     const feedback = context.feedback.get(item.key);
-    return { ...item, interrupt: { delivery, reason, ...(held ? { held } : {}), ...(feedback ? { feedback } : {}) } };
+    return { ...item, interrupt: { delivery, reason: { ...reason, phrase: reasonPhrase(reason) }, ...(held ? { held } : {}), ...(feedback ? { feedback } : {}) } };
   });
 }
 
