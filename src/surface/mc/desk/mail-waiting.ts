@@ -342,7 +342,7 @@ export function waitingItems(db: Database, now: number, options: WaitingItemOpti
           ...(w.snoozedUntil !== null ? [`You snoozed it until ${longDay(w.snoozedUntil)}.`] : []),
         ],
         refs: [w.messageId],
-        links: w.url ? [{ label: "Open in Mail", url: w.url }] : [],
+        links: w.url ? [{ kind: "mail" as const, label: "Open in Mail", url: w.url }] : [],
       },
       ...(nudgeTo ? { reply: { to: nudgeTo.name ? `${nudgeTo.name} <${nudgeTo.address}>` : nudgeTo.address, subject: replySubject(w.subject) } } : {}),
       since: addWorkingDays(w.sentAt, config.afterDays),

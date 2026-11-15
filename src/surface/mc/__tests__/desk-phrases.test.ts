@@ -114,7 +114,7 @@ function noteRetry(status: "failed" | "done", message: string | null): void {
 }
 
 test("pins the exact Desk phrase vocabulary and its union coverage", () => {
-  expect<readonly string[]>(DESK_PHRASE_CODES).toEqual("ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious".split(" "));
+  expect<readonly string[]>(DESK_PHRASE_CODES).toEqual("ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious mailrule.release mail.assistant assistant.retry vip.add task.link mail.put-away-time mail.put-away-meeting mail.put-away-person correction.source mail.correction mail.sweep-category".split(" "));
   const coversUnion: Exclude<DeskPhrase["code"], typeof DESK_PHRASE_CODES[number]> extends never ? true : never = true;
   expect(coversUnion).toBe(true);
   expect(new Set(DESK_PHRASE_CODES).size).toBe(DESK_PHRASE_CODES.length);
@@ -211,7 +211,7 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
     expect<object>(phrase).toEqual(Object.keys(params).length ? { code, params } : { code });
     seen.add(code);
   }
-  expect([...seen].sort()).toEqual([...DESK_PHRASE_CODES].sort());
+  expect([...seen].sort()).toEqual(DESK_PHRASE_CODES.filter(code => !["mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "mail.put-away-time", "mail.put-away-meeting", "mail.put-away-person", "correction.source", "mail.correction", "mail.sweep-category"].includes(code)).sort());
 });
 
 test("mixed mail wording separates prose, titles and URLs from named VIP and ISO parameters", () => {
@@ -253,8 +253,9 @@ test("task enrichment, unavailable content and retry replacement keep the phrase
   expect(found.whyContent).toBeUndefined();
 });
 
-test("a running stack serves composed why phrases through curl without changing the bundled Desk sentence", async () => {
-  const desk: DeskOptions = { ...options(), rangerUrl: "", sources: [] };
+test("a running stack serves why phrases, link kinds and action label phrases through curl with unchanged wording", async () => {
+  const output = JSON.stringify({ items: [letter("label", { url: "message://label" })] });
+  const desk: DeskOptions = { ...options(), rangerUrl: "", sources: [{ id: "fixture", command: ["bun", "-e", `process.stdout.write(${JSON.stringify(output)})`], everySeconds: 300, timeoutSeconds: 5 }] };
   const reminder = addNote(db, "reminder", "Synthetic reminder", NOW - 60_000, EARLIER);
   const stack = startServer({ ...DEFAULT_CONFIG, port: 0 }, db, { desk });
   try {
@@ -268,7 +269,12 @@ test("a running stack serves composed why phrases through curl without changing 
     expect(found.why).toBe(`You asked to be reminded today at ${clock(NOW - 60_000)}.`);
     expect(found.whyPhrase).toEqual({ code: "reminder.due", params: { dueAt: iso(NOW - 60_000) } });
     expect(found.interrupt?.reason).toEqual({ code: "reminder.due", phrase: { code: "reminder.due" } });
-    console.log(JSON.stringify({ probe: "curl /api/desk", status: 200, why: found.why, whyPhrase: found.whyPhrase, reason: found.interrupt?.reason }));
+    const mail = item(view, "mail:label");
+    const link = mail.detail.links[0];
+    const action = [...mail.actions, ...(mail.more ?? [])].find(a => a.id === "vip.add");
+    expect(link).toEqual({ kind: "mail", label: "Open in Mail", url: "message://label" });
+    expect(action).toMatchObject({ label: "Always show mail from Sender", labelPhrase: { code: "vip.add", params: { name: "Sender" } } });
+    console.log(JSON.stringify({ probe: "curl /api/desk", status: 200, why: found.why, whyPhrase: found.whyPhrase, reason: found.interrupt?.reason, link, action }));
   } finally {
     stack.stop(true);
   }

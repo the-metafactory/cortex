@@ -475,7 +475,7 @@ const CORRECTED_SAYING: Partial<Record<string, string>> = { "not bulk": "; it is
 function mailCorrections(db: Database, sourceIds: ReadonlySet<string>): ClassifierCorrection[] {
   return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS, sourceIds }).map((e) => {
     const action = learnedAction(e.action);
-    return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
+    return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}`, labelPhrase: { code: "mail.correction", params: { subject: e.subject, sender: e.sender, action: e.action, ...(action ? { learnedAction: action } : {}), category: e.category } } };
   });
 }
 

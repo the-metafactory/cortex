@@ -403,7 +403,7 @@ export function withHandoff(item: DeskItem, row: HandoffRow | undefined, now: nu
   const handoff = viewOf(row, now, name);
   if (row.state !== "failed") return { ...item, actions: item.actions.filter(notAssistant), more: (item.more ?? []).filter(notAssistant), handoff };
   const offered = [...item.actions, ...(item.more ?? [])].filter(notAssistant).map((a) => (a.role === "primary" ? { ...a, role: "secondary" as const } : a));
-  const all = [act("assistant.retry", `Ask ${name} again`, "primary", row.id), ...offered];
+  const all = [{ ...act("assistant.retry", `Ask ${name} again`, "primary", row.id), labelPhrase: { code: "assistant.retry" as const, params: { name } } }, ...offered];
   return { ...item, actions: all.slice(0, 3), more: all.slice(3), handoff };
 }
 
@@ -417,7 +417,7 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     if (row.state !== "ready" && !(row.state === "failed" && !listed.has(row.messageId))) return [];
     const who = row.fromName ?? row.fromAddress;
     const subject = oneLine(row.subject) || "(no subject)";
-    const links = [...(row.url ? [{ label: "Open in Mail", url: row.url }] : []), ...(row.taskUrl ? [{ label: `Task ${row.taskId}`, url: row.taskUrl }] : [])];
+    const links = [...(row.url ? [{ kind: "mail" as const, label: "Open in Mail", url: row.url }] : []), ...(row.taskUrl ? [{ kind: "task" as const, label: `Task ${row.taskId}`, labelPhrase: { code: "task.link" as const, params: { id: row.taskId } }, url: row.taskUrl }] : [])];
     const open = row.url ? [{ ...act("open", "Open in Mail", "secondary"), url: row.url }] : [];
     const history = [
       `You handed it to ${name} ${ago(now, row.createdAt)}${row.instruction ? ` and asked: “${oneLine(row.instruction)}”` : ""}.`,
@@ -427,7 +427,7 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     if (row.state === "failed") {
       return [{
         ...base, key: handoffKey(row.id), title: `${name} could not finish “${subject}” from ${who}`, why: row.error ?? NO_REASON, score: 50,
-        actions: [act("assistant.retry", `Ask ${name} again`, "primary"), act("assistant.discard", "Discard", "secondary")], more: open,
+        actions: [{ ...act("assistant.retry", `Ask ${name} again`, "primary"), labelPhrase: { code: "assistant.retry", params: { name } } }, act("assistant.discard", "Discard", "secondary")], more: open,
         detail: { ...base.detail, summary: row.error ?? NO_REASON },
         handoff: viewOf(row, now, name), since: row.finishedAt ?? row.createdAt,
       }];

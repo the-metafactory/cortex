@@ -248,7 +248,7 @@ describe("composeDesk with a classifier", () => {
     const c = new MailClassifier(command, async (req) => { seen.push(req); return { category: "fyi", reason: "News." }; }, quiet);
     const view = await composeDesk(db, { ...DESK, mailClassifier: command }, undefined, { now: NOW, sourceCache: new SourceCache(runner), mailClassifier: c });
     await c.kick(db, { now: NOW, mail: [], events: [], vips: [] });
-    expect(seen[0]?.corrections).toEqual([{ kind: "mail", source: "ops@stats.example", mode: "keep", label: "“Weekly numbers” from ops@stats.example: the person would keep it in the inbox" }]);
+    expect(seen[0]?.corrections).toEqual([{ kind: "mail", source: "ops@stats.example", mode: "keep", label: "“Weekly numbers” from ops@stats.example: the person would keep it in the inbox", labelPhrase: { code: "mail.correction", params: { subject: "Weekly numbers", sender: "ops@stats.example", action: "kept", learnedAction: "keep", category: "bulk" } } }]);
     expect(view.mailClassifier).toEqual({ kind: "command", command: "desk-classify-mail.ts", keyNeeded: false, keyFound: false });
     expect(classifierLines(view.mailClassifier ?? null)[0]).toBe("A command sorts your inbox mail: desk-classify-mail.ts.");
   });

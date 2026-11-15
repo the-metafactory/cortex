@@ -37,7 +37,7 @@ function seed(): AppState {
   ] }] }, settings: { ...DEFAULT_SETTINGS }, log: [], history: { deficits: {}, lastSurfaced: {} }, dayState: null };
 }
 function source(kind: "mail" | "agent-blocked"): DeskItem {
-  return { key: `${kind}:source`, kind, source: kind === "mail" ? "inbox" : "ranger", title: "Choose a next step", why: "A decision is waiting.", dueAt: "2026-11-04T12:00:00Z", area: "work", urgency: "today", score: 50, actions: [], detail: { summary: "A synthetic item", history: [], refs: [], links: [{ label: "Source", url: "https://example.test/item" }] } };
+  return { key: `${kind}:source`, kind, source: kind === "mail" ? "inbox" : "ranger", title: "Choose a next step", why: "A decision is waiting.", dueAt: "2026-11-04T12:00:00Z", area: "work", urgency: "today", score: 50, actions: [], detail: { summary: "A synthetic item", history: [], refs: [], links: [{ kind: "source", label: "Source", url: "https://example.test/item" }] } };
 }
 describe("My day lane and day contract", () => {
   let db: Database;

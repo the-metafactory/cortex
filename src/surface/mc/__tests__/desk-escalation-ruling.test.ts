@@ -140,7 +140,7 @@ describe("Vigil escalation explanations and answers", () => {
       const card = (await compose(async () => read)).items[0]!;
       expect(card.actions.some(action => action.id === "ranger.rule")).toBe(false);
       expect(card.detail.summary).toContain("Answer on the issue.");
-      expect(card.detail.links).toEqual([{ label: "Issue", url: "https://github.com/example/app/issues/12" }]);
+      expect(card.detail.links).toEqual([{ kind: "issue", label: "Issue", url: "https://github.com/example/app/issues/12" }]);
     }
   });
 

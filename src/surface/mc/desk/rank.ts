@@ -123,7 +123,7 @@ export const parsedOr = (iso: string | undefined, fallback: number): number => {
   return Number.isFinite(at) ? at : fallback;
 };
 
-const issueLinks = (url: string | undefined) => (url ? [{ label: "Issue", url }] : []);
+const issueLinks = (url: string | undefined) => (url ? [{ kind: "issue" as const, label: "Issue", url }] : []);
 
 export function rankItems(input: RankInput): DeskItem[] {
   const items = new Map<string, DeskItem>();
@@ -449,7 +449,7 @@ const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true)
 const REPORT = action("mail.report", "Report", "secondary", true);
 const NOT_PHISHING = action("mail.trust", "Not phishing", "secondary", true);
 const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
-const toAssistant = (name: string): DeskAction => action("mail.assistant", `Hand to ${name}`, "secondary", true);
+const toAssistant = (name: string): DeskAction => ({ ...action("mail.assistant", `Hand to ${name}`, "secondary", true), labelPhrase: { code: "mail.assistant", params: { name } } });
 const SNOOZE = action("mail.snooze", "Snooze", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
 const ACCEPT = action("invite.accept", "Accept", "primary", true);
@@ -575,7 +575,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     const replyFirst = canDraft && (predicted ? predicted === "reply" : triage?.suggestedAction === "reply" && !quiet) && showMeeting.length === 0;
     const seenFirst = quiet && !moveFirst && predicted !== "keep" && !replyFirst;
     const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", seenFirst || moveFirst || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
-    const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
+    const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address, labelPhrase: { code: "vip.add", params: { ...(m.from.name !== undefined ? { name: m.from.name.split(" ")[0] } : {}) } } }];
     const reply = action("mail.draft", DRAFT_LABEL, replyFirst ? "primary" : "secondary", true);
     const replyLead = replyFirst ? [reply] : [];
     const replyTail = canDraft && !replyFirst ? [reply] : [];
@@ -617,7 +617,7 @@ export function mailItems(input: MailInput): DeskItem[] {
         summary: triage?.summary ?? m.firstParagraph ?? m.subject,
         history,
         refs: [m.from.address, m.id],
-        links: [...(m.url ? [{ label: "Open in Mail", url: m.url }] : []), ...(unsubscribe?.kind === "page" ? [{ label: `Unsubscribe page: ${unsubscribe.url}`, url: unsubscribe.url }] : [])],
+        links: [...(m.url ? [{ kind: "mail" as const, label: "Open in Mail", url: m.url }] : []), ...(unsubscribe?.kind === "page" ? [{ kind: "unsubscribe-page" as const, label: `Unsubscribe page: ${unsubscribe.url}`, url: unsubscribe.url }] : [])],
         ...(evidence.length > 0 ? { evidence } : {}),
         ...(precedents.length > 0 ? { precedents } : {}),
       },
@@ -658,7 +658,7 @@ function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof
       summary: triage?.summary ?? m.firstParagraph ?? m.subject,
       history: [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""} from ${m.from.address}`],
       refs: [m.from.address, m.id],
-      links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
+      links: m.url ? [{ kind: "mail" as const, label: "Open in Mail", url: m.url }] : [],
       suspicion: reasons.map((r) => r.text),
     },
     ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),

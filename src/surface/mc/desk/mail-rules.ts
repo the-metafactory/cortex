@@ -330,7 +330,7 @@ export function proposalItems(proposals: RuleProposal[], now: number): DeskItem[
 
 /** A card per rule that paused because one pass would have moved more mails than the cap. */
 export function heldItems(rules: readonly MailRule[], config: MailRulesConfig = DEFAULT_MAIL_RULES): DeskItem[] {
-  return rules.filter((r) => r.on && r.held !== null && !r.released).map((r): DeskItem => ({
+  return rules.filter((r): r is MailRule & { held: number } => r.on && r.held !== null && !r.released).map((r): DeskItem => ({
     key: `mailrule:held:${r.id}`,
     kind: "mail-rule",
     source: "desk",
@@ -340,7 +340,7 @@ export function heldItems(rules: readonly MailRule[], config: MailRulesConfig = 
     why: `${ruleSentence(r)}. The Desk asks first when one pass would handle more than ${config.maxPerPass}.`,
     score: 30,
     actions: [
-      { id: "mailrule.release", label: `Handle all ${r.held}`, role: "primary", wired: true, target: r.id },
+      { id: "mailrule.release", label: `Handle all ${r.held}`, labelPhrase: { code: "mailrule.release", params: { count: r.held } }, role: "primary", wired: true, target: r.id },
       { id: "mailrule.stop", label: "Stop this rule", role: "secondary", wired: true, target: r.id },
       { id: "snooze", label: "Not now", role: "secondary", wired: true },
     ],

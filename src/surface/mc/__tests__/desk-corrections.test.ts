@@ -57,7 +57,7 @@ describe("ranking corrections", () => {
     expect(top(view)).toEqual(["agent-failed", "decision"]);
     expect(view.items.at(-1)?.correction).toBe("less");
     expect(view.items.at(-1)?.detail.history).toContain("You asked for less like this, so it ranks below everything you have not marked.");
-    expect(view.corrections).toEqual([{ kind: "goal", source: "vigil", mode: "less", label: "Goals that need a look, from vigil", createdAt: NOW }]);
+    expect(view.corrections).toEqual([{ kind: "goal", source: "vigil", mode: "less", label: "Goals that need a look, from vigil", labelPhrase: { code: "correction.source", params: { kind: "goal", source: "vigil" } }, createdAt: NOW }]);
   });
 
   it("keeps items of a kind and source marked always show this in the top list", async () => {
