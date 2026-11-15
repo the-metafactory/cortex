@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DraftingBindings, type DestinationMatch, type DraftModel, type DraftPolicy, type DraftSources, type ModelRequest } from "../../conversations/domain-adapters/drafting";
 import { snapshotDigest } from "../../conversations/domain-adapters/operations/validation";
-import { ObjectReadbackSchema, type ApprovedSnapshot, type DispatchRequest, type Json } from "../../conversations/domain-adapters/operations/types";
+import { ObjectReadbackSchema, type ApprovedSnapshot, type DispatchRequest, type Json, type Provenance } from "../../conversations/domain-adapters/operations/types";
 import type { DispatchOutcome, OperationBridge } from "../../conversations/domain-adapters/operations/dispatch";
 import type { DraftingView } from "../../conversations/domain-adapters/registry";
 import { ObjectReferenceSchema, type ObjectReference } from "../../conversations/domain-adapters/types";
@@ -86,11 +86,13 @@ export async function prepareAction(env: ProbeEnv, capabilityId: string, view: D
   }
 }
 
+export const actionProvenance = (conversationId: string): Provenance => ({ conversationId, proposalId: PROPOSAL, revision: 1, entryId: null, link: `?desk=conversation&conversation=${conversationId}` });
+
 /** Builds the approved snapshot the Cortex runtime confirms, from the capability view and the prepared input. */
 export function snapshotForAction(env: ProbeEnv, capabilityId: string, prepared: Prepared): ApprovedSnapshot {
   const { view } = prepared;
   const body = {
-    provenance: { conversationId: env.rig.conversationId, proposalId: PROPOSAL, revision: 1, entryId: null, link: `?desk=conversation&conversation=${env.rig.conversationId}` },
+    provenance: actionProvenance(env.rig.conversationId),
     adapterId: env.adapterId, connectionId: env.connectionId, capabilityId,
     inputSchemaRef: view.inputSchemaRef, outputSchemaRef: view.outputSchemaRef, errorSchemaRef: view.errorSchemaRef,
     input: prepared.input, destinations: prepared.destinations, sources: [], policy: "local" as const,
