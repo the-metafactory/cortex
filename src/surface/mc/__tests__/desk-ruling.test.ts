@@ -432,3 +432,46 @@ describe("the ruling explainer config", () => {
     expect(parse({ baseUrl: "http://llm.example/v1", model: "m" })).toBe(false);
   });
 });
+
+describe("a ruling while Ranger's lane is held", () => {
+  const held = (over: Partial<RangerNeedsYou> = {}, offered = true): RangerState => {
+    const state = rangerState();
+    state.maps = [{ key: "example/app#1", repo: "example/app", lane: "headless", decisions: [{ id: "99", title: "Holder task" }] }];
+    state.laneHolders = { headless: { repo: "example/app", nodeId: "99" }, visual: null };
+    state.needsYou[0] = { ...state.needsYou[0]!, actions: { resume: true, queueResume: offered ? { offered: true } : { offered: false, why: "the headless lane is free" } }, ...over };
+    return state;
+  };
+
+  it("queues the resume with --when-free and names the holder, once", async () => {
+    const t = setup({ state: held() });
+    const res = await t.rule(RULING);
+    expect(await res.json()).toEqual({ ok: true, message: 'Recorded your ruling. The resume of "Pick the export format" is queued behind "Holder task".' });
+    expect(t.ranger.calls.map((c) => c.argv)).toEqual([["/opt/ranger/bin/ranger", "resume-node", "12", "--map", "example/app#1", "--when-free"]]);
+    const again = await t.rule({ ...RULING, requestId: "req-00000002" });
+    expect(again.status).toBe(502);
+    expect(t.ranger.calls).toHaveLength(1);
+  });
+
+  it("names the holder by repo#N when Ranger has no title", async () => {
+    const state = held();
+    state.maps = [{ key: "example/app#1", repo: "example/app", lane: "headless" }];
+    const res = await setup({ state }).rule(RULING);
+    expect((await res.json()).message).toContain('behind "example/app#99"');
+  });
+
+  it("keeps the plain resume when the lane is free or the queue is not offered", async () => {
+    for (const state of [held({}, false), { ...held(), laneHolders: { headless: null, visual: null } }]) {
+      const t = setup({ state });
+      const res = await t.rule(RULING);
+      expect((await res.json()).message).toBe('Recorded your ruling and resumed "Pick the export format".');
+      expect(t.ranger.calls[0]?.argv).not.toContain("--when-free");
+    }
+  });
+
+  it("refuses a second resume of a node Ranger already queued", async () => {
+    const t = setup({ state: held({ queued: { lane: "headless", position: 1 } }) });
+    const res = await t.rule(RULING);
+    expect(res.status).toBe(502);
+    expect(t.ranger.calls).toHaveLength(0);
+  });
+});
