@@ -57,5 +57,3 @@ export const noComments: Rule.RuleModule = {
     };
   },
 };
-
-export const cortex = { rules: { "no-comments": noComments } };

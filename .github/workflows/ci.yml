@@ -82,6 +82,25 @@ jobs:
       - name: check-duplication
         run: bun scripts/check.ts duplication
 
+  # Unused-export ratchet: a file may not gain exports no other module
+  # imports past scripts/unused-exports-baseline.json (knip).
+  unused-exports:
+    name: Unused-export ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - run: git fetch --depth=1 origin main
+
+      - name: check-unused-exports
+        run: bun scripts/check.ts unused-exports
+
   # ──────────────────────────────────────────────────────────────────
   # Typecheck — `tsc --noEmit` against the project's tsconfig.json.
   # Pre-cortex#376 there was no CI gate against type errors, so 5

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { type Clone, clonesPerFile, compare, inflatedAgainst, total } from "../check-duplication";
+import { type Clone, clonesPerFile } from "../check-duplication";
+import { compare, inflatedAgainst, total } from "../lib/ratchet";
 
 const side = (name: string) => ({ name, start: 1, end: 6 });
 const clone = (a: string, b: string): Clone => ({ firstFile: side(a), secondFile: side(b) });

@@ -7,6 +7,7 @@ export interface Gate {
 export const GATES: Gate[] = [
   { name: "lint", steps: [["bun", "run", "lint:errors"]] },
   { name: "duplication", steps: [["bun", "scripts/check-duplication.ts"]] },
+  { name: "unused-exports", steps: [["bun", "scripts/check-unused-exports.ts"]] },
   { name: "typecheck", steps: [["bunx", "tsc", "--noEmit"]] },
   { name: "vocab", steps: [["bash", "scripts/check-carveouts.sh"], ["bun", "scripts/check-wire-vocab.ts"]] },
   { name: "sdk", steps: [["bun", "run", "sdk:dts:check"], ["bun", "scripts/check-release-pins.ts"], ["bun", "scripts/check-desk-sdk.ts"], ["bun", "scripts/probe-desk-conformance-export.ts", "--typecheck"]] },
