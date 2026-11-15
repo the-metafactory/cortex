@@ -11,7 +11,7 @@ import { studioRequestId } from "../../../conversations/conversation-ids";
 import { spawnWithStdin, type WriterResult, type WriterRunner } from "./create";
 import { GITHUB_REF_PREFIX, isGraphRepositoryAllowed } from "./graph-repositories";
 
-export const GRAPH_LABEL = "ivy:conversation";
+const GRAPH_LABEL = "desk:conversation";
 
 const NOTHING = "Nothing was created.";
 export const ADD_TIMEOUT_MS = 28_000;
@@ -106,6 +106,12 @@ export function recordedGraphOperation(db: Database, operationId: string): Recor
   return Array.isArray(args) && args.every(a => typeof a === "string") ? { repository: row.repository, parent: row.parent, args } : null;
 }
 
+export function graphOperationLabel(db: Database, operationId: string): string {
+  const args = recordedGraphOperation(db, operationId)?.args ?? [];
+  const index = args.indexOf("--label");
+  return index < 0 ? GRAPH_LABEL : args[index + 1] ?? GRAPH_LABEL;
+}
+
 function sameNodeIgnoringRepoPrefix(repository: string, a: string, b: string): boolean {
   const prefixes = [`${repository}#`, ...(repository.startsWith(GITHUB_REF_PREFIX) ? [`${repository.slice(GITHUB_REF_PREFIX.length)}#`] : []), "#"];
   const bare = (id: string): string => prefixes.reduce((v, p) => (v.startsWith(p) ? v.slice(p.length) : v), id.trim());
@@ -149,7 +155,7 @@ const oneOf = <T extends string>(values: readonly T[], value: string | undefined
 };
 
 interface GraphCall { verb: "add" | "chart"; parent: string | null; before: string[]; tail: string[] }
-interface Destination { repository: string; autonomy: (typeof GRAPH_AUTONOMIES)[number]; marker: string }
+interface Destination { repository: string; autonomy: (typeof GRAPH_AUTONOMIES)[number]; marker: string; label: string }
 type GraphPlan = (fields: Record<string, string>, destination: Destination) => GraphCall | CreateResult;
 
 function graphWriter(deps: GraphWriterDeps, plan: GraphPlan): OwnerWriter {
@@ -163,7 +169,7 @@ function graphWriter(deps: GraphWriterDeps, plan: GraphPlan): OwnerWriter {
     if (refused) return refused;
     const autonomy = oneOf(GRAPH_AUTONOMIES, request.fields.autonomy, "approve");
     if (!autonomy) return graphFailed("A conversation may file only approve or propose nodes.");
-    const call = plan(request.fields, { repository, autonomy, marker: graphMarker(request.operationId) });
+    const call = plan(request.fields, { repository, autonomy, marker: graphMarker(request.operationId), label: graphOperationLabel(deps.db, request.operationId) });
     if ("state" in call) return call;
     const head = ["graph", call.verb, ...call.before];
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before soma was called.");
@@ -176,7 +182,7 @@ function graphWriter(deps: GraphWriterDeps, plan: GraphPlan): OwnerWriter {
 
 /** Files the proposal under the confirmed parent with `soma graph add --once`; it never claims or closes what it files. */
 export function graphNodeWriter(deps: GraphWriterDeps): OwnerWriter {
-  return graphWriter(deps, (fields, { repository, autonomy, marker }) => {
+  return graphWriter(deps, (fields, { repository, autonomy, marker, label }) => {
     const { parent = "", title = "", checkpoint = "" } = fields;
     const kind = oneOf(GRAPH_KINDS, fields.kind, "grilling");
     if (!kind) return graphFailed("A conversation may file only research, grilling, prototype, task or build nodes.");
@@ -185,7 +191,7 @@ export function graphNodeWriter(deps: GraphWriterDeps): OwnerWriter {
     return {
       verb: "add",
       parent,
-      before: [parent, "--repo", repository, "--title", title, "--autonomy", autonomy, "--kind", kind, "--label", GRAPH_LABEL, "--checkpoint", checkpoint],
+      before: [parent, "--repo", repository, "--title", title, "--autonomy", autonomy, "--kind", kind, "--label", label, "--checkpoint", checkpoint],
       tail: [...dependencies.flatMap(d => ["--blocked-by", d]), "--once", marker, "--json"],
     };
   });
@@ -196,7 +202,7 @@ const GOAL = /^G\d+$/;
 
 /** Charts a map root in the confirmed repository with `soma graph chart --once`; on GitLab the project itself is the home project. */
 export function graphMapWriter(deps: GraphWriterDeps): OwnerWriter {
-  return graphWriter(deps, (fields, { repository, autonomy, marker }) => {
+  return graphWriter(deps, (fields, { repository, autonomy, marker, label }) => {
     const { title = "", checkpoint = "", serves } = fields;
     if (serves !== undefined && !GOAL.test(serves)) return graphFailed("A map may serve only a goal written as G<n>, such as G5.");
     const home = GITLAB_PROJECT.exec(repository)?.[1];
@@ -204,7 +210,7 @@ export function graphMapWriter(deps: GraphWriterDeps): OwnerWriter {
       verb: "chart",
       parent: null,
       before: [
-        "--repo", repository, ...(home ? ["--home-project", home] : []), "--title", title, "--autonomy", autonomy, "--checkpoint", checkpoint, "--label", GRAPH_LABEL,
+        "--repo", repository, ...(home ? ["--home-project", home] : []), "--title", title, "--autonomy", autonomy, "--checkpoint", checkpoint, "--label", label,
         ...(serves ? ["--serves", serves] : []),
       ],
       tail: ["--once", marker, "--json"],

@@ -7,7 +7,7 @@ import type { CreateRequest, CreateResult, ReadbackResult } from "../../types";
 import { studioRequestId } from "../../conversation-ids";
 import type { DeskOptions } from "../../../surface/mc/desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../../../surface/mc/desk/create";
-import { ADD_TIMEOUT_MS, GRAPH_LABEL, graphAnswer, graphBody, graphMarker, graphReadbackById, recordGraphOperation, repositoryRefusal, withBodyFile, type GraphWriterDeps } from "../../../surface/mc/desk/graph-conversation-writer";
+import { ADD_TIMEOUT_MS, graphOperationLabel, graphAnswer, graphBody, graphMarker, graphReadbackById, recordGraphOperation, repositoryRefusal, withBodyFile, type GraphWriterDeps } from "../../../surface/mc/desk/graph-conversation-writer";
 import type { DispatchOutcome } from "../operations/dispatch";
 import type { OperationJournalStore, StoredOperation } from "../operations/journal";
 import type { ApprovedSnapshot, Authority, DispatchRequest, Json, OperationLookup, OwnerResult, OwnerSupport, Provenance } from "../operations/types";
@@ -251,7 +251,7 @@ export function createWorkGraphNodeBinding(options: WorkGraphNodeBindingOptions)
     const dependencies = (input.dependencies ?? []).map(dependency => dependency.canonicalId);
     if ([parent, ...dependencies].some(flagShaped)) return refuse("The parent and the dependencies must be node references, not options.");
     if (signal?.aborted) return refuse("The conversation stopped waiting before soma was called.");
-    const head = ["graph", "add", parent, "--repo", repository, "--title", input.title, "--autonomy", autonomy, "--kind", kind, "--label", GRAPH_LABEL, "--checkpoint", input.checkpoint];
+    const head = ["graph", "add", parent, "--repo", repository, "--title", input.title, "--autonomy", autonomy, "--kind", kind, "--label", graphOperationLabel(options.db, request.operationId), "--checkpoint", input.checkpoint];
     const tail = [...dependencies.flatMap(dependency => ["--blocked-by", dependency]), "--once", graphMarker(request.operationId), "--json"];
     const provenance = { ...snapshot.provenance, operationId: request.operationId };
     try {

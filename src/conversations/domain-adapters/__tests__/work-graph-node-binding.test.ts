@@ -31,7 +31,7 @@ async function forged(rig: GraphNodeRig, name: string, input: Record<string, Jso
   return { lifecycleVersion: "1.0.0" as const, operationId, attemptId: crypto.randomUUID(), idempotencyKey: operationId, ownerRequestId: studioRequestId(operationId), snapshot: { ...snapshot, input: { ...(snapshot.input as Record<string, Json>), ...input } }, authority: graphNodeAuthority, supportDeclarationId: rig.binding.support.declarationId, deadlineAt: new Date(GRAPH_NODE_NOW + 60_000).toISOString() };
 }
 
-test("a validated snapshot files one node with the legacy argv, marker and label, and never claims or closes", async () => {
+test("a validated snapshot files one node with the owner argv, marker and Desk label, and never claims or closes", async () => {
   const rig = await open();
   const id = graphNodeOperationId("create");
   const outcome = await rig.facade.create(graphNodeRequest(graphNodeFields({ body: "Why", dependencies: "7 8" }), id), graphNodeAuthority, rig.lifecycle());
@@ -41,7 +41,7 @@ test("a validated snapshot files one node with the legacy argv, marker and label
   expect(argv?.slice(0, 5)).toEqual(["/opt/soma/bin/soma", "graph", "add", "12", "--repo"]);
   expect(argv).toContain(GRAPH_NODE_REPOSITORY);
   expect(argv?.slice(argv.indexOf("--autonomy"), argv.indexOf("--autonomy") + 4)).toEqual(["--autonomy", "approve", "--kind", "grilling"]);
-  expect(argv?.slice(argv.indexOf("--label"), argv.indexOf("--label") + 2)).toEqual(["--label", "ivy:conversation"]);
+  expect(argv?.slice(argv.indexOf("--label"), argv.indexOf("--label") + 2)).toEqual(["--label", "desk:conversation"]);
   expect(argv?.slice(argv.indexOf("--blocked-by"), argv.indexOf("--blocked-by") + 4)).toEqual(["--blocked-by", "7", "--blocked-by", "8"]);
   expect(argv).toContain(graphMarker(id));
   expect(argv?.some(part => part === "claim" || part === "close")).toBe(false);

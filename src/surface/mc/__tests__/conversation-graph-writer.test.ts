@@ -105,7 +105,7 @@ const CASES: WriterCase[] = [
     fieldNames: ["repository", "parent", "title", "body", "checkpoint", "dependencies", "autonomy", "kind"],
     chosen: { dependencies: "jcfischer/desk#2, jcfischer/desk#3", autonomy: "propose", kind: "build" },
     argv: (file, marker) => [
-      SOMA, "graph", "add", "jcfischer/desk#1", "--repo", DESK, "--title", "Ivy probe 0a1b", "--autonomy", "propose", "--kind", "build", "--label", "ivy:conversation",
+      SOMA, "graph", "add", "jcfischer/desk#1", "--repo", DESK, "--title", "Ivy probe 0a1b", "--autonomy", "propose", "--kind", "build", "--label", "desk:conversation",
       "--checkpoint", "ivy-probe-0a1b", "--body-file", file, "--blocked-by", "jcfischer/desk#2", "--blocked-by", "jcfischer/desk#3", "--once", marker, "--json",
     ],
     existing: { repo: "jcfischer/desk", node: "42", parent: "1", blockedBy: [], existing: true },
@@ -117,7 +117,7 @@ const CASES: WriterCase[] = [
     fieldNames: ["repository", "title", "body", "checkpoint", "autonomy", "serves"],
     chosen: { autonomy: "propose", serves: "G5" },
     argv: (file, marker) => [
-      SOMA, "graph", "chart", "--repo", DESK, "--title", "Ivy probe map 0a1b", "--autonomy", "propose", "--checkpoint", "ivy-probe-map-0a1b", "--label", "ivy:conversation",
+      SOMA, "graph", "chart", "--repo", DESK, "--title", "Ivy probe map 0a1b", "--autonomy", "propose", "--checkpoint", "ivy-probe-map-0a1b", "--label", "desk:conversation",
       "--serves", "G5", "--body-file", file, "--once", marker, "--json",
     ],
     existing: { repo: "jcfischer/desk", node: "42", existing: true },
@@ -259,7 +259,7 @@ describe("graph node writer specifics", () => {
     expect([reply.status, reply.body.proposal.operation?.canonicalId]).toEqual([200, `${GITLAB}#7`]);
     const [argv = []] = r.soma.calls;
     expect(argv.slice(0, 6)).toEqual([SOMA, "graph", "add", "csoc/graph#12", "--repo", GITLAB]);
-    expect(argv[argv.indexOf("--label") + 1]).toBe("ivy:conversation");
+    expect(argv[argv.indexOf("--label") + 1]).toBe("desk:conversation");
   });
 });
 
