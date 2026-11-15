@@ -8,7 +8,7 @@ import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { canonicalGraphRef } from "../work-graph/read";
 import { flowName } from "../flow/schema";
 import { BALANCE_CREATE_CONTRACTS } from "../balance/create-contracts";
-import { MAIL_REPLY_DRAFT_CAPABILITY } from "../mail/reply-draft-host";
+import { MAIL_REPLY_DRAFT_CAPABILITY } from "../mail/reply-draft-policy";
 import { OperationJournalStore, StoredSchema, type StoredOperation } from "./journal";
 import { parseWire, type Json, type OperationJournal } from "./types";
 import { canonicalWire } from "./validation";

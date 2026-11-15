@@ -4,7 +4,7 @@ import { QuerySourceSchema, type QueryDispatch, type QueryFetchRequest } from ".
 import { validateQueryPage, type ValidatedQueryPage } from "./domain-adapters/reads/query-validation";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
-import { MAIL_REPLY_DRAFT_CAPABILITY, mailReplyDraftScopeMatches } from "./domain-adapters/mail/reply-draft-host";
+import { MAIL_REPLY_DRAFT_CAPABILITY, mailReplyDraftScopeMatches } from "./domain-adapters/mail/reply-draft-policy";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Context } from "@earendil-works/chord";
