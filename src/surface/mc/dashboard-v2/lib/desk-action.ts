@@ -11,7 +11,7 @@ export const DESK_DMARC_PATH = "/api/desk/mail/dmarc";
 export const DESK_ADAPTER_PATH = "/api/desk/adapter";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-export type Outcome = { ok: boolean; text: string; recorded?: boolean; correction?: number; uncertain?: boolean; undo?: string; undoKind?: "move" | "snooze" | "trust"; block?: string; restored?: string; rule?: MailRuleView };
+export type Outcome = { ok: boolean; text: string; recorded?: boolean; correction?: number; uncertain?: boolean; queued?: boolean; undo?: string; undoKind?: "move" | "snooze" | "trust"; block?: string; restored?: string; rule?: MailRuleView };
 
 const isRuleView = (v: unknown): v is MailRuleView => typeof v === "object" && v !== null && "id" in v && typeof v.id === "string" && "sentence" in v && typeof v.sentence === "string";
 
@@ -26,10 +26,11 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
   } catch (err) {
     return { ok: false, uncertain: true, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
   }
-  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown; correction?: unknown; undo?: unknown; block?: unknown; restored?: unknown; rule?: unknown } | null;
+  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; queued?: unknown; recorded?: unknown; correction?: unknown; undo?: unknown; block?: unknown; restored?: unknown; rule?: unknown } | null;
   if (res.ok) {
     return {
       ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done.",
+      ...(parsed?.queued === true ? { queued: true } : {}),
       ...(typeof parsed?.undo === "string" ? { undo: parsed.undo } : {}), ...(typeof parsed?.block === "string" ? { block: parsed.block } : {}),
       ...(typeof parsed?.restored === "string" ? { restored: parsed.restored } : {}),
       ...(isRuleView(parsed?.rule) ? { rule: parsed.rule } : {}),

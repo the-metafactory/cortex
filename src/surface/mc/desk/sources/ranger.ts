@@ -115,7 +115,7 @@ export function rangerTitles(state: RangerState): Map<string, { title: string; u
   return titles;
 }
 
-/** The node holding a lane, as the Desk names it: its title, or `repo#N` when Ranger has none. */
+/** The Ranger item holding a lane, as the Desk names it: its title, or `repo#N` when Ranger has none. */
 export function laneHolderName(state: RangerState, lane: string): string | undefined {
   const holder = state.laneHolders?.[lane];
   if (!holder) return undefined;

@@ -445,7 +445,7 @@ describe("a ruling while Ranger's lane is held", () => {
   it("queues the resume with --when-free and names the holder, once", async () => {
     const t = setup({ state: held() });
     const res = await t.rule(RULING);
-    expect(await res.json()).toEqual({ ok: true, message: 'Recorded your ruling. The resume of "Pick the export format" is queued behind "Holder task".' });
+    expect(await res.json()).toEqual({ ok: true, message: 'Recorded your ruling. The resume of "Pick the export format" is queued behind "Holder task".', queued: true });
     expect(t.ranger.calls.map((c) => c.argv)).toEqual([["/opt/ranger/bin/ranger", "resume-node", "12", "--map", "example/app#1", "--when-free"]]);
     const again = await t.rule({ ...RULING, requestId: "req-00000002" });
     expect(again.status).toBe(502);

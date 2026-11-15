@@ -99,7 +99,7 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
       runtime.ledger.release(plan.claimKey);
     }
     const title = needsYouEntry(state, key)?.title ?? "the node";
-    if (plan.queuedBehind !== undefined) return Response.json({ ok: true, message: `Recorded your ruling. The resume of "${title}" is queued behind "${plan.queuedBehind}".` }, { headers: noStore });
+    if (plan.queuedBehind !== undefined) return Response.json({ ok: true, message: `Recorded your ruling. The resume of "${title}" is queued behind "${plan.queuedBehind}".`, queued: true }, { headers: noStore });
     return Response.json({ ok: true, message: `Recorded your ruling and resumed "${title}".` }, { headers: noStore });
   } finally {
     rulings.release(requestId);

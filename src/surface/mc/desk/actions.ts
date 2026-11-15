@@ -101,7 +101,7 @@ function otherHolder(state: RangerState, entry: RangerNeedsYou): string | undefi
 }
 
 /**
- * The resume a recorded ruling triggers: `resume-node --when-free` while another node holds the lane and Ranger
+ * The resume a recorded ruling triggers: `resume-node --when-free` while another Ranger item holds the lane and Ranger
  * offers the queue, otherwise the plain retry. Built from a fresh read, like every Ranger call.
  */
 export function planResume(state: RangerState, itemKey: string, cli: RangerCli): ResumePlan | string {
