@@ -152,7 +152,7 @@
   "src/common/crypto/payload-encryption.ts": 1,
   "src/common/data-path.ts": 13,
   "src/common/github-events.ts": 2,
-  "src/common/graph-ref.ts": 2,
+  "src/common/graph-ref.ts": 1,
   "src/common/inference/registry.ts": 2,
   "src/common/inference/secret-ref.ts": 1,
   "src/common/migrate-data-dir.ts": 1,
