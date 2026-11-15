@@ -137,6 +137,7 @@ export class DecisionStore {
   }
 
   today(now: number = this.clock()): DeskDecision[] {
+    this.guard("prune", undefined, () => { this.prune(); });
     return this.guard("read", [], () => readDecisions(this.db, now));
   }
 }
@@ -147,9 +148,11 @@ export function readDecisions(db: Database, now: number): DeskDecision[] {
   const rows = db.query<Row, [number, number]>("SELECT id, operation_key, item_key, action, repo, node_id, title, text, decided_at, outcome, outcome_detail, outcome_at FROM desk_decisions WHERE decided_at >= ? AND decided_at <= ?").all(now - DECISION_RETENTION_MS, now);
   const later = new Map<string, DeskDecision["supersededBy"]>();
   const rulings = rows.filter(row => row.action === "ranger.rule").sort((a, b) => a.decided_at - b.decided_at || a.id.localeCompare(b.id));
-  for (const [index, row] of rulings.entries()) {
-    const next = rulings.slice(index + 1).find(candidate => candidate.repo === row.repo && candidate.node_id === row.node_id);
-    later.set(row.id, next ? { id: next.id, decidedAt: next.decided_at } : null);
+  const newestByTarget = new Map<string, DeskDecision["supersededBy"]>();
+  for (const row of rulings.toReversed()) {
+    const target = JSON.stringify([row.repo, row.node_id]);
+    later.set(row.id, newestByTarget.get(target) ?? null);
+    newestByTarget.set(target, { id: row.id, decidedAt: row.decided_at });
   }
   return rows
     .filter(row => row.decided_at >= start && row.decided_at < end)
