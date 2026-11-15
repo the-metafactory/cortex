@@ -212,7 +212,7 @@ describe("mail hand-off and Studio", () => {
       localSources: boundary, db, writers: { task: ["task-writer"] }, maps: [{ ref: "owner/repo#1", label: "Tasks" }], lanes: { cloud: { provider: "p", model: "m" } },
       run: async () => { writes += 1; return { code: 0, stdout: "{}", stderr: "" }; }, now: NOW, timeoutMs: 1000, assistantName: "Assistant",
     });
-    expect(result).toEqual({ ok: false, status: 409, error: workMailNoHandoff("Assistant") });
+    expect(result).toMatchObject({ ok: false, status: 409, error: workMailNoHandoff("Assistant") });
     expect(writes).toBe(0);
   });
 

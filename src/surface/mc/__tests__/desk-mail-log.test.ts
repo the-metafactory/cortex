@@ -226,12 +226,12 @@ describe("Opened on the Desk", () => {
   it("logs one open per mail until the next decision, never as a decision, and refuses a mail the Desk does not list", async () => {
     const rt = await deskWith([mail("o1@stats"), mail("o2@stats")]);
     const open = async (key: string, at: number): Promise<Response> => handleDeskMail(post({ action: "opened", key }), db, rt, { now: () => at });
-    expect(await (await open("mail:o1@stats", NOW)).json()).toEqual({ ok: true, recorded: true });
-    expect(await (await open("mail:o1@stats", NOW + 1000)).json()).toEqual({ ok: true, recorded: false });
+    expect(await (await open("mail:o1@stats", NOW)).json()).toMatchObject({ ok: true, recorded: true });
+    expect(await (await open("mail:o1@stats", NOW + 1000)).json()).toMatchObject({ ok: true, recorded: false });
     expect((await open("mail:gone@stats", NOW)).status).toBe(409);
     expect(lastMailDecision(db, "o1@stats")).toBeNull();
     logMailDecision(db, mailFeatures(db, mail("o1@stats")), "restore", "desk", NOW + 2000);
-    expect(await (await open("mail:o1@stats", NOW + 3000)).json()).toEqual({ ok: true, recorded: true });
+    expect(await (await open("mail:o1@stats", NOW + 3000)).json()).toMatchObject({ ok: true, recorded: true });
     expect(lastMailDecision(db, "o1@stats")?.action).toBe("restore");
     expect(rows()).toEqual([
       { messageId: "o1@stats", action: "opened", where: "desk", folder: null },

@@ -1,3 +1,4 @@
+import { withActPhrase } from "../desk/act-result";
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { assistantNameOf } from "../desk/assistant-name";
@@ -48,7 +49,7 @@ async function runAsk(db: Database, desk: DeskOptions, request: OutlineAskReques
   return { status: 200, body: { ok: true, ...reply } };
 }
 
-export async function handleDeskOutlineAsk(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: OutlineAskDeps = {}): Promise<Response> {
+async function handleDeskOutlineAskRaw(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: OutlineAskDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const desk = runtime?.options;
   if (!desk?.enabled) return answer(refuse(409, "The Desk is turned off."));
@@ -63,3 +64,5 @@ export async function handleDeskOutlineAsk(req: Request, db: Database, runtime: 
   const fingerprint = createHash("sha256").update(JSON.stringify([request.row, request.kind, question, passage])).digest("hex");
   return answer(await rememberOnce(db, request.requestId, fingerprint, () => runAsk(db, desk, request, question, passage, deps.model ?? outlineAskModel)));
 }
+
+export const handleDeskOutlineAsk = async (req: Request, db: Database, runtime: DeskRuntime | undefined, deps: OutlineAskDeps = {}): Promise<Response> => withActPhrase(req, new URL(req.url).pathname, await handleDeskOutlineAskRaw(req, db, runtime, deps));

@@ -125,5 +125,5 @@ test("grilling sources refuse absent, closed or unreadable nodes and preserve lo
   expect(local).toMatchObject({ state: "available", policy: "local", context: `${BODY}\n\nSource: ${NODE_URL}` });
   const response = await handleConversations(new Request("http://127.0.0.1:8767/api/conversations/starts", { method: "POST", headers: { host: "127.0.0.1:8767" } }), new URL("http://127.0.0.1:8767/api/conversations/starts"), guard, () => null);
   expect(response.status).toBe(503);
-  expect(await response.json()).toEqual({ ok: false, error: "Conversations are not set up on this stack." });
+  expect(await response.json()).toMatchObject({ ok: false, error: "Conversations are not set up on this stack." });
 });

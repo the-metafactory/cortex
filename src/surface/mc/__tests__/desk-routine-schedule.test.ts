@@ -96,7 +96,7 @@ describe("Desk schedule edit contract and ledger", () => {
     const db = initDatabase(":memory:"); const s = owner();
     try {
       const request = await intent(s); expect(s.writes).toHaveLength(0);
-      expect(await actOnRoutineSchedule(db, options, request, s.run)).toEqual({ ok: true, message: "Schedule saved and verified." });
+      expect(await actOnRoutineSchedule(db, options, request, s.run)).toMatchObject({ ok: true, message: "Schedule saved and verified." });
       expect(s.writes).toHaveLength(1); expect(s.writes[0]).toContain("--owner-timezone"); expect(s.get().current.timezone).toBeNull();
       expect(await actOnRoutineSchedule(db, options, request, s.run)).toMatchObject({ ok: true }); expect(s.writes).toHaveLength(1);
       expect(await actOnRoutineSchedule(db, options, { ...request, schedule: "0 10 * * *" }, s.run)).toMatchObject({ ok: false, error: expect.stringContaining("different routine action") });

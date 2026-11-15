@@ -170,7 +170,7 @@ describe("Add a mail to a Studio thread", () => {
     expect(activeMailLink(db, "w1")).toMatchObject({ id, toKind: "thread", toKey: "engines", toTitle: "What can engines make?", origin: "desk" });
     expect(await compose()).toBe(false);
     expect((await act({ action: "studio.add", key: "mail:w1", requestId: "req-link-1", thread: "engines", includeText: false })).status).toBe(200);
-    expect(await act({ action: "studio.add", key: "mail:w1", requestId: "req-link-2", thread: "engines", includeText: false })).toEqual({ status: 409, json: { ok: false, error: "This mail is already attached to “What can engines make?”. Undo that first." } });
+    expect(await act({ action: "studio.add", key: "mail:w1", requestId: "req-link-2", thread: "engines", includeText: false })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "This mail is already attached to “What can engines make?”. Undo that first." } });
     await handleDeskCaptureUndo(new Request("http://localhost/api/desk/capture/undo", { method: "POST", body: JSON.stringify({ id, requestId: "req-link-3" }) }), db, runtime);
     expect(activeMailLink(db, "w1")).toBeNull();
     expect(await compose()).toBe(true);
@@ -179,7 +179,7 @@ describe("Add a mail to a Studio thread", () => {
   it("attach.undo on a thread link removes the capture from the thread", async () => {
     await act({ action: "studio.add", key: "mail:w1", requestId: "req-link-4", thread: "engines", includeText: false });
     const id = readDone(db, NOW)[0]?.itemKey ?? "";
-    expect(await act({ action: "attach.undo", link: id })).toEqual({ status: 200, json: { ok: true, message: "“Engines w1” is back on the Desk.", restored: "mail:w1" } });
+    expect(await act({ action: "attach.undo", link: id })).toEqual({ status: 200, json: { ok: true, messagePhrase: expect.anything(), message: "“Engines w1” is back on the Desk.", restored: "mail:w1" } });
     expect(readThread("engines")).not.toContain("capture:");
     expect(readDone(db, NOW)[0]?.action).toBe("studio.capture.undone");
   });

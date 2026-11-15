@@ -121,7 +121,7 @@ test("an exact saved retry returns its receipt after the selected commitment bec
   const input = { db, desk, mail, body: "Saved reply", decision: decision(), now, save: async () => { calls++; return { ok: true as const, message: "Saved once" }; } };
   expect((await saveDecisionDraft(input)).ok).toBe(true);
   writeFileSync(join(dir, "threads", "active.md"), thread("parked"));
-  expect(await saveDecisionDraft(input)).toEqual({ ok: true, message: "Saved once" });
+  expect(await saveDecisionDraft(input)).toMatchObject({ ok: true, message: "Saved once" });
   expect(calls).toBe(1);
 });
 

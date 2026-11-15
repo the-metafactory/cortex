@@ -130,7 +130,7 @@ describe("sweep executor", () => {
 
   it("refuses a sweep when none of the confirmed mails is still in the group, and writes no Done line", async () => {
     const { q, deps } = moveDeps();
-    expect(await runSweep(group(REPORTS), ["mail:gone"], deps)).toEqual({ ok: false, status: 409, error: "None of these mails is in this group any more. Look at it again." });
+    expect(await runSweep(group(REPORTS), ["mail:gone"], deps)).toMatchObject({ ok: false, status: 409, error: "None of these mails is in this group any more. Look at it again." });
     expect(q.calls).toHaveLength(0);
     expect(doneTitle()).toBeUndefined();
   });
@@ -152,12 +152,12 @@ describe("sweep executor", () => {
     expect(partial).toMatchObject({ ok: true, message: "Moved 2 of 3 back to INBOX. Still moved: “Subject r2” (The mail was not moved back: INBOX is not writable). Undo again to retry." });
     expect(doneRows()[0]?.action).toBe("mail.sweep");
     const all = await undoSweep(r.sweep, deps);
-    expect(all).toEqual({ ok: true, message: "Moved 3 mails back to INBOX." });
+    expect(all).toMatchObject({ ok: true, message: "Moved 3 mails back to INBOX." });
     const restores = q.calls.slice(3).map((c) => c.stdin as { action: string; messageId: string; from: string });
     expect(restores.map((c) => [c.action, c.messageId, c.from])).toEqual([["restore", "r1", "archive"], ["restore", "r2", "archive"], ["restore", "r3", "archive"], ["restore", "r2", "archive"]]);
     expect(doneRows()[0]).toMatchObject({ action: "mail.sweep.undone", message: "Moved 3 mails back to INBOX." });
     expect(queryMailLog(db, { actions: ["restore"] })).toHaveLength(3);
-    expect(await undoSweep(r.sweep, deps)).toEqual({ ok: false, status: 409, error: "That sweep is already undone." });
+    expect(await undoSweep(r.sweep, deps)).toMatchObject({ ok: false, status: 409, error: "That sweep is already undone." });
   });
 
   it("moves a bundle the Desk suggested to archive to Junk instead, and logs each predicted mail as a correction", async () => {
@@ -171,7 +171,7 @@ describe("sweep executor", () => {
     expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_classes WHERE message_id IN ('r1', 'r2')").get()?.n).toBe(0);
     expect(doneTitle()).toBe("Moved to Junk 3 mails from the stats list");
     if (!r.ok) throw new Error(r.error);
-    expect(await undoSweep(r.sweep, deps)).toEqual({ ok: true, message: "Moved 3 mails back to INBOX." });
+    expect(await undoSweep(r.sweep, deps)).toMatchObject({ ok: true, message: "Moved 3 mails back to INBOX." });
     expect(q.calls.slice(3).map((c) => (c.stdin as { from: string }).from)).toEqual(["junk", "junk", "junk"]);
     expect(queryMailLog(db, { where: "correction" })).toEqual([]);
   });
@@ -192,7 +192,7 @@ describe("sweep executor", () => {
     const r = await runSweep(group(REPORTS), ["mail:r1", "mail:r2", "mail:r3"], deps);
     if (!r.ok) throw new Error(r.error);
     db.query("UPDATE desk_mail_sweep_mails SET status = 'moving', move_id = NULL WHERE message_id = 'r3'").run();
-    expect(await undoSweep(r.sweep, deps)).toEqual({ ok: true, message: "Moved 2 mails back to INBOX." });
+    expect(await undoSweep(r.sweep, deps)).toMatchObject({ ok: true, message: "Moved 2 mails back to INBOX." });
     expect(movedIds(q.calls.slice(3))).toEqual(["r1", "r2"]);
   });
 });
