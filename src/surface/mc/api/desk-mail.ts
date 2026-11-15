@@ -1,5 +1,6 @@
 import { sourceBoundary } from "../desk/source-boundary";
 import { z } from "zod";
+import { answer as actAnswer, failResponse, type ActResult } from "../desk/act-result";
 import { CommitmentSchema, decisionReceipt, MailDecisionSchema, mailYesFilter, saveDecisionDraft } from "../desk/mail-yes-filter";
 import { calendarsOnly, freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
 import { calendarAvailability } from "../desk/calendar-availability";
@@ -10,11 +11,12 @@ import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { correctMail, draftReply, MAIL_CORRECTIONS, markUnimportant, reportMail, resolveListedMail, type ListedMail } from "../desk/mail-actions";
 import { logMailDecision, mailFeatures, recordMailOpened } from "../desk/mail-log";
-import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
+import { blockSenderDomain, MOVE_TARGETS, moveMail, restoreJunkMail, undoMove, type MoveDeps } from "../desk/mail-move";
+import { listedJunk } from "../desk/mail-junk";
 import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
 import { suspicionContext, suspicionOf, type SuspicionReason } from "../desk/mail-suspicion";
-import { dismissSuspicion, removeTrustedSender, undoDismissal } from "../desk/mail-trust";
+import { dismissSuspicion, recordNotSpamCorrection, removeTrustedSender, undoDismissal } from "../desk/mail-trust";
 import { archiveWhatArrives, offerContext, unsubscribeMail, type OneClickPost } from "../desk/mail-unsubscribe";
 import { addMailToStudio, mailForStudio, MAX_MAIL_REASON, proposeMailThread } from "../desk/mail-studio";
 import type { CaptureModel } from "../desk/studio/capture";
@@ -57,6 +59,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
   z.object({ action: z.enum(["trash", "unimportant", "report", "digest.keep", "unsubscribe", "unsubscribe.rule"]), key: z.string() }).strict(),
   z.object({ action: z.literal("move"), key: z.string(), target: z.enum(MOVE_TARGETS) }).strict(),
+  z.object({ action: z.enum(["mail.spam", "mail.notspam"]), key: z.string().min(1).max(2000) }).strict(),
   z.object({ action: z.literal("correct"), key: z.string(), said: z.enum(MAIL_CORRECTIONS), correction: z.number().int().positive().optional() }).strict(),
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
   z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails), target: z.enum(MOVE_TARGETS).optional() }).strict(),
@@ -83,7 +86,8 @@ export const SWEEP_WAIT_MS = 8000;
 const STILL_MOVING = "Still moving the mails. Done for you shows the result when it is finished.";
 
 export const noStore = { "Cache-Control": "no-store" };
-export const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
+export const fail = (status: number, error: string): Response => failResponse(status, error);
+
 
 export interface DeskMailDeps {
   run?: WriterRunner;
@@ -126,7 +130,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   const decision = body.action === "draft" ? body.decision : undefined;
   if (decision && body.action === "draft") {
     const receipt = decisionReceipt(db, body.key, body.body, decision);
-    if (receipt) return receipt.ok ? Response.json({ ok: true, message: receipt.message }, { headers: noStore }) : fail(receipt.status, receipt.error);
+    if (receipt) return receipt.ok ? Response.json({ ok: true, message: receipt.message, messagePhrase: { code: "act.done", params: { kind: "draft" } } }, { headers: noStore }) : fail(receipt.status, receipt.error);
   }
   if (body.action === "not-phishing.undo") return answer(undoDismissal(db, body.trust, now));
   if (body.action === "not-phishing.remove") return answer(removeTrustedSender(db, body.sender, now));
@@ -134,10 +138,18 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if ((body.action === "hide" || body.action === "hide.undo") && !body.key.startsWith("mail:")) return fail(400, "A hide key starts with mail:.");
   if (body.action === "hide.undo") return answer(undoHide(db, body.key.slice("mail:".length)));
   if (body.action === "attach.undo") return answer(await undoAttach(db, body.link, undoAttachDeps(db, runtime, now)));
+  if (body.action === "mail.notspam") {
+    const mail = listedJunk(runtime.sourceCache?.cached() ?? [], now).find(m => m.key === body.key);
+    return mail ? answer(await restoreJunkMail(mail, moveDeps, id => recordNotSpamCorrection(db, mail, id, now))) : fail(409, "The Desk no longer lists this junk mail.");
+  }
   const listed = resolveListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!listed.ok) return fail(409, listed.error);
   const mail = listed.mail;
-  if (body.action === "opened") return Response.json({ ok: true, recorded: recordMailOpened(db, mail, now) }, { headers: noStore });
+  if (body.action === "mail.spam") return answer(await moveMail(mail, "junk", moveDeps));
+  if (body.action === "opened") {
+    const recorded = recordMailOpened(db, mail, now);
+    return Response.json({ ok: true, recorded, messagePhrase: { code: "mail.opened", params: { recorded } } }, { headers: noStore });
+  }
   if (body.action === "not-phishing") return answer(dismissSuspicion(db, mail, mailSuspicion(db, mail, runtime.options.mailOwnDomains), now, deps.newId));
   if (body.action === "snooze") return answer(snoozeMail(db, mail, body.until, { now, readings: runtime.sourceCache?.cached() ?? [] }));
   if (body.action === "hide") return answer(hideMail(db, mail, now));
@@ -161,17 +173,17 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     if (!studio) return fail(409, "The Studio is not set up on this stack.");
     const item = mailForStudio(db, runtime.sourceCache?.cached() ?? [], mail);
     const studioDeps = { localSources: sourceBoundary(runtime.options), options: studio, assistantName: assistantNameOf(runtime.options), areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
-    if (body.action === "studio.propose") return Response.json({ ok: true, proposal: await proposeMailThread(item, studioDeps) }, { headers: noStore });
+    if (body.action === "studio.propose") return Response.json({ ok: true, proposal: await proposeMailThread(item, studioDeps), messagePhrase: { code: "mail.studio-proposed" } }, { headers: noStore });
     const { requestId, thread, reason, includeText } = body;
     const added = await addMailToStudio(item, { requestId, thread, includeText, ...(reason ? { reason } : {}) }, studioDeps);
-    return added.ok ? Response.json({ ok: true, message: added.message }, { headers: noStore }) : fail(added.status, added.error);
+    return added.ok ? Response.json({ ok: true, message: added.message, messagePhrase: { code: "mail.studio-added", params: { thread } } }, { headers: noStore }) : fail(added.status, added.error);
   }
   if (body.action === "draft") {
     const features = mailFeatures(db, mail);
     const saved = decision ? await saveDecisionDraft({ db, desk: runtime.options, mail, body: body.body, decision, now, save: () => draftReply(mail, body.body, moveDeps) }) : await draftReply(mail, body.body, moveDeps);
     if (!saved.ok) return answer(saved);
     logMailDecision(db, features, "draft", "desk", now, "Drafts");
-    return Response.json({ ok: true, message: saved.message }, { headers: noStore });
+    return Response.json({ ok: true, message: saved.message, messagePhrase: { code: "mail.reply-drafted", params: { account: mail.account ?? "mail" } } }, { headers: noStore });
   }
   if (body.action === "unimportant") return answer(await markUnimportant(db, mail, moveDeps));
   if (body.action === "report") return answer(await reportMail(mail, runtime.options.mailReport, moveDeps));
@@ -179,7 +191,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (body.action === "correct") {
     const corrected = await correctMail(mail, body.said, moveDeps, body.correction);
     if (!("recorded" in corrected)) return answer(corrected);
-    return Response.json({ ok: false, error: corrected.error, recorded: true, correction: corrected.correction }, { status: corrected.status, headers: noStore });
+    return Response.json({ ok: false, error: corrected.error, messagePhrase: { code: "act.failed", params: { kind: "correct" } }, detail: corrected.error, recorded: true, correction: corrected.correction }, { status: corrected.status, headers: noStore });
   }
   if (body.action === "unsubscribe.rule") return answer(archiveWhatArrives(db, mail, now));
   if (body.action === "unsubscribe") {
@@ -292,7 +304,7 @@ async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, 
     const result = await Promise.race([work, late]);
     if (result === null) {
       work.catch((err: unknown) => { console.error(`desk: mail sweep: ${err instanceof Error ? err.message : String(err)}`); });
-      return Response.json({ ok: true, message: STILL_MOVING }, { status: 202, headers: noStore });
+      return Response.json({ ok: true, message: STILL_MOVING, messagePhrase: { code: "act.done", params: { kind: "sweep" } } }, { status: 202, headers: noStore });
     }
     return answer(result);
   } finally {
@@ -300,7 +312,6 @@ async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, 
   }
 }
 
-function answer(result: { ok: true } | { ok: false; status: number; error: string }): Response {
-  if (!result.ok) return fail(result.status, result.error);
-  return Response.json(result, { headers: noStore });
+function answer(result: ActResult): Response {
+  return actAnswer(result);
 }

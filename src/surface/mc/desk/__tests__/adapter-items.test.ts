@@ -30,6 +30,16 @@ test.each(["other", "studio"])("an adapter cannot claim unconfigured %s ownershi
   expect(view.sources.find(source => source.id === "adapter:synthetic-one")).toEqual({ id: "adapter:synthetic-one", ok: false, error: "An adapter attention mapping could not be displayed safely." });
 });
 
+test("an adapter capability label remains content without a phrase", async () => {
+  const item = await open("local", { rowCapabilities: { granted: true } });
+  expect((await item.ingest(0)).status).toBe("ok");
+  const view = await compose(item);
+  const card = view.items[0];
+  expect(card?.actions).toHaveLength(1);
+  expect(card?.actions[0]).toMatchObject({ label: "Complete" });
+  expect(card?.actions[0]).not.toHaveProperty("labelPhrase");
+});
+
 test("two unknown adapters produce distinct canonical items and use existing Catch-up filters without fetching", async () => {
   const item = await open();
   for (const index of [0, 1]) expect((await item.ingest(index)).status).toBe("ok");
@@ -39,9 +49,10 @@ test("two unknown adapters produce distinct canonical items and use existing Cat
   expect(view.items).toHaveLength(2);
   for (const source of item.sources) {
     const card = view.items.find(card => card.source === source.adapterId)!;
-    expect(card).toMatchObject({ kind: "adapter", title: "Synthetic review", why: "Review the synthetic observation.", dueAt: "2026-11-01", area: "lab", urgency: "today", score: 55, actions: [], readOnly: true, freshness: "fresh", detail: { links: [{ label: "Open source", url: "https://example.test/synthetic" }] } });
+    expect(card).toMatchObject({ kind: "adapter", title: "Synthetic review", why: "Review the synthetic observation.", dueAt: "2026-11-01", area: "lab", urgency: "today", score: 55, actions: [], readOnly: true, freshness: "fresh", detail: { links: [{ kind: "source", label: "Open source", url: "https://example.test/synthetic" }] } });
     expect(card.key).toBe(`adapter:${canonicalWire({ adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: "item-0" })}`);
     expect(card.attention).toBeUndefined();
+    expect(card.whyPhrase).toBeUndefined();
     expect(card.interrupt).toBeUndefined();
     expect(catchupItems(view.items, "lab", "all", "adapter", source.adapterId)).toEqual([card]);
     expect(catchupItems(view.items, "lab", "update", "adapter")).toEqual([]);

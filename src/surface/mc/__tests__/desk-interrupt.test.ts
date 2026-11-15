@@ -55,13 +55,13 @@ describe("Desk interruptions", () => {
       title: `"Stand-up" starts at ${new Date(NOW + 10 * MIN).toTimeString().slice(0, 5)}.`,
       why: "It starts in 10 minutes.",
       action: { label: "Join", url: "https://meet.example/abc" },
-      reason: { code: "meeting.soon" },
+      reason: { code: "meeting.soon", phrase: { code: "meeting.soon" } },
     }]);
     await tick(transport, NOW + MIN, desk(), cache);
     await tick(transport, NOW + 2 * MIN, desk(), cache);
     expect(transport.sent).toHaveLength(1);
     const later = await tick(transport, NOW + 3 * MIN, desk(), cache);
-    expect(later.view.items[0]?.interrupt).toEqual({ delivery: "sent", reason: { code: "meeting.soon" } });
+    expect(later.view.items[0]?.interrupt).toEqual({ delivery: "sent", reason: { code: "meeting.soon", phrase: { code: "meeting.soon" } } });
     expect(readDeliveries(db).get(`meeting:cal:cal:e1@${NOW + 10 * MIN}`)?.ref).toBe("m-1");
   });
 
@@ -139,7 +139,7 @@ describe("Desk interruptions", () => {
     const second = await tick(transport, NOW + MIN, desk(), cache);
     expect(second.pushed).toEqual([]);
     const reminder = second.view.items.find((i) => i.key === "reminder:1");
-    expect(reminder?.interrupt).toEqual({ delivery: "buffered", reason: { code: "reminder.due" } });
+    expect(reminder?.interrupt).toEqual({ delivery: "buffered", reason: { code: "reminder.due", phrase: { code: "reminder.due" } } });
     expect(reminder?.score).toBeLessThan(99);
     expect(readDeliveries(db).get("reminder:1")).toMatchObject({ status: "buffered", error: null, ref: null });
     expect(transport.sent).toHaveLength(1);
@@ -173,7 +173,7 @@ describe("Desk interruptions", () => {
     const off = { ...RULES, transport: "none" as const };
     const { view, pushed } = await tick(transport, NOW, desk(off));
     expect(pushed).toEqual([]);
-    expect(view.items[0]?.interrupt).toEqual({ delivery: "off", reason: { code: "meeting.soon" } });
+    expect(view.items[0]?.interrupt).toEqual({ delivery: "off", reason: { code: "meeting.soon", phrase: { code: "meeting.soon" } } });
     expect(readDeliveries(db).size).toBe(0);
   });
 

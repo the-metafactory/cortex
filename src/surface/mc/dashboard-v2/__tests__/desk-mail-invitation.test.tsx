@@ -5,6 +5,7 @@ import { fetchInviteProposal } from "../lib/desk-action";
 import type { InvitationView } from "../../desk/mail-invitation";
 
 const VIEW: InvitationView = {
+  startIso: "2026-11-03T13:00:00.000Z", endIso: "2026-11-03T14:00:00.000Z",
   uid: "uid-1", summary: "Budget review", when: "Tuesday 3 November, 14:00–15:00", start: "2026-11-03T13:00:00.000Z", end: "2026-11-03T14:00:00.000Z",
   organizer: "Olga <olga@example.org>", attendee: true, status: "NEEDS-ACTION", canReply: true,
   conflicts: { kind: "conflicts", events: [{ title: "Team sync", at: Date.parse("2026-11-03T13:00:00Z"), end: Date.parse("2026-11-03T13:30:00Z"), calendar: "Work", maybe: false }] },

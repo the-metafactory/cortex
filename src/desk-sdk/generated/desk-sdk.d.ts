@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.10.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.11.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -906,6 +906,42 @@ export declare function mailUnsubscribeSnapshot(options: {
 	connectionId: string;
 	account: string;
 	input: MailUnsubscribeInput;
+	provenance: Provenance;
+}): ApprovedSnapshot;
+export declare const MAIL_REPORT_KINDS: readonly [
+	"draft",
+	"spam",
+	"phishing"
+];
+export type MailReportKind = (typeof MAIL_REPORT_KINDS)[number];
+export declare const MAIL_REPORT_CAPABILITY: Readonly<Record<MailReportKind, string>>;
+declare const MailReportInputSchema: z.ZodObject<{
+	message: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+}, z.core.$strict>;
+export type MailReportInput = z.infer<typeof MailReportInputSchema>;
+declare const MailReportOutputSchema: z.ZodObject<{
+	ref: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	folder: z.ZodString;
+}, z.core.$strict>;
+export type MailReportOutput = z.infer<typeof MailReportOutputSchema>;
+/** The declaration a Mail adapter publishes for the report kinds. Provider reports need restore too, because Undo moves the mail back. */
+export declare function mailReportDeclaration(adapterId: string, kinds?: readonly MailReportKind[]): AdapterDeclaration;
+export declare function mailReportSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: string;
+	kind: MailReportKind;
+	input: MailReportInput;
 	provenance: Provenance;
 }): ApprovedSnapshot;
 /**

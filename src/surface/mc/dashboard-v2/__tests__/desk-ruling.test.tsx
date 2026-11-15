@@ -32,7 +32,7 @@ const blocked: DeskItem = {
   why: "The agent in app cannot go on without a decision from you.",
   score: 65,
   actions: [{ id: "ranger.rule", label: "Give your ruling", role: "primary", wired: true }],
-  detail: { summary: "blocked: …", history: [], refs: ["example/app#12"], links: [{ label: "Issue", url: "https://github.com/example/app/issues/12" }] },
+  detail: { summary: "blocked: …", history: [], refs: ["example/app#12"], links: [{ kind: "issue", label: "Issue", url: "https://github.com/example/app/issues/12" }] },
   question: { condition: "the principal picks CSV or JSON", reason: "Blocked: the spec names both formats." },
   explanation,
 };
@@ -69,6 +69,18 @@ describe("the ruling box", () => {
     expect(html).toMatch(/<details[^>]*class="desk-ruling-raw"/);
     expect(html).toContain("Resume once: the principal picks CSV or JSON");
     expect(html).toContain('href="https://github.com/example/app/issues/12"');
+  });
+
+  it("shows an escalation's explanation or its specific fallback without calling it Ranger's report", () => {
+    const escalation: DeskItem = { ...blocked, key: "vigil:state:escalation:default:example/app#12", kind: "escalation", source: "vigil", question: undefined };
+    const explained = box(escalation);
+    expect(explained).toContain(explanation.sentence);
+    expect(explained).toContain("Escalated issue");
+    expect(explained).not.toContain("Ranger");
+    const summary = "The issue body could not be read for an explanation. Answer from this card.";
+    const html = box({ ...escalation, explanation: undefined, detail: { ...escalation.detail, summary } });
+    expect(html).toContain(summary);
+    expect(html).not.toContain(RULING_FALLBACK);
   });
 
   it("keeps Confirm off until there is a ruling", () => {

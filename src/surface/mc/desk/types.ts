@@ -8,10 +8,11 @@ import type { RoutineView } from "./routine-command";
 import type { CalendarAvailability } from "./calendar-availability";
 import type { EventAvailability } from "./calendar-contract";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
+import type { DeskPhrase } from "./phrases";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
-export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "reminder", "meeting", "mail-rule", "dmarc", "mail-waiting", "mail-handoff", "task-handoff", "adapter"] as const;
+export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "mail-junk", "reminder", "meeting", "mail-rule", "dmarc", "mail-waiting", "mail-handoff", "task-handoff", "adapter"] as const;
 
 export type DeskItemKind = (typeof DESK_ITEM_KINDS)[number];
 
@@ -31,23 +32,36 @@ export interface DeskArea {
   color: string;
 }
 
+/** `label` is deprecated in favour of `id` for fixed wording, or `labelPhrase` for wording with parameters. Adapter capability labels are content. Served through 1.x; removed in 2.0. */
 export interface DeskAction {
   id: string;
   label: string;
+  labelPhrase?: DeskPhrase;
   role: "primary" | "secondary";
   wired: boolean;
   url?: string;
   target?: string;
 }
 
+/** `label` is deprecated in favour of `kind` and `url`, or `labelPhrase` for a task identifier. Served through 1.x; removed in 2.0. */
 export interface DeskLink {
+  kind: "mail" | "issue" | "report" | "source" | "unsubscribe-page" | "task" | "meeting" | "meeting-join";
   label: string;
+  labelPhrase?: DeskPhrase;
   url: string;
 }
 
 export interface DeskMention {
   text: string;
   url: string;
+}
+
+export interface JunkReviewMail {
+  key: string;
+  from: { name?: string; address: string };
+  subject: string;
+  receivedAt: string;
+  action: DeskAction;
 }
 
 export interface DeskEvidence {
@@ -81,10 +95,23 @@ export interface DeskCorrection {
   source: string;
   mode: DeskCorrectionMode;
   label: string;
+  labelPhrase?: DeskPhrase;
   createdAt: number;
 }
 
+export interface DeskWhyContent {
+  reason?: string;
+  sourceStatusReason?: string;
+  goalWording?: string;
+  precedentNote?: string;
+  precedentSenders?: string[];
+  unsubscribeFailure?: string;
+  unsubscribeUrl?: string;
+  meetingTitle?: string;
+}
+
 export interface DeskItem {
+  junkReview?: { mails: JunkReviewMail[] };
   readOnly?: boolean;
   badge?: string;
   destination?: ObjectReference;
@@ -103,6 +130,8 @@ export interface DeskItem {
   title: string;
   why: string;
   mentions?: DeskMention[];
+  whyPhrase?: import("./phrases").DeskPhrase;
+  whyContent?: DeskWhyContent;
   score: number;
   actions: DeskAction[];
   more?: DeskAction[];
@@ -134,6 +163,7 @@ const FRESHNESS_LABEL: Record<NonNullable<DeskItem["freshness"]>, string | null>
   unavailable: "Observation unavailable",
 };
 
+/** The freshness label is deprecated in favour of the item's `freshness` code. This helper remains through 1.x and is removed in 2.0. */
 export function freshnessLabel(status: DeskItem["freshness"]): string | null {
   return status ? FRESHNESS_LABEL[status] : null;
 }
@@ -144,6 +174,7 @@ export type InterruptReasonCode = (typeof INTERRUPT_REASON_CODES)[number];
 
 export interface DeskInterruptReason {
   code: InterruptReasonCode;
+  phrase: Extract<import("./phrases").DeskPhrase, { code: InterruptReasonCode }>;
   target?: string;
   eventKey?: string;
   dueAt?: string;
@@ -165,6 +196,7 @@ export interface DeskInterrupt {
   feedback?: InterruptFeedback;
 }
 
+/** `label` is deprecated in favour of `code` and, for VIP mail, `target` and the configured VIP label. Served through 1.x; removed in 2.0. */
 export interface InterruptReasonView {
   code: InterruptReasonCode;
   target?: string;
@@ -175,6 +207,7 @@ export interface InterruptReasonView {
   changedAt?: number;
 }
 
+/** `label` is deprecated in favour of `kind`. Served through 1.x; removed in 2.0. */
 export interface DeskFoldedGroup {
   kind: DeskItemKind;
   label: string;
@@ -207,6 +240,7 @@ export interface DeskGoal {
 }
 
 export interface DeskView {
+  timeZone: string;
   calendarAvailability?: CalendarAvailability;
   routines?: RoutineView;
   mailRules?: import("./mail-rules").MailRuleView[];
@@ -247,6 +281,7 @@ export type DeskMailClassifier =
   | { kind: "endpoint"; host: string; model: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string; localProblem?: string }
   | { kind: "command"; command: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string; localProblem?: string };
 
+/** Each type's `label` and `note` are deprecated in favour of its `action` code. Served through 1.x; removed in 2.0. */
 export interface DeskAutonomy {
   types: { action: string; label: string; note: string; on: boolean }[];
   done: { key: string; action?: string; undo?: string; stop?: string; title: string; message: string; at: number; ok: boolean }[];

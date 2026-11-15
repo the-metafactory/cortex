@@ -131,6 +131,9 @@ export type { MailJudgementAction, MailJudgementInput, MailJudgementOutput } fro
 export { MAIL_UNSUBSCRIBE_CAPABILITY, mailUnsubscribeDeclaration, mailUnsubscribeSnapshot } from "../conversations/domain-adapters/mail/unsubscribe-contract";
 export type { MailUnsubscribeInput, MailUnsubscribeOutput } from "../conversations/domain-adapters/mail/unsubscribe-contract";
 
+export { MAIL_REPORT_CAPABILITY, MAIL_REPORT_KINDS, mailReportDeclaration, mailReportSnapshot } from "../conversations/domain-adapters/mail/report-contract";
+export type { MailReportInput, MailReportKind, MailReportOutput } from "../conversations/domain-adapters/mail/report-contract";
+
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {
   readonly sdkVersion: string;

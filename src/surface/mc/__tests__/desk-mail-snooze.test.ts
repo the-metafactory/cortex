@@ -156,7 +156,7 @@ describe("snoozed mail on the Desk", () => {
     const before = await composeWith(db, options, first, NOW);
     const card = before.items.find((i) => i.key === "mail:m1");
     expect([...(card?.actions ?? []), ...(card?.more ?? [])].map((a) => a.id)).toContain("mail.snooze");
-    expect(await ask(first, { action: "snooze", key: "mail:m1", until: { kind: "person", address: "lena@example.org" } })).toMatchObject({ ok: true, message: "Snoozed “Venue quote” until lena@example.org writes. Its read status in your mail stays unchanged." });
+    expect(await ask(first, { action: "snooze", key: "mail:m1", until: { kind: "person", address: "lena@example.org" } })).toMatchObject({ ok: true, untilIso: null, message: "Snoozed “Venue quote” until lena@example.org writes. Its read status in your mail stays unchanged." });
     expect((await composeWith(db, options, runtime([mail("m1")]), at(4, 10, 5))).items.some((i) => i.key === "mail:m1")).toBe(false);
     const later = await composeWith(db, options, runtime([mail("m1"), mail("n1", { from: { name: "Lena Roth", address: "lena@example.org" }, subject: "Figures", receivedAt: new Date(at(4, 11)).toISOString() })]), at(4, 11, 5));
     const back = later.items.find((i) => i.key === "mail:m1");
@@ -169,7 +169,7 @@ describe("snoozed mail on the Desk", () => {
     const meeting = { ...event("e1", at(4, 14), at(4, 15)), calendar: "Work", calendarId: "c1" };
     const source = (events: SourceEvent[]) => new SourceCache(async () => JSON.stringify({ capabilities: ["calendar"], calendarCoverage: coverage, items: [mail("m1")], events }));
     const rt: DeskRuntime = { options, ledger: new HandledLedger(), sourceCache: source([meeting]) };
-    expect(await ask(rt, { action: "snooze", key: "mail:m1", until: { kind: "meeting", event: "cal:work-mail:e1" } })).toMatchObject({ ok: true, until: "until “Board call” ends" });
+    expect(await ask(rt, { action: "snooze", key: "mail:m1", until: { kind: "meeting", event: "cal:work-mail:e1" } })).toMatchObject({ ok: true, until: "until “Board call” ends", untilIso: new Date(at(4, 15)).toISOString() });
     expect((await composeWith(db, options, { ...rt, sourceCache: source([meeting]) }, at(4, 11))).items.some((i) => i.key === "mail:m1")).toBe(false);
     const back = (await composeWith(db, options, { ...rt, sourceCache: source([]) }, at(4, 12))).items.find((i) => i.key === "mail:m1");
     expect(back?.why.startsWith("Back because “Board call” was cancelled.")).toBe(true);

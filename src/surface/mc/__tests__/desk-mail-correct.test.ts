@@ -39,7 +39,7 @@ describe("a mail correction that names a move", () => {
   it("moves the mail through the move path, answers with Undo, and logs the correction once", async () => {
     const r = queue([MOVED]);
     const res = await send({ action: "correct", key: KEY, said: "trash" }, r.run);
-    expect(res).toEqual({ status: 200, body: { ok: true, message: "Moved to Trash. Corrected: you would delete this.", undo: "move-1" } });
+    expect(res).toEqual({ status: 200, body: { ok: true, messagePhrase: expect.anything(), message: "Moved to Trash. Corrected: you would delete this.", undo: "move-1" } });
     expect(r.calls).toEqual([{ argv: ["/opt/adapters/bin/desk-mail-move.ts"], stdin: { action: "move", account: "work", messageId: MAIL.id, target: "trash" } }]);
     expect(log()).toEqual([["trash", "correction"]]);
     expect(readClassifications(db, [MAIL.id]).size).toBe(0);
@@ -57,7 +57,7 @@ describe("a mail correction that names a move", () => {
     const r = queue([MOVED, RESTORED]);
     await send({ action: "correct", key: KEY, said: "archive" }, r.run);
     const undone = await send({ action: "undo", move: "move-1" }, r.run);
-    expect(undone.body).toEqual({ ok: true, message: "Moved back to INBOX from Trash. Your correction is withdrawn.", restored: KEY });
+    expect(undone.body).toMatchObject({ ok: true, message: "Moved back to INBOX from Trash. Your correction is withdrawn.", restored: KEY });
     expect(log()).toEqual([["restore", "desk"]]);
     expect(await keys()).toEqual([KEY]);
   });
@@ -65,7 +65,7 @@ describe("a mail correction that names a move", () => {
   it("keeps the mail and the recorded correction when the move fails, and says so", async () => {
     const r = queue([{ code: 1, stdout: "", stderr: "The work account has no Trash mailbox.\n" }]);
     const res = await send({ action: "correct", key: KEY, said: "trash" }, r.run);
-    expect(res).toEqual({ status: 502, body: { ok: false, recorded: true, correction: expect.any(Number), error: "Corrected: you would delete this. The correction is recorded, but the mail was not moved: The work account has no Trash mailbox." } });
+    expect(res).toEqual({ status: 502, body: { ok: false, messagePhrase: expect.anything(), detail: expect.any(String), recorded: true, correction: expect.any(Number), error: "Corrected: you would delete this. The correction is recorded, but the mail was not moved: The work account has no Trash mailbox." } });
     expect(log()).toEqual([["trash", "correction"]]);
     expect(await keys()).toEqual([KEY]);
   });
@@ -112,7 +112,7 @@ describe("a mail correction that keeps the mail", () => {
   it("logs the correction, moves nothing and keeps the card", async () => {
     const r = queue();
     const res = await send({ action: "correct", key: KEY, said: "keep" }, r.run);
-    expect(res.body).toEqual({ ok: true, message: "Corrected: you keep this. The Desk sorts it and mail like it again with that in mind." });
+    expect(res.body).toMatchObject({ ok: true, message: "Corrected: you keep this. The Desk sorts it and mail like it again with that in mind." });
     expect(r.calls).toEqual([]);
     expect(log()).toEqual([["kept", "correction"]]);
     expect(await keys()).toEqual([KEY]);

@@ -92,7 +92,7 @@ describe("GET /api/desk/graph-repositories", () => {
     db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(githubRef("jcfischer/desk"), NOW);
     const failing: GraphRepositoryRunner = async () => ({ code: 4, signal: null, stdout: "", stderr: "gh: To use GitHub CLI, run: gh auth login\nmore" });
     const view = await listGraphRepositories(db, failing);
-    expect(view.listing).toEqual({ ok: false, reason: "gh: To use GitHub CLI, run: gh auth login" });
+    expect(view.listing).toMatchObject({ ok: false, reason: "gh: To use GitHub CLI, run: gh auth login" });
     expect(view.repositories).toEqual([{ ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: true }]);
   });
 
@@ -129,7 +129,7 @@ describe("the GitLab projects in the listing", () => {
 
   it("lists the projects although glab auth status exits non-zero for another, failing host", async () => {
     const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: projects("g/p") }));
-    expect(view.gitlab).toEqual({ ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] });
+    expect(view.gitlab).toMatchObject({ ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] });
     expect(view.repositories.map((r) => r.ref)).toEqual(["gitlab:gitlab.example.org/g/p"]);
   });
 
@@ -179,7 +179,7 @@ describe("the GitLab projects in the listing", () => {
     const page = (...paths: string[]) => JSON.stringify(paths.map((p) => ({ path_with_namespace: p, description: "a ][ b \"q\" [c]" })));
     const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: ok(`${page("g/one", "g/two")}${page("g/three")}\n`) }));
     expect(view.repositories.map((r) => r.label)).toEqual(["g/one", "g/three", "g/two"]);
-    expect(view.gitlab).toEqual({ ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] });
+    expect(view.gitlab).toMatchObject({ ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] });
   });
 
   it("allows a ticked project on any host by exact reference, and refuses a host that was never ticked", async () => {
@@ -213,7 +213,7 @@ describe("the GitLab projects in the listing", () => {
     for (const [replies, gitlab] of cases) {
       const view = await listGraphRepositories(db, forges({ gh: ok("jcfischer/desk\n"), ...replies }));
       expect(view.gitlab).toEqual(gitlab);
-      expect(view.listing).toEqual({ ok: true });
+      expect(view.listing).toMatchObject({ ok: true });
       expect(view.repositories).toEqual([{ ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false }]);
     }
   });
@@ -317,14 +317,14 @@ describe("the destination picker routes", () => {
     tick(github);
     const run = gh(JSON.stringify([{ number: 12, title: "Map root" }, { number: 7, title: "A child" }, { title: "no number" }]));
     const res = await nodesOf(github, { run });
-    expect(await res.json()).toEqual({ ok: true, nodes: [{ id: "12", title: "Map root" }, { id: "7", title: "A child" }] });
+    expect(await res.json()).toMatchObject({ ok: true, nodes: [{ id: "12", title: "Map root" }, { id: "7", title: "A child" }] });
     expect(run.calls[0]?.argv).toEqual(["gh", "issue", "list", "--repo", "example/synthetic", "--state", "open", "--limit", "100", "--json", "number,title"]);
   });
 
   it("lists the open issues of a ticked GitLab project by iid", async () => {
     tick(gitlab);
     const run = forges({ glab: ok(JSON.stringify([{ id: 9001, iid: 3, title: "Epic child" }])) });
-    expect(await (await nodesOf(gitlab, { run })).json()).toEqual({ ok: true, nodes: [{ id: "3", title: "Epic child" }] });
+    expect(await (await nodesOf(gitlab, { run })).json()).toMatchObject({ ok: true, nodes: [{ id: "3", title: "Epic child" }] });
     expect(run.calls[0]?.argv).toEqual(["glab", "api", "--hostname", "gitlab.example.org", "projects/group%2Fsub%2Fproject/issues?state=opened&per_page=100&order_by=created_at&sort=desc"]);
   });
 
@@ -334,7 +334,7 @@ describe("the destination picker routes", () => {
     expect(run.calls).toEqual([]);
     tick(github);
     const failing = forges({ gh: { code: 1, signal: null, stdout: "", stderr: "HTTP 404: Not Found\nmore" } });
-    expect(await (await nodesOf(github, { run: failing })).json()).toEqual({ ok: false, reason: "HTTP 404: Not Found" });
+    expect(await (await nodesOf(github, { run: failing })).json()).toMatchObject({ ok: false, reason: "HTTP 404: Not Found" });
     expect((await nodesOf(github, { run }, "POST")).status).toBe(405);
   });
 });

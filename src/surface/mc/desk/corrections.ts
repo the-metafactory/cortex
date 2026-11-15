@@ -23,7 +23,7 @@ export function listCorrections(db: Database): DeskCorrection[] {
   const rows = db.query<Row, []>("SELECT kind, source, mode, created_at FROM desk_corrections ORDER BY created_at DESC, kind, source").all();
   return rows.flatMap((r) =>
     isItemKind(r.kind) && isCorrectionMode(r.mode)
-      ? [{ kind: r.kind, source: r.source, mode: r.mode, label: correctionLabel(r.kind, r.source), createdAt: r.created_at }]
+      ? [{ kind: r.kind, source: r.source, mode: r.mode, label: correctionLabel(r.kind, r.source), labelPhrase: { code: "correction.source", params: { kind: r.kind, source: r.source } }, createdAt: r.created_at }]
       : [],
   );
 }

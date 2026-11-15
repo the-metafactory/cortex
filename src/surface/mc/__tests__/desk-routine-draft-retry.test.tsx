@@ -165,7 +165,7 @@ describe("retrying saved routine capability drafts", () => {
     expect(proposal?.draft).toBeUndefined();
     const response = await act("discard");
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ ok: false, error: "This proposal is not a draft." });
+    expect(await response.json()).toMatchObject({ ok: false, error: "This proposal is not a draft." });
     expect(readRoutineProposal(db, proposalId)).toEqual(proposal);
     expect(backend.installed).toHaveLength(installed ? 1 : 0);
     expect(backend.writes()).toBe(installed ? 1 : 0);

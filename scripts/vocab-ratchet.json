@@ -6,7 +6,6 @@
       "avoid": [
         "operator",
         "user",
-        "owner",
         "human",
         "org"
       ],

@@ -10,7 +10,8 @@ export interface RangerNeedsYou {
   endedAt?: string;
   dueAt?: string;
   reason?: { class?: string; detail?: string };
-  actions?: { resume?: boolean };
+  queued?: { lane: string; position: number } | null;
+  actions?: { resume?: boolean; queueResume?: { offered: boolean; why?: string } };
 }
 
 export interface RangerCurrent {
@@ -37,6 +38,7 @@ export interface RangerMap {
   key: string;
   repo: string;
   walk?: string;
+  lane?: string;
   servedOnly?: boolean;
   grillings?: RangerMapNode[];
   decisions?: RangerMapNode[];
@@ -48,6 +50,12 @@ export interface RangerState {
   current: RangerCurrent[];
   needsYou: RangerNeedsYou[];
   maps: RangerMap[];
+  laneHolders?: Record<string, RangerLaneHolder | null>;
+}
+
+export interface RangerLaneHolder {
+  repo: string;
+  nodeId: string;
 }
 
 /** Keeps only http(s) links, so a Ranger value cannot become a script link on the Desk. */
@@ -78,8 +86,9 @@ export async function readRangerState(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`ranger answered HTTP ${res.status}`);
-  const body = (await res.json()) as Partial<RangerState>;
+  const body = (await res.json()) as Partial<RangerState> & { gates?: { laneHolders?: RangerState["laneHolders"] } };
   return {
+    laneHolders: body.gates?.laneHolders ?? body.laneHolders,
     generatedAt: body.generatedAt,
     refreshError: body.refreshError ?? null,
     current: Array.isArray(body.current) ? body.current : [],
@@ -104,4 +113,12 @@ export function rangerTitles(state: RangerState): Map<string, { title: string; u
   for (const n of state.needsYou) titles.set(`${n.repo}#${n.nodeId}`, { title: n.title, url: n.url });
   for (const c of state.current) titles.set(`${c.repo}#${c.nodeId}`, { title: c.title });
   return titles;
+}
+
+/** The Ranger item holding a lane, as the Desk names it: its title, or `repo#N` when Ranger has none. */
+export function laneHolderName(state: RangerState, lane: string): string | undefined {
+  const holder = state.laneHolders?.[lane];
+  if (!holder) return undefined;
+  const ref = `${holder.repo}#${holder.nodeId}`;
+  return rangerTitles(state).get(ref)?.title ?? ref;
 }
