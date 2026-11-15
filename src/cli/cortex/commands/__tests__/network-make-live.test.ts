@@ -1,3 +1,4 @@
+import { usesListenerPort } from "./nats-listener-ports";
 /**
  * C-1257 — tests for the pure make-live orchestration behind
  * `cortex network make-live <stack>` (the daemon-switch). All arc/fs/launchctl
@@ -1482,7 +1483,7 @@ describe("bootTestSnapshotConfig (live adapter, scripted process) — cortex#253
     const conf = deps.confs[0] ?? "";
     expect(conf).toContain(`account: "${FED_ACC}"`);
     expect(conf).not.toContain("hub.example.invalid");
-    expect(conf).not.toMatch(/(?:listen|port)\s*[:=]\s*"?(?:[^"\s]*:)?4222(?:"|\s|$)/m);
+    expect(usesListenerPort(conf, [4222])).toBe(false);
     expect(conf).not.toContain("/data/nats");
     expect(deps.kills).toEqual(["SIGTERM"]);
     expect(existsSync(argv[2] ?? "")).toBe(false); // scratch dir cleaned up

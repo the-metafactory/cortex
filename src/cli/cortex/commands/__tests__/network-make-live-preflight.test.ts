@@ -1,3 +1,4 @@
+import { usesListenerPort } from "./nats-listener-ports";
 /**
  * cortex#2533 — the pure make-live pre-flight helpers: JetStream store_dir
  * parsing, `$G` store reporting + move target, include inlining, and the
@@ -190,13 +191,15 @@ describe("renderBootTestConfig", () => {
   });
 
   test("moves every listener to a random loopback port", () => {
-    const { conf } = renderBootTestConfig(SNAPSHOT, { ...OPTS, scratchDir: "/private/tmp/fixture-4222" });
-    expect(conf).toContain("/private/tmp/fixture-4222/store");
-    expect(conf).not.toMatch(/(?:listen|port)\s*[:=]\s*"?(?:[^"\s]*:)?4222(?:"|\s|$)/m);
-    expect(conf).not.toContain("6222");
-    expect(conf).not.toContain(":7422");
-    expect(conf).not.toContain("8080");
-    expect(conf).not.toContain("0.0.0.0");
+    const { conf } = renderBootTestConfig(SNAPSHOT, { ...OPTS, scratchDir: "/private/tmp/fixture-4222-6222-7422-8080-8222" });
+    expect(conf).toContain("/private/tmp/fixture-4222-6222-7422-8080-8222/store");
+    const originalPorts = [4222, 6222, 7422, 8080, 8222];
+    expect(usesListenerPort(conf, originalPorts)).toBe(false);
+    for (const port of originalPorts) {
+      expect(usesListenerPort(`listen: "127.0.0.1:${port}"`, originalPorts)).toBe(true);
+      expect(usesListenerPort(`leafnodes { port: ${port} }`, originalPorts)).toBe(true);
+    }
+    expect(conf).not.toMatch(/(?:host|listen)\s*[:=]\s*"0\.0\.0\.0[:"]/);
     expect(conf).toContain(`listen: "127.0.0.1:-1"`);
     expect(conf).toContain("port: -1");
     expect(conf).toContain(`host: "127.0.0.1"`);
