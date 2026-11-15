@@ -70,6 +70,20 @@ describe("GET /api/desk mentions", () => {
     expect(view.items[1]).not.toHaveProperty("mentions");
   });
 
+  it("omits Node runtime version mentions while retaining explicit node references", async () => {
+    state.needsYou = [
+      { key: "map", repo: "example/app", nodeId: "1", title: "CI fails on Node 18", status: "blocked", reason: { class: "blocked", detail: "Upgrade to Node 22 LTS." } },
+      { key: "map", repo: "example/app", nodeId: "2", title: "Review node 18", status: "blocked", reason: { class: "blocked", detail: "Needs Node #22." } },
+    ];
+    const view = await read();
+    expect(view.items).toHaveLength(2);
+    expect(view.items[0]).not.toHaveProperty("mentions");
+    expect(view.items[1]?.mentions).toEqual([
+      { text: "node 18", url: "https://github.com/example/app/issues/18" },
+      { text: "Node #22", url: "https://github.com/example/app/issues/22" },
+    ]);
+  });
+
   it("curl serves a blocked Ranger cross-repository mention through the running MC stack", async () => {
     state.needsYou = [{ key: "map", repo: "gitlab:forge.example.test/group/app", nodeId: "1", title: "Choose the adapter", status: "blocked", reason: { class: "blocked", detail: "The adapter needs project#11." } }];
     const stack = startServer({ ...DEFAULT_CONFIG, port: 0 }, db, { desk: runtime.options });

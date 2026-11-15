@@ -14,13 +14,23 @@ const item = (overrides: Partial<DeskItem> = {}): DeskItem => ({
 
 describe("Desk item mentions", () => {
   it("preserves exact substrings for full, short, bare and node forms", () => {
-    expect(itemMentions(item({ title: "PR other/exporter#12 needs mail#11, #14, node 3475 and node #3476; Node  3477." }), [APP, MAIL])).toEqual([
+    expect(itemMentions(item({ title: "PR other/exporter#12 needs mail#11, #14, node 3475 and node #3476; Node  #3477." }), [APP, MAIL])).toEqual([
       { text: "other/exporter#12", url: "https://github.com/other/exporter/issues/12" },
       { text: "mail#11", url: "https://github.com/example/mail/issues/11" },
       { text: "#14", url: "https://github.com/example/app/issues/14" },
       { text: "node 3475", url: "https://github.com/example/app/issues/3475" },
       { text: "node #3476", url: "https://github.com/example/app/issues/3476" },
-      { text: "Node  3477", url: "https://github.com/example/app/issues/3477" },
+      { text: "Node  #3477", url: "https://github.com/example/app/issues/3477" },
+    ]);
+  });
+
+  it("leaves capitalized Node runtime versions plain and accepts explicit node references", () => {
+    expect(itemMentions(item({ title: "CI fails on Node 18, Node 20.19.0, NODE 22 LTS and Node.js 24." }), [APP])).toEqual([]);
+    expect(itemMentions(item({ title: "Compare node 18, node #20, Node #22 and NODE #24." }), [APP])).toEqual([
+      { text: "node 18", url: "https://github.com/example/app/issues/18" },
+      { text: "node #20", url: "https://github.com/example/app/issues/20" },
+      { text: "Node #22", url: "https://github.com/example/app/issues/22" },
+      { text: "NODE #24", url: "https://github.com/example/app/issues/24" },
     ]);
   });
 

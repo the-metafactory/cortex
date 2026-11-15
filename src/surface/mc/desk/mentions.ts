@@ -4,7 +4,7 @@ import { somaRepo } from "./ruling";
 import type { RangerState } from "./sources/ranger";
 import type { DeskItem, DeskMention } from "./types";
 
-const REFERENCE = /(?<![\p{L}\p{N}_./:#&%+@-])(?:[\w.-]+(?:\/[\w.-]+)*#[1-9]\d*|node\s+#?[1-9]\d*|#[1-9]\d*)(?![\p{L}\p{N}_/#&-])/giu;
+const REFERENCE = /(?<![\p{L}\p{N}_./:#&%+@-])(?:(?<repo>[\w.-]+(?:\/[\w.-]+)*)#|node\s+#?|[Nn][Oo][Dd][Ee]\s+#|#)(?<num>[1-9]\d*)(?![\p{L}\p{N}_/#&-])/gu;
 const MAIL_KINDS = new Set<DeskItem["kind"]>(["mail", "mail-rule", "mail-waiting", "mail-handoff", "dmarc"]);
 
 function repository(ref: string): GraphRepoRef | null {
@@ -56,10 +56,9 @@ export function itemMentions(item: DeskItem, knownRepositories: readonly GraphRe
   for (const field of fields) {
     for (const match of field?.matchAll(REFERENCE) ?? []) {
       const text = match[0];
-      const local = /^(?:node\s+#?|#)([1-9]\d*)$/i.exec(text);
-      const named = /^(.+)#([1-9]\d*)$/.exec(text);
-      const repo = local ? own : named?.[1] ? resolveRepository(named[1], repositories) : null;
-      const number = local?.[1] ?? named?.[2];
+      const name = match.groups?.repo;
+      const repo = name ? resolveRepository(name, repositories) : own;
+      const number = match.groups?.num;
       const url = repo && number ? issueUrl(repo, number) : null;
       if (url) mentions.set(text, { text, url });
     }
