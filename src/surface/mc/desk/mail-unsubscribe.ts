@@ -11,7 +11,8 @@ import type { SourceMail } from "./sources/command";
 import { DEFAULT_UNSUBSCRIBE, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
 import { isVip } from "./vips";
 import { unsubscribeMethod } from "../../../conversations/domain-adapters/mail/unsubscribe-method";
-export { unsubscribeMethod, type UnsubscribeMethod } from "../../../conversations/domain-adapters/mail/unsubscribe-method";
+export { unsubscribeMethod } from "../../../conversations/domain-adapters/mail/unsubscribe-method";
+export type UnsubscribeMethod = NonNullable<ReturnType<typeof unsubscribeMethod>>;
 
 export { DEFAULT_UNSUBSCRIBE, UNSUBSCRIBE_SQL, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
 

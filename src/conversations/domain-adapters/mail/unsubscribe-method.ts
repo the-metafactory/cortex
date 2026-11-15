@@ -1,4 +1,4 @@
-export type UnsubscribeMethod = { kind: "one-click"; url: string } | { kind: "page"; url: string };
+type UnsubscribeMethod = { kind: "one-click"; url: string } | { kind: "page"; url: string };
 
 const ONE_CLICK = "list-unsubscribe=one-click";
 const URI_RE = /<([^>]{1,2000})>/g;
