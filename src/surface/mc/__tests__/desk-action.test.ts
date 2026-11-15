@@ -194,7 +194,7 @@ describe("the Desk action route through Mission Control", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function startDesk(state: RangerState) {
+  function startDesk(state: RangerState, escalation = false) {
     const secretPath = join(tmpDir, "step-up-totp.json");
     writeEnrollment(secretPath, createEnrollment("2026-10-16T00:00:00.000Z"));
     const ranger = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json(state) });
@@ -202,11 +202,11 @@ describe("the Desk action route through Mission Control", () => {
     const bin = join(tmpDir, "ranger");
     writeFileSync(bin, `#!/bin/sh\necho "$1 $2" >> ${marker}\n`, { mode: 0o755 });
     const soma = join(tmpDir, "soma");
-    writeFileSync(soma, `#!/bin/sh\necho "soma $1 $2 $3" >> ${marker}\n`, { mode: 0o755 });
+    writeFileSync(soma, `#!/bin/sh\necho "soma $1 $2 $3" >> ${marker}\n${escalation ? 'echo \'{"typed":true,"status":"open","ref":{"id":"12"}}\'\n' : ""}`, { mode: 0o755 });
     const ctx = startServer(
       { ...DEFAULT_CONFIG, port: 0, governance: { principals: ["principal@example.com"], stepUp: { secretPath } } },
       db,
-      { desk: { ...DESK, rangerUrl: `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" }, somaBin: soma } },
+      { desk: { ...DESK, rangerUrl: escalation ? "" : `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" }, somaBin: soma } },
     );
     const base = `http://localhost:${ctx.server.port}`;
     return {
@@ -239,6 +239,19 @@ describe("the Desk action route through Mission Control", () => {
     }
   });
 
+  async function confirmedRulingCalls(desk: ReturnType<typeof startDesk>, body: unknown, retry = false): Promise<string[]> {
+    const send = (email: string) => desk.send("/api/desk/ruling", email, body);
+    try {
+      expect((await send("unlisted@example.com")).status).toBe(403);
+      expect(existsSync(desk.marker)).toBe(false);
+      expect((await send("principal@example.com")).status).toBe(200);
+      if (retry) expect((await send("principal@example.com")).status).toBe(200);
+      return readFileSync(desk.marker, "utf8").trim().split("\n");
+    } finally {
+      desk.stop();
+    }
+  }
+
   it("records a ruling and resumes for the principal without a step-up code, and refuses another identity before anything runs", async () => {
     const state = rangerState();
     state.needsYou.push({
@@ -246,16 +259,20 @@ describe("the Desk action route through Mission Control", () => {
       endedAt: "2026-10-30T09:00:00.000Z", reason: { class: "blocked", detail: "resume once: a format is picked — two are named" }, actions: { resume: true },
     });
     const desk = startDesk(state);
-    const send = (email: string) => desk.send("/api/desk/ruling", email, { key: "ranger:example/app#14", text: "Use JSON.", requestId: "req-00000001" });
-    try {
-      expect((await send("unlisted@example.com")).status).toBe(403);
-      expect(existsSync(desk.marker)).toBe(false);
+    const calls = await confirmedRulingCalls(desk, { key: "ranger:example/app#14", text: "Use JSON.", requestId: "req-00000001" });
+    expect(calls).toEqual(["soma graph rule 14", "resume-node 14"]);
+  });
 
-      expect((await send("principal@example.com")).status).toBe(200);
-      expect(readFileSync(desk.marker, "utf8").trim().split("\n")).toEqual(["soma graph rule 14", "resume-node 14"]);
-    } finally {
-      desk.stop();
-    }
+  it("records an escalation through the HTTP ruling route without a configured Ranger and keeps identity gates", async () => {
+    const subjectKey = "state:escalation:default:example/app#12";
+    writeVigilSubject(db, {
+      subject_key: subjectKey, subject_kind: "state", vocab: "escalation", ref: "example/app#12",
+      value: "needs-principal", healthy: 0, goal_id: null, producer: "soma", stack: "default", run_kind: null,
+      last_run_id: "run-1", last_ended_at: NOW, last_seen_at: NOW,
+    }, NOW);
+    const desk = startDesk(rangerState(), true);
+    const calls = await confirmedRulingCalls(desk, { key: `vigil:${subjectKey}`, text: "Use JSON.", requestId: "escalation-http-1" }, true);
+    expect(calls).toEqual(["soma graph node 12", "soma graph rule 12"]);
   });
 
   it("runs a check for the principal without a step-up code, and refuses another identity before anything runs", async () => {

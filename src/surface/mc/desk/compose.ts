@@ -44,7 +44,7 @@ import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestC
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
-import type { RulingExplainLoop, RulingLedger } from "./ruling";
+import { escalationEntries, RULING_NO_MODEL, RULING_POLICY_REFUSED, splitExplanations, type EscalationRulings, type RulingExplainLoop, type RulingLedger } from "./ruling";
 import type { ParserPermissions } from "../../../common/types/desk-parser";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
@@ -95,6 +95,7 @@ export interface DeskRuntime {
   mailClassifier?: MailClassifier;
   localMailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
+  escalationRulings?: EscalationRulings;
   rulings?: RulingLedger;
   mailRules?: MailRuleLoop;
   dmarc?: DmarcLoop;
@@ -177,6 +178,7 @@ export interface ComposeDeps {
   mailClassifier?: MailClassifier;
   localMailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
+  escalationRulings?: EscalationRulings;
   digestFlagger?: DigestFlagger;
   waitingClassifier?: WaitingClassifier;
   mailHandoff?: MailHandoffWorker;
@@ -192,11 +194,11 @@ const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-trac
 export async function currentDayItems(db: Database, runtime: DeskRuntime, vigil: DeskVigilSource | undefined, now = Date.now()): Promise<DeskItem[]> {
   const desk = runtime.options;
   if (!desk?.enabled) return [];
-  return (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items;
+  return (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, rulingExplain: runtime.rulingExplain, escalationRulings: runtime.escalationRulings, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items;
 }
 
 export function composeCurrentDay(db: Database, runtime: DeskRuntime, desk: DeskOptions, vigil: DeskVigilSource | undefined, now = Date.now()): Promise<DeskView> {
-  return composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now, ...(runtime.adapterDay ? { adapterDay: runtime.adapterDay } : {}) });
+  return composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, rulingExplain: runtime.rulingExplain, escalationRulings: runtime.escalationRulings, handled: runtime.ledger, sourceCache: runtime.sourceCache, now, ...(runtime.adapterDay ? { adapterDay: runtime.adapterDay } : {}) });
 }
 
 export async function composeDesk(
@@ -338,8 +340,24 @@ export async function composeDesk(
   const rangerActions = rangerActionsReady(desk);
   const rulingActions = rangerActions && Boolean(desk.somaBin);
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
-  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(desk.rulingExplainer?.sourcePolicy === "cloud" ? ranger.needsYou.filter(entry => repoIsCloud(desk.areas, entry.repo)) : ranger.needsYou) : undefined;
-  const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, conversations: deps.conversations, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
+  const escalations = escalationEntries(subjects, waitingTasks);
+  const entries = [...(ranger?.needsYou ?? []), ...escalations];
+  const permitted = (repo: string): boolean => desk.rulingExplainer?.sourcePolicy !== "cloud" || repoIsCloud(desk.areas, repo);
+  const explanationResults = await deps.rulingExplain?.read(entries.filter(entry => permitted(entry.repo)));
+  const { explanations, problems: explanationProblems } = splitExplanations(explanationResults);
+  for (const entry of escalations) {
+    if (!permitted(entry.repo)) explanationProblems.set(entry.itemKey, RULING_POLICY_REFUSED);
+    else if (!deps.rulingExplain) explanationProblems.set(entry.itemKey, RULING_NO_MODEL);
+  }
+  const escalationTargets = deps.escalationRulings?.read(escalations.filter(entry => entry.status !== "closed").map(entry => `${entry.repo}#${entry.nodeId}`));
+  const escalationRulings = new Map<string, string | null>();
+  for (const entry of escalations) {
+    const ref = `${entry.repo}#${entry.nodeId}`;
+    let refusal: string | null = desk.somaBin ? "The graph node status could not be checked. Answer on the issue." : "Soma rulings are not set up on this stack. Answer on the issue.";
+    if (escalationTargets?.has(ref)) refusal = escalationTargets.get(ref) ?? null;
+    escalationRulings.set(entry.itemKey, refusal);
+  }
+  const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, conversations: deps.conversations, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, explanations, explanationProblems, escalationRulings })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
   const ruleCards = [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet).filter((p) => canMove || p.action === "attach"), now)];

@@ -309,6 +309,8 @@ Multiple repos live at M7. Each consumes M2–M6 contracts; none impose on the o
 - Cortex MAY shell out to a sibling app's CLI (e.g. `pilot fetch <PR>`) when the bus path doesn't exist yet — surface this as a known coupling and track removal as the bus path lands.
 - Cortex MUST tolerate sibling absence: if signal-collector isn't installed, drill-down trace trees show "no telemetry available," but the rest of cortex works.
 
+Known coupling: Desk rulings in `src/surface/mc/desk/ruling.ts` use Soma's `graph node` CLI in `escalationRulingTarget` to check whether an escalated graph issue is typed and open, and its `graph rule` CLI in `ruleCommand` to record an answer. Replacing these CLI calls with bus contracts is tracked in [cortex#2884](https://github.com/the-metafactory/cortex/issues/2884).
+
 ### 5.2 The signal bundle — three independently rolled-out repos
 
 Reference: `~/Developer/signal/README.md` + signal's modular-bundle architecture diagram (in signal repo's `docs/`). Signal is **not one repo** — it's three, each independently installable, glued together by the bus and the OTLP contract.

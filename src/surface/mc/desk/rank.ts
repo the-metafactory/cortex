@@ -36,6 +36,8 @@ export interface RankInput {
   hidden?: ReadonlySet<string>;
   goalActions?: GoalActionsInput;
   explanations?: ReadonlyMap<string, RulingExplanation>;
+  explanationProblems?: ReadonlyMap<string, string>;
+  escalationRulings?: ReadonlyMap<string, string | null>;
 }
 
 export interface GoalActionsInput {
@@ -268,7 +270,7 @@ function goalExtras(goals: GoalActionsInput | undefined, goalId: string): Pick<D
   return { goal: goalId, ...(goals?.checking.has(goalId) ? { checking: true } : {}) };
 }
 
-function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
+function vigilItems({ now, subjects, areas, goalActions, waitingTasks, explanations, explanationProblems, escalationRulings }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
   const goalWording = new Map<string, string | null>();
   for (const s of subjects) if (s.goalId) goalWording.set(s.goalId, s.goalWording ?? goalWording.get(s.goalId) ?? null);
   const canCheck = (goalId: string): boolean => goalActions?.check.has(goalId) ?? false;
@@ -308,17 +310,21 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInp
       if (listed(rangerItemKey(ref)) || seenEscalations.has(ref)) continue;
       seenEscalations.add(ref);
       const task = waitingTasks?.get(ref) ?? TASK_UNAVAILABLE;
-      if (task.kind === "closed") continue;
-      const known = task.kind === "open" ? task : titles.get(ref);
+      const known = task.kind !== "unavailable" ? task : titles.get(ref);
       const question = task.kind === "unavailable" ? `${task.reason} ${QUESTION_UNAVAILABLE}` : task.question ?? QUESTION_UNAVAILABLE;
       const repo = ref.split("#")[0] ?? ref;
+      const key = `vigil:${s.subjectKey}`;
+      const explanation = explanations?.get(key);
+      const answerOnIssue = task.kind === "closed" ? "This issue is closed. Answer on the issue." : escalationRulings?.get(key) ?? (escalationRulings?.has(key) ? null : "Answer on the issue.");
+      const summary = [question, explanationProblems?.get(key), answerOnIssue ?? "Answer from this card; your ruling is recorded on the graph node."].filter(Boolean).join(" ");
       add({
-        key: `vigil:${s.subjectKey}`, kind: "escalation", source: "vigil", area: areaFor(areas, repo, null), urgency: "waiting",
-        title: known ? `"${known.title}" needs you.` : `Task details are unavailable in ${repoName(repo)}.`,
+        key, kind: "escalation", source: "vigil", area: areaFor(areas, repo, null), urgency: "waiting",
+        title: known ? `"${known.title}" ${task.kind === "closed" ? "is closed" : "needs you"}.` : `Task details are unavailable in ${repoName(repo)}.`,
         why: `${question} In ${repoName(repo)}.`,
         score: s.value === "needs-principal" ? 50 : 35,
-        actions: [action("detail", "Look first", "primary", true), LATER],
-        detail: { summary: question, history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url ?? escalationUrl(s.ref)) },
+        actions: [answerOnIssue === null ? action(RULING_ACTION, "Give your ruling", "primary", true) : action("detail", "Look first", "primary", true), ...(answerOnIssue === null ? [LOOK] : []), LATER],
+        detail: { summary, history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url ?? escalationUrl(s.ref)) },
+        ...(explanation ? { explanation } : {}),
       });
     }
   }
