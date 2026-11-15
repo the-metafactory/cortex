@@ -71,6 +71,18 @@ describe("the ruling box", () => {
     expect(html).toContain('href="https://github.com/example/app/issues/12"');
   });
 
+  it("shows an escalation's explanation or its specific fallback without calling it Ranger's report", () => {
+    const escalation: DeskItem = { ...blocked, key: "vigil:state:escalation:default:example/app#12", kind: "escalation", source: "vigil", question: undefined };
+    const explained = box(escalation);
+    expect(explained).toContain(explanation.sentence);
+    expect(explained).toContain("Escalated issue");
+    expect(explained).not.toContain("Ranger");
+    const summary = "The issue body could not be read for an explanation. Answer from this card.";
+    const html = box({ ...escalation, explanation: undefined, detail: { ...escalation.detail, summary } });
+    expect(html).toContain(summary);
+    expect(html).not.toContain(RULING_FALLBACK);
+  });
+
   it("keeps Confirm off until there is a ruling", () => {
     expect(box()).toMatch(/<button[^>]*disabled=""[^>]*>Confirm<\/button>/);
   });

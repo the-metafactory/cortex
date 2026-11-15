@@ -61,10 +61,10 @@ export function RulingBox({ item, draft, sending, onChange, onConfirm, onCancel 
           </div>
         </>
       ) : (
-        <p className="desk-why">{RULING_FALLBACK}</p>
+        <p className="desk-why">{item.kind === "escalation" ? item.detail.summary : RULING_FALLBACK}</p>
       )}
       <details className="desk-ruling-raw">
-        <summary>Ranger's report</summary>
+        <summary>{item.kind === "escalation" ? "Escalated issue" : "Ranger's report"}</summary>
         {question?.condition && <p className="desk-ruling-ask">Resume once: {question.condition}</p>}
         <p className="desk-why">{report}</p>
       </details>

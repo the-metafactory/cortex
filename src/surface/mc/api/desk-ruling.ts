@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskRuntime } from "../desk/compose";
 import { oneLine, planResume, rangerActionsReady, spawnRanger, type RangerRunner, type RangerRunResult } from "../desk/actions";
-import { blockedEntry, MAX_RULING_LENGTH, needsYouEntry, ruleCommand } from "../desk/ruling";
+import { activeEscalation, blockedEntry, escalationRulingTarget, MAX_RULING_LENGTH, needsYouEntry, ruleCommand, type EscalationSubject } from "../desk/ruling";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
 const noStore = { "Cache-Control": "no-store" };
@@ -19,6 +19,7 @@ export interface DeskRulingDeps {
   fetchImpl?: RangerFetch;
   now?: () => number;
   tmpDir?: string;
+  readSubject?: (key: string) => EscalationSubject | null;
 }
 
 async function recordRuling(run: RangerRunner, argvFor: (file: string) => string[], text: string, base: string): Promise<string | null> {
@@ -43,13 +44,15 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const desk = runtime?.options;
   const rulings = runtime?.rulings;
-  if (!runtime || !rulings || !rangerActionsReady(desk) || !desk.somaBin) return fail(409, "Rulings are not set up on this stack.");
+  if (!runtime || !rulings || !desk?.enabled || !desk.somaBin) return fail(409, "Rulings are not set up on this stack.");
   const body = (await req.json().catch(() => null)) as { key?: unknown; text?: unknown; requestId?: unknown } | null;
   if (typeof body?.key !== "string" || typeof body.requestId !== "string" || !REQUEST_ID.test(body.requestId)) return fail(400, "An item key and a request id are required.");
   const text = typeof body.text === "string" ? body.text.trim() : "";
   if (!text) return fail(400, "Write your ruling first.");
   if (text.length > MAX_RULING_LENGTH) return fail(400, `A ruling can be at most ${MAX_RULING_LENGTH} characters.`);
   const { key, requestId } = body;
+  const escalation = key.startsWith("vigil:");
+  if (!escalation && !rangerActionsReady(desk)) return fail(409, "Rulings are not set up on this stack.");
   const somaBin = desk.somaBin;
   const read = () => readRangerState(desk.rangerUrl, deps.fetchImpl);
   const now = deps.now ?? Date.now;
@@ -59,10 +62,16 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
     let recorded = rulings.recordedFor(requestId, key);
     if (!recorded) {
       let entry;
-      try {
-        entry = blockedEntry(await read(), key);
-      } catch (err) {
-        return fail(502, `Could not read Ranger: ${reason(err)}`);
+      if (escalation) {
+        const subject = deps.readSubject?.(key.slice("vigil:".length));
+        if (!subject || !activeEscalation(subject)) return fail(409, "Vigil no longer lists this issue as waiting for you.");
+        entry = await escalationRulingTarget(somaBin, subject.ref, deps.soma);
+      } else {
+        try {
+          entry = blockedEntry(await read(), key);
+        } catch (err) {
+          return fail(502, `Could not read Ranger: ${reason(err)}`);
+        }
       }
       if (typeof entry === "string") return fail(409, entry);
       const command = ruleCommand(somaBin, entry);
@@ -77,6 +86,9 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
       rulings.add(requestId, key, now());
       recorded = true;
     }
+
+    if (escalation) return Response.json({ ok: true, message: "Recorded your ruling on the escalated issue." }, { headers: noStore });
+    if (!rangerActionsReady(desk)) return fail(409, "Rulings are not set up on this stack.");
 
     const notResumed = (why: string): Response => fail(502, `Your ruling is recorded; Ranger did not resume: ${why}`, { recorded });
     let state;
