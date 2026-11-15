@@ -29,7 +29,7 @@ export interface OutlineNode {
     repeat?: Recurrence;
     context?: string;
     external?: {
-        source: "jira" | "tana";
+        source: string;
         url?: string;
         syncedAt: string;
     };

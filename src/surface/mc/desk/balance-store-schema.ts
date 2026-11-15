@@ -38,7 +38,7 @@ const outline: z.ZodType<OutlineNode> = z.object({
   repeat: recurrence.optional(),
   context: z.string().optional(),
   external: z.object({
-    source: z.enum(["jira", "tana"]),
+    source: z.string().min(1),
     url: z.string().optional(),
     syncedAt: z.string(),
   }).optional(),
