@@ -119,7 +119,6 @@ interface ResolvedBrief {
   task: OpenTask;
   chosen: Exclude<Chosen, { refused: string }>;
   instruction: string | null;
-  brief: string;
 }
 
 function resolveBrief(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): ResolvedBrief | Refusal {
@@ -128,22 +127,22 @@ function resolveBrief(db: Database, desk: DeskOptions & { dispatch: DispatchOpti
   const instruction = cleanInstruction(input.instruction);
   const chosen = chooseAgent(desk.dispatch, task, input.agent, taskBrief(task, instruction));
   if ("refused" in chosen) return { ok: false, status: 409, error: chosen.refused };
-  return { task, chosen, instruction, brief: chosen.brief.text };
+  return { task, chosen, instruction };
 }
 
 /** The exact brief a hand-off would send, its hash and what leaves the Desk. Writes nothing. */
 export function previewHandoff(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): { ok: true; preview: TaskPreview } | Refusal {
   const resolved = resolveBrief(db, desk, input);
   if ("ok" in resolved) return resolved;
-  const { task, chosen, instruction, brief } = resolved;
+  const { task, chosen, instruction } = resolved;
   return {
     ok: true,
     preview: {
       task: { id: task.node.id, title: task.node.title, area: task.area.id, dueDate: task.node.dueDate ?? null },
       agent: { id: chosen.agent.id, label: chosen.agent.label },
       agents: chosen.allowed,
-      brief,
-      briefHash: briefHash(brief),
+      brief: chosen.brief.text,
+      briefHash: briefHash(chosen.brief.text),
       leaves: leavesLine(task, instruction, chosen.agent),
     },
   };
@@ -202,7 +201,8 @@ export async function handTask(input: HandInput, deps: HandoffDeps): Promise<Tas
   }
   const resolved = resolveBrief(db, desk, input);
   if ("ok" in resolved) return resolved;
-  const { task, chosen, instruction, brief } = resolved;
+  const { task, chosen, instruction } = resolved;
+  const brief = chosen.brief.text;
   const busy = openTaskHandoffs(db).find((r) => r.taskId === input.taskId && r.state !== "failed");
   if (busy) {
     const label = agentLabel(desk.dispatch, busy.agent);
