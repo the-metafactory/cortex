@@ -7,6 +7,7 @@ import { deskLinkMode, openDeskLink } from "../lib/desk-link";
 import { DeskLink } from "./desk-link";
 import { DeskBalance } from "./desk-balance";
 import { MailSweeps, SweepPreview } from "./desk-mail-sweeps";
+import { JunkReview } from "./desk-mail-junk";
 import { MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
@@ -494,6 +495,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.trash") confirmFirst(item, a, () => { move(item, a, "trash"); });
     else if (a.id === "mail.archive") move(item, a, "archive");
     else if (a.id === "mail.spam") confirmFirst(item, a, () => { move(item, a, "junk"); });
+    else if (a.id === "mail.notspam" && a.target) { const key = a.target; void send(item, a, { request: () => submitMailAction({ action: "mail.notspam", key }), keepVisible: true }); }
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "invite.accept" || a.id === "invite.decline") answerInvite(item, a.id === "invite.accept" ? "accept" : "decline");
     else if (a.id === "invite.propose") proposeTimes(item);
@@ -751,7 +753,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
-  const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? (detail.readOnly ? null : detail) : null;
+  const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? (detail.readOnly || detail.junkReview ? null : detail) : null;
   const detailItem = originalDetail ? withPlanThis(originalDetail) : null;
   const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
@@ -1082,6 +1084,7 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, chil
       {children}
       <div className="desk-sec">What this is</div>
       <p className="desk-summary">{item.detail.summary}</p>
+      {item.junkReview && <JunkReview mails={item.junkReview.mails} sending={sending !== null} onAction={onAction} />}
       {item.detail.evidence && item.detail.evidence.length > 0 && (
         <>
           <div className="desk-sec">Evidence</div>

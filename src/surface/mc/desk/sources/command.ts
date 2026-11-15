@@ -1,6 +1,8 @@
 import { HOST_NAME_RE } from "../../../../common/host-name";
 import { z } from "zod";
 import { runCommand } from "../../common/spawn";
+import { DAY_MS } from "../time";
+import { junkIdentity } from "./mail-identity";
 import { CalendarCoverageSchema, EventAvailabilitySchema, SourceCapabilitiesSchema, type CalendarCoverage, type SourceCapabilities } from "../calendar-contract";
 
 /**
@@ -195,6 +197,18 @@ export type SourceEvent = z.infer<typeof SourceEventSchema>;
 export type SourceMail = z.infer<typeof SourceMailSchema>;
 export type SourceSent = z.infer<typeof SourceSentSchema>;
 
+export function recentJunk(mail: SourceMail[], now: number): SourceMail[] {
+  const seen = new Set<string>();
+  return mail.filter(m => Date.parse(m.receivedAt) >= now - 7 * DAY_MS && Date.parse(m.receivedAt) <= now)
+    .sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt))
+    .filter(m => {
+      const key = junkIdentity(m.account, m.id);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 20).map(({ kind, id, from, subject, receivedAt, unread, account }) => ({ kind, id, from, subject, receivedAt, unread, ...(account ? { account } : {}) }));
+}
+
 export interface DeskSourceConfig {
   id: string;
   command: string[];
@@ -211,7 +225,9 @@ export interface SourceReading {
   events: SourceEvent[];
   mail: SourceMail[];
   sent?: SourceSent[];
+  junk?: SourceMail[];
   readAt: number;
+  junkReadAt?: number;
   error: string | null;
   dropped: number;
   problems: string[];
@@ -223,8 +239,13 @@ export interface ParsedSource {
   events: SourceEvent[];
   mail: SourceMail[];
   sent: SourceSent[];
+  junk?: SourceMail[];
   dropped: number;
   problems: string[];
+}
+
+interface SourceResult extends ParsedSource {
+  error: string | null;
 }
 
 const fieldPath = (root: string, path: readonly PropertyKey[]): string =>
@@ -246,7 +267,7 @@ function oneEntryPerOccurrence(events: SourceEvent[]): SourceEvent[] {
   });
 }
 
-export function parseSourceOutput(stdout: string): ParsedSource {
+export function parseSourceOutput(stdout: string, now: number = Date.now()): ParsedSource {
   let body: unknown;
   try {
     body = JSON.parse(stdout);
@@ -279,6 +300,10 @@ export function parseSourceOutput(stdout: string): ParsedSource {
     problems.push(...entryProblems(name, parsed.error));
     return undefined;
   };
+  const keepField = <T>(field: object, schema: z.ZodType<T>): T[] | undefined => {
+    const pair: [string, unknown] | undefined = Object.entries(field)[0];
+    return pair?.[1] === undefined ? undefined : keep(pair[0], pair[1], schema);
+  };
   const capabilities = metadata("capabilities", SourceCapabilitiesSchema);
   const calendarCoverage = metadata("calendarCoverage", CalendarCoverageSchema);
   if (capabilities?.includes("calendar") && !Array.isArray(events)) problems.push("events: a calendar source must provide its event array");
@@ -288,7 +313,10 @@ export function parseSourceOutput(stdout: string): ParsedSource {
   const listed = Array.isArray(items) ? items : undefined;
   const mail = listed ? keep("items", listed.filter((e) => !isSent(e)), SourceMailSchema) : keep("items", items, SourceMailSchema);
   const sent = listed ? keep("sent items", listed.filter(isSent), SourceSentSchema) : [];
-  return { events: oneEntryPerOccurrence(keep("events", events, SourceEventSchema)), mail, sent, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
+  const junkField = { junk: (body as { junk?: unknown }).junk };
+  const reportedJunk = keepField(junkField, SourceMailSchema);
+  const junkIds = new Set(reportedJunk?.map(m => junkIdentity(m.account, m.id)));
+  return { events: oneEntryPerOccurrence(keep("events", events, SourceEventSchema)), mail: mail.filter(m => !junkIds.has(junkIdentity(m.account, m.id))), sent, junk: reportedJunk ? recentJunk(reportedJunk, now) : undefined, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number) => Promise<string>;
@@ -331,10 +359,10 @@ export class SourceCache {
 
   private refresh(source: DeskSourceConfig, now: number, cached: SourceReading | undefined): Promise<SourceReading> {
     const next = this.run(source.command, source.timeoutSeconds * 1000)
-      .then((stdout) => ({ ...parseSourceOutput(stdout), error: null }))
-      .catch((err: unknown) => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], sent: cached?.sent ?? [], dropped: 0, problems: [], ...(cached?.capabilities ? { capabilities: cached.capabilities } : {}), error: err instanceof Error ? err.message : String(err) }))
+      .then((stdout): SourceResult => ({ ...parseSourceOutput(stdout, now), error: null }))
+      .catch((err: unknown): SourceResult => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], sent: cached?.sent ?? [], junk: recentJunk(cached?.junk ?? [], now), dropped: 0, problems: [], ...(cached?.capabilities ? { capabilities: cached.capabilities } : {}), error: err instanceof Error ? err.message : String(err) }))
       .then((r): SourceReading => {
-        const reading = { id: source.id, area: source.area ?? null, readAt: now, ...r };
+        const reading = { id: source.id, area: source.area ?? null, readAt: now, ...r, junkReadAt: r.error === null ? now : cached?.junkReadAt ?? cached?.readAt };
         this.readings.set(source.id, reading);
         this.running.delete(source.id);
         this.onReading?.(cached, reading);

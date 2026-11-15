@@ -24,6 +24,7 @@ import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
 import { suspicionContext } from "./mail-suspicion";
 import { TRUST_DONE, trustedViews } from "./mail-trust";
+import { junkReviewItems } from "./mail-junk";
 import { listKey, offerContext, unsubscribeOffers, unsubscribeView, type UnsubscribeConfig, type UnsubscribeOffer } from "./mail-unsubscribe";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
@@ -386,6 +387,7 @@ export async function composeDesk(
     ...ruleCards,
     ...dmarcCards,
     ...waitingCards,
+    ...junkReviewItems(db, readings, now, canMove),
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantName),
     ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
