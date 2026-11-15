@@ -37,7 +37,7 @@ In the steps below, `<slug>` is the name of your stack, and `~/.config/metafacto
 
 	You see JSON that starts with `{"generatedAt":` and holds `"displayName":"Sam"`. Mission Control listens on port 8767 unless `mc.port` says otherwise. If the answer is `{"enabled":false}`, the stack did not read the `desk` block. Check the file and the restart.
 
-6. Open `http://127.0.0.1:8767/` in a browser.
+6. Open `http://127.0.0.1:8767/mc/` in a browser. The bare `http://127.0.0.1:8767/` redirects there when no external UI is configured.
 
 The Desk opens. It greets you, shows today's timeline with a Now marker, and lists what Cortex knows: goal checks and agent escalations from Vigil, and agents from Ranger if you set `mc.desk.ranger.url`. On a new stack without Vigil or Ranger readings, the Desk explains that no source is connected and shows how to connect one.
 
