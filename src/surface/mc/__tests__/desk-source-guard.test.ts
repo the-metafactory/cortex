@@ -189,23 +189,23 @@ describe("a fake codex is never spawned for work mail", () => {
     expect(spawned()).toBe(false);
   });
 
-  it("in the digest, when the local slot declares cloud access", async () => {
+  it("in the digest, when the local slot declares no source policy", async () => {
     const member: SweepMember = { ...mail("w1"), sourceId: "work-mail", area: null };
     const group = { id: "g1", members: [member] } as unknown as SweepGroup;
     const logged: string[] = [];
-    const flagger = new DigestFlagger({ ...codexModel(), local: codexModel() }, chatFlagRunner(), (m) => logged.push(m));
+    const flagger = new DigestFlagger({ ...codexModel(), local: { command: [codex], timeoutSeconds: 5 } }, chatFlagRunner(), (m) => logged.push(m));
     await flagger.kick(db, [group], [{ kind: "goal", name: "Ship", local: false }], boundary, NOW);
     expect(spawned()).toBe(false);
     expect(logged.join("\n")).toContain("no model was called");
     expect(readDigestFlags(db, ["g1"]).size).toBe(0);
   });
 
-  it("in waiting, when the local slot declares cloud access", async () => {
+  it("in waiting, when the local slot declares no source policy", async () => {
     const sent: SourceSent = { kind: "sent", id: "s1", from: { name: "A", address: "a@example.org" }, to: [{ name: "B", address: "b@example.org" }], subject: SECRET, sentAt: new Date(NOW).toISOString(), text: `${SECRET}?`, account: "work", url: "message://%3cs1%3e" };
     const readings: SourceReading[] = [{ id: "work-mail", area: "office", events: [], mail: [], sent: [sent], readAt: NOW, error: null, dropped: 0, problems: [] }];
     recordWaiting(db, readings, NOW);
     const logged: string[] = [];
-    await new WaitingClassifier({ ...codexModel(), local: codexModel() }, chatWaitingRunner(), (m) => logged.push(m)).kick(db, readings, boundary, NOW);
+    await new WaitingClassifier({ ...codexModel(), local: { command: [codex], timeoutSeconds: 5 } }, chatWaitingRunner(), (m) => logged.push(m)).kick(db, readings, boundary, NOW);
     expect(spawned()).toBe(false);
     expect(logged.join("\n")).toContain("no model was called");
   });
