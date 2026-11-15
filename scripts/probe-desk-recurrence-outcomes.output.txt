@@ -1,0 +1,1 @@
+{"completedOn":"2026-11-17","planned":"2026-11-02","missed":["2026-11-05","2026-11-16"],"next":"2026-11-19","anchor":"2026-11-02","temporaryStackOnly":true}
