@@ -54,6 +54,7 @@ const view: DeskViewModel = {
   autonomy: { types: [], done: [] },
   corrections: [],
   interruptions: [],
+  decisions: [],
 };
 
 const renderCards = (items: DeskItem[], sending: string | null = null): string => renderToStaticMarkup(items.map((entry, index) => <DeskItemRow key={entry.key} item={entry} rank={index + 1} sending={sending} onOpen={() => {}} onAction={() => {}} onFocusEvent={() => {}} onCorrect={() => {}} />));
