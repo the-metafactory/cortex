@@ -170,6 +170,7 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 | `command` | absent | Nonempty argument array for a classifier command. |
 | `baseUrl` | absent | OpenAI-compatible API base URL, normally ending in `/v1`. Requires HTTPS except on loopback. Cortex appends `/chat/completions`. |
 | `model` | absent | Nonempty model name for the endpoint form. |
+| `sourcePolicy` | `cloud` | `local` or `cloud`. `local` is your statement that this command keeps content on this machine; the Desk does not second-guess it. |
 | `apiKeyEnv` | absent | Environment variable containing the key. Mutually exclusive with `apiKeyFile`. |
 | `apiKeyFile` | absent | File containing the key. Mutually exclusive with `apiKeyEnv`. |
 | `caFile` | absent | PEM CA file for the endpoint form. For a command, pass its CA option in `command` instead. |
@@ -177,6 +178,8 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 | `maxPerPass` | `10` | Integer from 1 to 100. Maximum unclassified mail items processed per pass. |
 
 A configured key reaches a command as `DESK_CLASSIFIER_KEY`. A classifier failure leaves rule-based ranking in place and permits another attempt after ten minutes. The command form can return summaries and evidence in addition to a category. See [Mail classifiers](commands.md#mail-classifiers).
+
+`sourcePolicy: local` is the principal's statement that the command keeps content on this machine, and the Desk does not second-guess it. A command declared `local` is local even when its arguments contain a client name such as `codex` or `claude`; a command with no declaration is `cloud`. The rule is the same for every Desk model command, including the digest and waiting models, the Studio filer and the ruling explainer. An endpoint is local only when it declares `sourcePolicy: local` or is a loopback address with no declaration.
 
 `mail.actions.trash` and `mail.actions.draft` are optional nonempty command arrays. `mail.actions.timeoutSeconds` defaults to 30 and accepts integers from 1 to 120. Both actions require the mail source to supply `account`. A draft command saves the person's reply to Drafts and never sends it. **Unimportant** records the sender and invokes `trash` when configured. Without `trash`, it hides the item locally.
 
