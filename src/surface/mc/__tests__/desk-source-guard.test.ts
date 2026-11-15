@@ -59,7 +59,6 @@ afterEach(() => {
 
 const spawned = (): boolean => existsSync(codexLog);
 const codexModel = () => ({ command: [codex], sourcePolicy: "cloud" as const, timeoutSeconds: 5 });
-const codexDeclaredLocal = () => ({ command: [codex], sourcePolicy: "local" as const, timeoutSeconds: 5 });
 
 describe("the source boundary", () => {
   it("treats an unnamed source, a source without an area and an area without a cloud policy as local", () => {
@@ -76,15 +75,21 @@ describe("the source boundary", () => {
     expect(contentFrom(NOTHING_LEAVES, ["personal-mail"]).local).toBe(true);
   });
 
-  it("calls a route local only on a declaration or on loopback, and never for a known cloud client", () => {
+  it("resolves a command's route from its declared source policy alone", () => {
     expect(routeOf({ baseUrl: "http://127.0.0.1:8081/v1" })).toBe("local");
     expect(routeOf({ baseUrl: "https://llm.example.org/v1" })).toBe("cloud");
     expect(routeOf({ baseUrl: "https://llm.example.org/v1", sourcePolicy: "local" })).toBe("local");
     expect(routeOf({ baseUrl: "http://127.0.0.1:8081/v1", sourcePolicy: "cloud" })).toBe("cloud");
-    expect(routeOf({ command: ["local-model"], sourcePolicy: "local" })).toBe("local");
     expect(routeOf({ command: ["local-model"] })).toBe("cloud");
-    expect(routeOf({ command: ["/opt/codex-tools/local-model"], sourcePolicy: "local" })).toBe("local");
-    for (const command of [["/opt/bin/codex"], ["helper", "--codex", "/x"], ["helper", "--codex=/x"], ["sh", "-c", "codex exec"], ["/a/desk-codex-json.ts", "--model", "m"]]) expect(routeOf({ command, sourcePolicy: "local" })).toBe("cloud");
+    expect(routeOf({ command: ["local-model"], sourcePolicy: "cloud" })).toBe("cloud");
+    expect(routeOf({ command: ["local-model"], sourcePolicy: "local" })).toBe("local");
+  });
+
+  it("never matches a command by its name, so a declared local command may be a cloud client", () => {
+    for (const command of [["/opt/bin/codex"], ["helper", "--codex", "/x"], ["helper", "--codex=/x"], ["sh", "-c", "codex exec"], ["/a/desk-codex-json.ts", "--model", "m"], ["/opt/bin/claude"]]) {
+      expect(routeOf({ command, sourcePolicy: "local" })).toBe("local");
+      expect(routeOf({ command })).toBe("cloud");
+    }
   });
 });
 
@@ -140,6 +145,14 @@ describe("the model dispatch", () => {
     expect((JSON.parse(stdin) as { sourcePolicy: string }).sourcePolicy).toBe("cloud");
   });
 
+  it("sends local content to a command the principal declares local, whatever the command is named", async () => {
+    const seen: string[] = [];
+    const run: CommandRunner = async (_argv, _timeout, input) => { seen.push(input); return { code: 0, signal: null, stdout: "{}", stderr: "" }; };
+    await modelJson({ command: ["/opt/bin/codex"], sourcePolicy: "local", timeoutSeconds: 1 }, fetch, async () => null, "model", 600, run)(messages, 1000, LOCAL_CONTENT);
+    expect(seen).toHaveLength(1);
+    expect((JSON.parse(seen[0] ?? "") as { sourcePolicy: string }).sourcePolicy).toBe("local");
+  });
+
   it("refuses work mail in both classifier transports", async () => {
     const request = { mail: { id: "w", from: { address: "a@example.org" }, subject: SECRET, firstParagraph: SECRET, receivedAt: "", sourceId: "work-mail" }, meetings: [], vips: [], unimportant: [], corrections: [], examples: [], examplesBasis: "sender" } as ClassifierRequest;
     let used = 0;
@@ -176,23 +189,23 @@ describe("a fake codex is never spawned for work mail", () => {
     expect(spawned()).toBe(false);
   });
 
-  it("in the digest, even in a local slot that hides a cloud client", async () => {
+  it("in the digest, when the local slot declares no source policy", async () => {
     const member: SweepMember = { ...mail("w1"), sourceId: "work-mail", area: null };
     const group = { id: "g1", members: [member] } as unknown as SweepGroup;
     const logged: string[] = [];
-    const flagger = new DigestFlagger({ ...codexModel(), local: codexDeclaredLocal() }, chatFlagRunner(), (m) => logged.push(m));
+    const flagger = new DigestFlagger({ ...codexModel(), local: { command: [codex], timeoutSeconds: 5 } }, chatFlagRunner(), (m) => logged.push(m));
     await flagger.kick(db, [group], [{ kind: "goal", name: "Ship", local: false }], boundary, NOW);
     expect(spawned()).toBe(false);
     expect(logged.join("\n")).toContain("no model was called");
     expect(readDigestFlags(db, ["g1"]).size).toBe(0);
   });
 
-  it("in waiting, even in a local slot that hides a cloud client", async () => {
+  it("in waiting, when the local slot declares no source policy", async () => {
     const sent: SourceSent = { kind: "sent", id: "s1", from: { name: "A", address: "a@example.org" }, to: [{ name: "B", address: "b@example.org" }], subject: SECRET, sentAt: new Date(NOW).toISOString(), text: `${SECRET}?`, account: "work", url: "message://%3cs1%3e" };
     const readings: SourceReading[] = [{ id: "work-mail", area: "office", events: [], mail: [], sent: [sent], readAt: NOW, error: null, dropped: 0, problems: [] }];
     recordWaiting(db, readings, NOW);
     const logged: string[] = [];
-    await new WaitingClassifier({ ...codexModel(), local: codexDeclaredLocal() }, chatWaitingRunner(), (m) => logged.push(m)).kick(db, readings, boundary, NOW);
+    await new WaitingClassifier({ ...codexModel(), local: { command: [codex], timeoutSeconds: 5 } }, chatWaitingRunner(), (m) => logged.push(m)).kick(db, readings, boundary, NOW);
     expect(spawned()).toBe(false);
     expect(logged.join("\n")).toContain("no model was called");
   });
