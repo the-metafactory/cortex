@@ -59,6 +59,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   grilling: "Questions agents want to grill you on",
   escalation: "Older escalations",
   mail: "Mail you may want to read",
+  "mail-junk": "Junk mail to review",
   reminder: "Reminders",
   meeting: "Meetings starting soon",
   "mail-rule": "Mail rules the Desk proposes",
