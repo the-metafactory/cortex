@@ -18,6 +18,7 @@ import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
 import { INTERRUPT_SWITCHES_SQL } from "../desk/interrupt-switches";
 import { LINKS_SQL } from "../desk/links-schema";
+import { MEETING_BRIEF_SQL } from "../desk/meeting-brief-schema";
 import { WORKER_HANDOFF_SQL } from "../desk/worker-handoff-store";
 import { TASK_HANDOFF_SQL } from "../desk/task-handoff-schema";
 
@@ -209,6 +210,7 @@ export const SCHEMA_SQL: string[] = [
   ...SNOOZE_SQL,
   ...INTERRUPT_SWITCHES_SQL,
   ...LINKS_SQL,
+  ...MEETING_BRIEF_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_capability_installs (

@@ -1,0 +1,92 @@
+import type { DeskPhrase } from "./phrases";
+
+export const DESK_MEETING_BRIEF_PATH = "/api/desk/meeting-brief";
+
+export type BriefSourceKind = "mail" | "task" | "thread" | "note" | "meeting";
+
+export const BRIEF_GAP_REASONS = ["no-adapter", "access-denied", "read-failed", "no-linked-material"] as const;
+export type BriefGapReason = (typeof BRIEF_GAP_REASONS)[number];
+
+export const BRIEF_SYNTHESIS_STATES = ["preparing", "ready", "unavailable", "failed"] as const;
+export const BRIEF_PREVIOUS_MEETING_STATES = ["identified", "unidentified", "unavailable"] as const;
+
+/** Where a fact or gap comes from. `adapter` is null for a built-in owner or a configured Desk source; `owner` names a built-in owner; `connection` scopes the item to one configured source. */
+export interface BriefSourceIdentity {
+  kind: BriefSourceKind;
+  adapter: string | null;
+  owner?: string;
+  connection?: string;
+  item: string;
+}
+
+export type BriefSourceRef = BriefSourceIdentity & ({ excerpt: string; link?: string } | { excerpt?: string; link: string });
+
+export interface BriefFact {
+  id: string;
+  text: string;
+  sources: BriefSourceRef[];
+}
+
+export interface BriefGap {
+  id: string;
+  reason: BriefGapReason;
+  source: BriefSourceIdentity;
+  phrase: DeskPhrase;
+  message: string;
+}
+
+export interface BriefPreviousMeeting {
+  state: (typeof BRIEF_PREVIOUS_MEETING_STATES)[number];
+  phrase: DeskPhrase;
+  message: string;
+}
+
+export interface BriefSynthesis {
+  state: (typeof BRIEF_SYNTHESIS_STATES)[number];
+  reason?: "not-configured";
+  phrase: DeskPhrase;
+  message: string;
+}
+
+export interface MeetingBrief {
+  event: string;
+  revision: string;
+  preparedAt: string;
+  facts: BriefFact[];
+  gaps: BriefGap[];
+  previousMeeting: BriefPreviousMeeting;
+  synthesis: BriefSynthesis;
+}
+
+export const REFRESH_REQUIRED = "refresh-required";
+
+/** What a GET answers with when the prepared brief no longer matches its inputs or no brief was prepared. It carries no brief content. */
+export interface BriefRefreshRequired {
+  ok: false;
+  error: string;
+  code: typeof REFRESH_REQUIRED;
+}
+
+export const PREVIOUS_MEETING_UNIDENTIFIED: BriefPreviousMeeting = {
+  state: "unidentified",
+  phrase: { code: "brief.previous-unidentified" },
+  message: "No previous meeting identified.",
+};
+
+export const SYNTHESIS_NOT_CONFIGURED: BriefSynthesis = {
+  state: "unavailable",
+  reason: "not-configured",
+  phrase: { code: "brief.synthesis-not-configured" },
+  message: "No summary model is configured, so the evidence is shown as it is.",
+};
+
+const KIND_LABEL: Record<BriefSourceKind, string> = { mail: "mail", task: "task", thread: "Studio thread", note: "note", meeting: "meeting" };
+
+const GAP_WORDING: Record<BriefGapReason, (kind: BriefSourceKind) => { phrase: DeskPhrase; message: string }> = {
+  "no-adapter": (kind) => ({ phrase: { code: "brief.gap-no-adapter", params: { kind } }, message: `Nothing is set up to read this ${KIND_LABEL[kind]}.` }),
+  "access-denied": (kind) => ({ phrase: { code: "brief.gap-access-denied", params: { kind } }, message: `Reading this ${KIND_LABEL[kind]} is not allowed.` }),
+  "read-failed": (kind) => ({ phrase: { code: "brief.gap-read-failed", params: { kind } }, message: `This ${KIND_LABEL[kind]} could not be read.` }),
+  "no-linked-material": (kind) => ({ phrase: { code: "brief.gap-no-linked-material", params: { kind } }, message: `No ${KIND_LABEL[kind]} material is linked to this meeting.` }),
+};
+
+export const gapWording = (reason: BriefGapReason, kind: BriefSourceKind): { phrase: DeskPhrase; message: string } => GAP_WORDING[reason](kind);
