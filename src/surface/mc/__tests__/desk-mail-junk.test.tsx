@@ -51,6 +51,14 @@ describe("junk source readings", () => {
     expect(parseSourceOutput('{"junk":42}', NOW).problems).toEqual(["junk: must be an array"]);
   });
 
+  it.each([NOW - 1000, NOW - 8 * DAY_MS])("keeps inbox copies when another account reports the same Message-ID as junk at %p", at => {
+    const inbox = { ...mail("shared"), account: "inbox-account" };
+    const junk = { ...mail("shared", at), account: "junk-account" };
+    const parsed = parseSourceOutput(JSON.stringify({ items: [inbox], junk: [junk] }), NOW);
+    expect(parsed.mail).toEqual([inbox]);
+    expect(parsed.junk).toHaveLength(at >= NOW - 7 * DAY_MS ? 1 : 0);
+  });
+
   it("expires cached junk even when the next source read fails", async () => {
     let failed = false;
     const cache = new SourceCache(() => failed ? Promise.reject(new Error("Fixture source refused")) : Promise.resolve(JSON.stringify({ junk: [mail("one")] })));
@@ -112,7 +120,11 @@ describe("Not spam", () => {
     expect(mover.calls[0]?.stdin).toEqual({ action: "restore", account: "work", messageId: "one", from: "junk" });
     expect((await reviews(rt))[0]?.junkReview?.mails.map(m => m.subject)).toEqual(["Subject two"]);
     expect(trustedViews(db)).toMatchObject([{ sender: "one@example.org", notSpam: true }]);
-    expect(suspicionOf(mail("one"), suspicionContext(db)).length).toBeGreaterThan(0);
+    expect(suspicionOf(mail("one"), suspicionContext(db))).toEqual([]);
+    expect(suspicionOf({ ...mail("later"), from: mail("one").from }, suspicionContext(db))).toEqual([]);
+    expect(suspicionOf(mail("two"), suspicionContext(db)).length).toBeGreaterThan(0);
+    expect(suspicionOf({ ...mail("one"), headers: { authResults: { dmarc: "fail" } } }, suspicionContext(db)).map(r => r.code)).toContain("dmarc");
+    expect(suspicionOf(mail("one"), suspicionContext(db), true).map(r => r.code)).toContain("classifier");
     expect(db.query("SELECT origin, action FROM desk_mail_log WHERE origin = 'correction'").all()).toEqual([{ origin: "correction", action: "kept" }]);
     expect((await view(rt)).autonomy.done[0]).toMatchObject({ action: "mail.move", undo: "notspam-one" });
     const restarted = { ...rt, ledger: new HandledLedger() };
@@ -122,6 +134,7 @@ describe("Not spam", () => {
     expect(undone.status).toBe(200);
     expect(mover.calls[1]?.stdin).toEqual({ action: "move", account: "work", messageId: "one", target: "junk" });
     expect(trustedViews(db)).toEqual([]);
+    expect(suspicionOf(mail("one"), suspicionContext(db)).map(r => r.code)).toContain("reply-to");
     expect(db.query("SELECT * FROM desk_mail_log WHERE origin = 'correction'").all()).toEqual([]);
     expect((await reviews(restarted))[0]?.junkReview?.mails).toHaveLength(2);
   });
@@ -129,9 +142,22 @@ describe("Not spam", () => {
   it("pins symmetric spam and notspam action names and inverse move requests", async () => {
     const rt = await runtime();
     const mover = queue();
+    for (const action of ["spam", "notspam"]) expect((await handleDeskMail(mailPost({ action, key: "mail:inbox" }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(400);
     expect((await handleDeskMail(mailPost({ action: "mail.spam", key: "mail:inbox" }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
     expect((await handleDeskMail(mailPost({ action: "mail.notspam", key: await junkKey(rt) }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
     expect(mover.calls.map(c => c.stdin)).toEqual([{ action: "move", account: "work", messageId: "inbox", target: "junk" }, { action: "restore", account: "work", messageId: "one", from: "junk" }]);
+  });
+
+  it("withdraws sender trust when removed in Settings without undoing the mailbox move", async () => {
+    const rt = await runtime();
+    const mover = queue();
+    expect((await handleDeskMail(mailPost({ action: "mail.notspam", key: await junkKey(rt) }), db, rt, { run: mover.run, now: () => NOW })).status).toBe(200);
+    expect(suspicionOf(mail("one"), suspicionContext(db))).toEqual([]);
+    expect((await handleDeskMail(mailPost({ action: "not-phishing.remove", sender: "one@example.org" }), db, rt, { now: () => NOW + 1 })).status).toBe(200);
+    expect(suspicionOf(mail("one"), suspicionContext(db)).map(r => r.code)).toContain("reply-to");
+    expect(trustedViews(db)).toEqual([]);
+    expect(mover.calls).toHaveLength(1);
+    expect((await reviews(rt))[0]?.junkReview?.mails).toHaveLength(1);
   });
 
   it("binds identical Message-IDs to their listed accounts and keeps independent trust corrections", async () => {

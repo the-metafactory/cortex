@@ -2,6 +2,7 @@ import { HOST_NAME_RE } from "../../../../common/host-name";
 import { z } from "zod";
 import { runCommand } from "../../common/spawn";
 import { DAY_MS } from "../time";
+import { junkIdentity } from "./mail-identity";
 import { CalendarCoverageSchema, EventAvailabilitySchema, SourceCapabilitiesSchema, type CalendarCoverage, type SourceCapabilities } from "../calendar-contract";
 
 /**
@@ -201,7 +202,7 @@ export function recentJunk(mail: SourceMail[], now: number): SourceMail[] {
   return mail.filter(m => Date.parse(m.receivedAt) >= now - 7 * DAY_MS && Date.parse(m.receivedAt) <= now)
     .sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt))
     .filter(m => {
-      const key = JSON.stringify([m.account ?? null, m.id]);
+      const key = junkIdentity(m.account, m.id);
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -314,8 +315,8 @@ export function parseSourceOutput(stdout: string, now: number = Date.now()): Par
   const sent = listed ? keep("sent items", listed.filter(isSent), SourceSentSchema) : [];
   const junkField = { junk: (body as { junk?: unknown }).junk };
   const reportedJunk = keepField(junkField, SourceMailSchema);
-  const junkIds = new Set(reportedJunk?.map(m => m.id));
-  return { events: oneEntryPerOccurrence(keep("events", events, SourceEventSchema)), mail: mail.filter(m => !junkIds.has(m.id)), sent, junk: reportedJunk ? recentJunk(reportedJunk, now) : undefined, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
+  const junkIds = new Set(reportedJunk?.map(m => junkIdentity(m.account, m.id)));
+  return { events: oneEntryPerOccurrence(keep("events", events, SourceEventSchema)), mail: mail.filter(m => !junkIds.has(junkIdentity(m.account, m.id))), sent, junk: reportedJunk ? recentJunk(reportedJunk, now) : undefined, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number) => Promise<string>;

@@ -9,6 +9,7 @@ import { initDatabase } from "../src/surface/mc/db/init";
 import type { SourceMail } from "../src/surface/mc/desk/sources/command";
 import type { DeskView } from "../src/surface/mc/desk/types";
 import { trustedViews } from "../src/surface/mc/desk/mail-trust";
+import { suspicionContext, suspicionOf } from "../src/surface/mc/desk/mail-suspicion";
 import { runWithTemporaryHome } from "./probe-temp-home";
 import { buildDeskProbeBundle, deskProbeEntry, serveDeskProbe } from "./lib/desk-browser-probe";
 
@@ -36,9 +37,13 @@ async function probe() {
   const script = join(dir, "provider.ts");
   const statePath = join(dir, "mailbox.json");
   const at = new Date(Date.now() - 1000).toISOString();
-  const junk: SourceMail[] = ["one", "two"].map(id => ({ kind: "mail", id, from: { address: `${id}@example.org` }, subject: `Fixture ${id}`, receivedAt: at, account: "fixture", unread: true, firstParagraph: "PRIVATE JUNK BODY" }));
+  const junk: SourceMail[] = ["one", "two"].map(id => ({ kind: "mail", id, from: { address: `${id}@example.org` }, subject: `Fixture ${id}`, receivedAt: at, account: "fixture", unread: true, firstParagraph: "PRIVATE JUNK BODY", headers: { replyTo: "other@example.net" } }));
+  const first = junk[0];
+  assert(first);
+  const later = { ...first, id: "later", subject: "Later sender mail" };
+  assert.deepEqual(suspicionOf(later, suspicionContext(db)).map(r => r.code), ["reply-to"]);
   await writeFile(script, provider);
-  await writeFile(statePath, JSON.stringify({ items: [], junk }));
+  await writeFile(statePath, JSON.stringify({ items: [later], junk }));
   const ctx = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: ["principal@example.org"] } }, db, { desk: {
     enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [],
     sources: [{ id: "fixture-mail", command: [process.execPath, script, "read", statePath], everySeconds: 300, timeoutSeconds: 10 }],
@@ -58,6 +63,7 @@ async function probe() {
     const reviews = before.items.filter(i => i.kind === "mail-junk");
     assert.equal(reviews.length, 1);
     assert.equal(reviews[0]?.junkReview?.mails.length, 2);
+    assert.equal(before.items.find(i => i.key === "mail:later")?.suspicious, true);
     assert(!JSON.stringify(reviews).includes("PRIVATE JUNK BODY"));
     console.log("GET /api/desk: 200, one review item, two junk headers, no body.");
     const key = reviews[0]?.junkReview?.mails[0]?.key;
@@ -91,18 +97,25 @@ async function probe() {
     }
     assert(undo);
     const mailbox = JSON.parse(await readFile(statePath, "utf8"));
-    assert.deepEqual(mailbox.items.map((m: SourceMail) => m.id), ["one"]);
+    assert.deepEqual(mailbox.items.map((m: SourceMail) => m.id), ["later", "one"]);
     assert.deepEqual(mailbox.junk.map((m: SourceMail) => m.id), ["two"]);
     assert.equal((await get()).items.find(i => i.kind === "mail-junk")?.junkReview?.mails.length, 1);
+    const trustedMail = (await get()).items.find(i => i.key === "mail:later");
+    assert(trustedMail);
+    assert.equal(trustedMail.suspicious, undefined);
     assert.equal(trustedViews(db)[0]?.notSpam, true);
     assert.equal(trustedViews(db)[0]?.sender, "one@example.org");
+    assert.deepEqual(suspicionOf(later, suspicionContext(db)), []);
+    assert(suspicionOf({ ...later, headers: { authResults: { dmarc: "fail" } } }, suspicionContext(db)).some(r => r.code === "dmarc"));
     assert.equal((await get()).autonomy.done[0]?.undo, undo);
-    console.log("Mailbox: one in INBOX, two in Junk. Trusted sender: one@example.org; correction stored.");
+    console.log("Mailbox: one in INBOX, two in Junk. Trusted sender: one@example.org; later mail waives Reply-To, DMARC failures still flag.");
     const undone = await post({ action: "undo", move: undo });
     assert.equal(undone.status, 200);
     assert.equal(trustedViews(db).length, 0);
+    assert.deepEqual(suspicionOf(later, suspicionContext(db)).map(r => r.code), ["reply-to"]);
     assert.equal(JSON.parse(await readFile(statePath, "utf8")).junk.length, 2);
     assert.equal((await get()).items.find(i => i.kind === "mail-junk")?.junkReview?.mails.length, 2);
+    assert.equal((await get()).items.find(i => i.key === "mail:later")?.suspicious, true);
     console.log("POST Undo: 200, back in Junk; both review rows return; trusted correction withdrawn.");
   } finally {
     await browser?.close();

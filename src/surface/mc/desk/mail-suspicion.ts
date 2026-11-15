@@ -197,9 +197,10 @@ export function suspicionContext(db: Database, ownDomains: readonly string[] = [
 
 function readDismissals(db: Database): Dismissals {
   const out = new Map<string, Set<string>>();
-  for (const r of db.query<{ sender: string; code: SuspicionCode; message_id: string }, []>("SELECT sender, code, message_id FROM desk_mail_trusted").all()) {
+  for (const r of db.query<{ sender: string; code: SuspicionCode | "notspam"; message_id: string }, []>("SELECT sender, code, message_id FROM desk_mail_trusted").all()) {
     const keys = out.get(r.sender) ?? new Set<string>();
-    keys.add(dismissalKey(r.code, r.message_id));
+    if (r.code === "notspam") for (const code of SENDER_WIDE_CODES) keys.add(code);
+    else keys.add(dismissalKey(r.code, r.message_id));
     out.set(r.sender, keys);
   }
   return out;

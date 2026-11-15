@@ -6,6 +6,7 @@ import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailF
 import { CommandTimeout } from "../common/spawn";
 import { DAY_MS } from "./time";
 import { addSender, isVip, listVips, normalizeVip } from "./vips";
+import { junkIdentity } from "./sources/mail-identity";
 
 export const MOVE_TARGETS = ["archive", "junk", "trash"] as const;
 export type MoveTarget = (typeof MOVE_TARGETS)[number];
@@ -102,6 +103,14 @@ export interface MoveBy {
   correction?: number;
 }
 
+function recordMove(mail: ListedMail, target: MoveRow["target"], deps: MoveDeps, record: { id: string; folder: string | null; message: string; correction?: number; by?: MoveBy }): void {
+  const { id, folder, message, correction, by } = record;
+  deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at, correction_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, mail.account ?? null, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now, correction ?? null);
+  if (!by?.quiet) deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?)")
+    .run(`mail-move:${id}`, by?.doneAction ?? "mail.move", id, `${by?.title ?? (target === "inbox" ? "Not spam" : DONE[target])}: “${mail.subject}”`, message, deps.now, deps.now);
+}
+
 export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps, logAs: MailLogAction = target, features: MailFeatures = mailFeatures(deps.db, mail), by?: MoveBy): Promise<MoveResult> {
   const config = deps.config;
   const move = config?.move;
@@ -124,10 +133,7 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
     deps.db.transaction(() => {
       if (target === "junk") retireJunkRestores(deps.db, account, mail.id, message, deps.now);
-      deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at, correction_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(id, account, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now, correction ?? null);
-      if (!by?.quiet) deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?)")
-        .run(`mail-move:${id}`, by?.doneAction ?? "mail.move", id, `${by?.title ?? DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
+      recordMove(mail, target, deps, { id, folder, message, correction, by });
       by?.recorded?.(id);
       if (correction === undefined) logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
     })();
@@ -206,7 +212,8 @@ export function restoredJunk(db: Database): Map<string, number> {
   return new Map(db.query<{ account: string; message_id: string; restored_at: number }, []>("SELECT account, message_id, MAX(created_at) AS restored_at FROM desk_mail_moves WHERE target = 'inbox' AND undone_at IS NULL GROUP BY account, message_id").all().map(r => [junkIdentity(r.account, r.message_id), r.restored_at]));
 }
 
-export const junkIdentity = (account: string | undefined, id: string): string => JSON.stringify([account ?? null, id]);
+export const isRestoredSinceListed = (restored: ReadonlyMap<string, number>, mail: Pick<ListedMail, "account" | "id"> & { listedAt: number }): boolean =>
+  (restored.get(junkIdentity(mail.account, mail.id)) ?? -Infinity) >= mail.listedAt;
 
 export async function restoreJunkMail(mail: ListedMail & { listedAt: number }, deps: MoveDeps, recordCorrection: (moveId: string) => number): Promise<MoveResult> {
   const config = deps.config;
@@ -214,7 +221,7 @@ export async function restoreJunkMail(mail: ListedMail & { listedAt: number }, d
   if (!config || !argv?.length) return refuse(409, "Restoring junk mail needs the move command, and it is not set up on this stack.");
   const account = mail.account;
   if (!account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot move it.");
-  if ((restoredJunk(deps.db).get(junkIdentity(account, mail.id)) ?? -Infinity) >= mail.listedAt) return refuse(409, "This junk mail has already been restored to INBOX.");
+  if (isRestoredSinceListed(restoredJunk(deps.db), mail)) return refuse(409, "This junk mail has already been restored to INBOX.");
   const request = { action: "restore", account, messageId: mail.id, from: "junk" };
   return runClaimed(deps, config.timeoutSeconds, { key: claimKey(mail.id), argv, request, command: "move", failed: line => line, timedOut: "The mail may have moved; check INBOX." }, stdout => {
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
@@ -222,10 +229,7 @@ export async function restoreJunkMail(mail: ListedMail & { listedAt: number }, d
     deps.db.transaction(() => {
       retireJunkRestores(deps.db, account, mail.id, message, deps.now);
       const correction = recordCorrection(id);
-      deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at, correction_id) VALUES (?, ?, ?, 'inbox', ?, ?, ?, ?)")
-        .run(id, account, mail.id, mail.from.address.toLowerCase(), folder, deps.now, correction);
-      deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.move', ?, ?, 'done', ?, ?, ?)")
-        .run(`mail-move:${id}`, id, `Not spam: “${mail.subject}”`, message, deps.now, deps.now);
+      recordMove(mail, "inbox", deps, { id, folder, message, correction });
     })();
     deps.ledger.forget(movedKey("junk", mail.id));
     return { ok: true, message, undo: id, restored: `mail:${mail.id}` };

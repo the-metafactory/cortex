@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { ListedMail } from "./mail-actions";
-import { junkIdentity, restoredJunk } from "./mail-move";
+import { isRestoredSinceListed, restoredJunk } from "./mail-move";
 import { recentJunk, type SourceMail, type SourceReading } from "./sources/command";
 import type { DeskItem, JunkReviewMail } from "./types";
 
@@ -14,7 +14,7 @@ export function junkReviewItems(db: Database, readings: SourceReading[], now: nu
   const reported = listedJunk(readings, now);
   if (reported.length === 0) return [];
   const restored = restoredJunk(db);
-  const mail = reported.filter(m => (restored.get(junkIdentity(m.account, m.id)) ?? -Infinity) < m.listedAt);
+  const mail = reported.filter(m => !isRestoredSinceListed(restored, m));
   return readings.flatMap(r => {
     const listed = mail.filter(m => m.sourceId === r.id);
     if (listed.length === 0) return [];

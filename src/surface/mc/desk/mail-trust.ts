@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import type { ListedMail } from "./mail-actions";
 import { logMailDecision, mailFeatures } from "./mail-log";
-import { junkIdentity, refuse } from "./mail-move";
+import { refuse } from "./mail-move";
+import { junkIdentity } from "./sources/mail-identity";
 import { SENDER_WIDE_CODES, senderKey, type SuspicionCode, type SuspicionReason } from "./mail-suspicion";
 
 export const TRUST_DONE = "mail.trust";
