@@ -172,9 +172,9 @@ describe("an open question in the command bar", () => {
   it("says conversations are not set up, with no card and no alternative, when the stack has none", async () => {
     const refused = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), withParser, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "conversation", fields: {} }) });
     expect(refused.status).toBe(422);
-    expect(await refused.json()).toEqual({ ok: false, error: "Conversations with Assistant are not set up on this stack, so I cannot start one." });
+    expect(await refused.json()).toMatchObject({ ok: false, error: "Conversations with Assistant are not set up on this stack, so I cannot start one." });
     const named = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), { ...withParser, options: { ...DESK, ask: { ...ASK, parser: ["parse"] }, assistantName: "Mira" } }, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "conversation", fields: {} }) });
-    expect(await named.json()).toEqual({ ok: false, error: "Conversations with Mira are not set up on this stack, so I cannot start one." });
+    expect(await named.json()).toMatchObject({ ok: false, error: "Conversations with Mira are not set up on this stack, so I cannot start one." });
     const note = await handleDeskAsk(post("/api/desk/ask", { text: "note buy milk" }), runtime, { now: () => NOW, conversations: () => false });
     expect(await proposalOf(note)).not.toHaveProperty("alternative");
   });
@@ -203,7 +203,7 @@ describe("POST /api/desk/create", () => {
   it("answers with the desk_notes row id for a note the Desk keeps", async () => {
     const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00040", kind: "note", fields: { text: "Code 4711" } }), db, runtime, { now: () => NOW });
     const [note] = listOpenNotes(db);
-    expect(await res.json()).toEqual({ ok: true, id: String(note?.id), message: "Noted. It is under Keep in mind." });
+    expect(await res.json()).toMatchObject({ ok: true, id: String(note?.id), message: "Noted. It is under Keep in mind." });
   });
 
   it("hands a calendar entry to its writer on stdin and keeps it on the timeline until the source shows it", async () => {
@@ -214,7 +214,7 @@ describe("POST /api/desk/create", () => {
     };
     const fields = { title: "Dentist", start: new Date(local("2026-10-30T15:00:00")).toISOString() };
     const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00003", kind: "calendar", fields }), db, runtime, { now: () => NOW, runWriter });
-    expect(await res.json()).toEqual({ ok: true, id: "E1", message: "Added \"Dentist\"." });
+    expect(await res.json()).toMatchObject({ ok: true, id: "E1", message: "Added \"Dentist\"." });
     expect(calls).toEqual([{ argv: ["cal-writer"], stdin: JSON.stringify({ kind: "calendar", fields, requestId: "req-00003" }) }]);
     const view = await composeDesk(db, DESK, undefined, { now: NOW, sourceCache: new SourceCache(), recentWrites: runtime.recentWrites });
     expect(view.today.map((e) => [e.title, e.kind])).toContainEqual(["Dentist", "meeting"]);
@@ -237,7 +237,7 @@ describe("POST /api/desk/create", () => {
     const fields = { title: "Dentist", start: new Date(NOW).toISOString() };
     const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00005", kind: "calendar", fields }), db, runtime, { runWriter });
     expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ ok: false, error: "Calendar access is not granted." });
+    expect(await res.json()).toMatchObject({ ok: false, error: "Calendar access is not granted." });
     expect(runtime.recentWrites?.pending(NOW, [])).toEqual([]);
   });
 
@@ -280,12 +280,12 @@ describe("createFromCard", () => {
 
   it("carries the writer's id, url and message, and keeps the calendar event", async () => {
     const created = await createFromCard(dentist, deps(answering(0, JSON.stringify({ id: "E-1", url: "https://x.test/e", message: "Saved." }))));
-    expect(created).toEqual({ ok: true, id: "E-1", url: "https://x.test/e", message: "Saved.", event: { at: Date.parse(dentist.fields.start), title: "Dentist" } });
+    expect(created).toMatchObject({ ok: true, id: "E-1", url: "https://x.test/e", message: "Saved.", event: { at: Date.parse(dentist.fields.start), title: "Dentist" } });
   });
 
   it("carries the writer's id for a card without an event", async () => {
     const created = await createFromCard({ kind: "task", fields: { title: "Look", map: MAP.ref } }, deps(answering(0, JSON.stringify({ id: "N-7" }))));
-    expect(created).toEqual({ ok: true, id: "N-7", message: "Created the agent task." });
+    expect(created).toMatchObject({ ok: true, id: "N-7", message: "Created the agent task." });
   });
 
   it("answers with the new desk_notes row id for a note or reminder the Desk keeps", async () => {
@@ -298,12 +298,12 @@ describe("createFromCard", () => {
 
   it("calls a success without an id uncertain", async () => {
     for (const stdout of [JSON.stringify({ message: "Saved." }), JSON.stringify({ id: "" }), JSON.stringify({ id: "  " })]) {
-      expect(await createFromCard(dentist, deps(answering(0, stdout)))).toEqual({ ok: false, uncertain: true, error: "The calendar entry writer answered in a form the Desk cannot read. It may have been created; check before asking again." });
+      expect(await createFromCard(dentist, deps(answering(0, stdout)))).toMatchObject({ ok: false, uncertain: true, error: "The calendar entry writer answered in a form the Desk cannot read. It may have been created; check before asking again." });
     }
   });
 
   it("returns no id when the writer exits non-zero", async () => {
-    expect(await createFromCard(dentist, deps(answering(4, JSON.stringify({ id: "E-2" }))))).toEqual({ ok: false, error: "{\"id\":\"E-2\"}" });
+    expect(await createFromCard(dentist, deps(answering(4, JSON.stringify({ id: "E-2" }))))).toMatchObject({ ok: false, error: "{\"id\":\"E-2\"}" });
   });
 });
 
@@ -326,7 +326,7 @@ describe("notes and reminders with a writer", () => {
     const calls: { argv: string[]; stdin: string }[] = [];
     const runWriter = recording(calls, { id: "T1", message: "Saved to Tana." });
     const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00030", kind: "note", fields: { text: "Code 4711" } }), db, runtime, { now: () => NOW, runWriter });
-    expect(await res.json()).toEqual({ ok: true, id: "T1", message: "Saved to Tana." });
+    expect(await res.json()).toMatchObject({ ok: true, id: "T1", message: "Saved to Tana." });
     expect(calls).toEqual([{ argv: ["note-writer"], stdin: JSON.stringify({ kind: "note", fields: { text: "Code 4711" }, requestId: "req-00030" }) }]);
     expect(listOpenNotes(db)).toEqual([]);
   });
@@ -335,7 +335,7 @@ describe("notes and reminders with a writer", () => {
     const calls: { argv: string[]; stdin: string }[] = [];
     const due = new Date(NOW + 60_000).toISOString();
     const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00031", kind: "reminder", fields: { text: "Stretch", due } }), db, runtime, { now: () => NOW, runWriter: recording(calls, { id: "R1" }) });
-    expect(await res.json()).toEqual({ ok: true, id: "R1", message: "Created the reminder." });
+    expect(await res.json()).toMatchObject({ ok: true, id: "R1", message: "Created the reminder." });
     expect(calls).toEqual([{ argv: ["reminder-writer", "--list", "Desk"], stdin: JSON.stringify({ kind: "reminder", fields: { text: "Stretch", due }, requestId: "req-00031" }) }]);
     expect(listOpenNotes(db)).toEqual([]);
     const later = await composeDesk(db, WITH_WRITERS, undefined, { now: NOW + 120_000, sourceCache: new SourceCache() });
@@ -347,11 +347,11 @@ describe("notes and reminders with a writer", () => {
     const send = (id: string, runWriter: WriterRunner) => handleDeskCreate(post("/api/desk/create", { requestId: id, kind: "note", fields: { text: "Code 4711" } }), db, runtime, { now: () => NOW, runWriter });
     const refused = await send("req-00032", async () => ({ code: 2, stdout: "", stderr: "trace\nTana is not reachable.\n" }));
     expect(refused.status).toBe(502);
-    expect(await refused.json()).toEqual({ ok: false, error: "Tana is not reachable." });
+    expect(await refused.json()).toMatchObject({ ok: false, error: "Tana is not reachable." });
     expect((await send("req-00032", recording([], { id: "T2" }))).status).toBe(200);
 
     const slow = await send("req-00033", async () => { throw new WriterTimeout("timed out after 5 s"); });
-    expect(await slow.json()).toEqual({ ok: false, uncertain: true, error: "The note writer timed out after 5 s. It may have been created; check before asking again." });
+    expect(await slow.json()).toMatchObject({ ok: false, uncertain: true, error: "The note writer timed out after 5 s. It may have been created; check before asking again." });
     expect((await send("req-00033", recording([], { id: "T3" }))).status).toBe(409);
 
     expect(await (await send("req-00034", async () => ({ code: 0, stdout: "ok", stderr: "" }))).json()).toMatchObject({ uncertain: true });

@@ -72,7 +72,7 @@ describe("Not phishing on the Desk", () => {
     expect([...(flagged?.actions ?? []), ...(flagged?.more ?? [])].map((a) => a.id)).toContain("mail.trust");
 
     const done = await act(rt, { action: "not-phishing", key: `mail:${first.id}` });
-    expect(done).toEqual({ status: 200, body: { ok: true, message: "Not phishing: mail from billing@pay.example is no longer flagged for replies going to another domain.", undo: "trust-1" } });
+    expect(done).toEqual({ status: 200, body: { ok: true, messagePhrase: expect.anything(), message: "Not phishing: mail from billing@pay.example is no longer flagged for replies going to another domain.", undo: "trust-1" } });
     const normal = await card(rt, first.id);
     expect(normal?.suspicious).toBeUndefined();
     expect(normal?.detail.history.some((h) => h.startsWith("The Desk would flag it (Replies go to support-desk.example"))).toBe(true);
@@ -100,12 +100,12 @@ describe("Not phishing on the Desk", () => {
     items = [mail({ headers: { authResults: { ...PASS, dkimDomains: ["pay.example"] } } })];
     let rt = runtime();
     await view(rt);
-    expect(await act(rt, { action: "not-phishing", key: `mail:${first.id}` })).toEqual({ status: 409, body: { ok: false, error: "This mail is not flagged as possible phishing." } });
+    expect(await act(rt, { action: "not-phishing", key: `mail:${first.id}` })).toEqual({ status: 409, body: { ok: false, messagePhrase: expect.anything(), error: "This mail is not flagged as possible phishing." } });
     items = [first];
     rt = runtime();
     await view(rt);
     expect((await act(rt, { action: "not-phishing", key: `mail:${first.id}` })).status).toBe(200);
-    expect((await act(rt, { action: "not-phishing.remove", sender: "BILLING@pay.example" })).body).toEqual({ ok: true, message: "Mail from billing@pay.example is checked for phishing in full again.", trusted: [] });
+    expect((await act(rt, { action: "not-phishing.remove", sender: "BILLING@pay.example" })).body).toMatchObject({ ok: true, message: "Mail from billing@pay.example is checked for phishing in full again.", trusted: [] });
     expect((await card(rt, first.id))?.suspicious).toBe(true);
     expect((await view(rt)).autonomy.done.find((d) => d.key === "mail-trust:trust-1")).toMatchObject({ action: "mail.trust.undone", message: "Removed in Settings: flagged as possible phishing again." });
     expect((await act(rt, { action: "not-phishing.undo", trust: "trust-1" })).status).toBe(409);

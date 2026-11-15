@@ -93,6 +93,7 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskAdapterAction } from "./api/desk-adapter";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
+import { withActPhrase } from "./desk/act-result";
 import { handleDeskTaskHandoff } from "./api/desk-task-handoff";
 import type { TaskDispatchBus } from "./desk/task-handoff";
 import { handleDeskLinks } from "./api/desk-links";
@@ -429,7 +430,7 @@ export function startServer(
         const authorizer = options.authorizer?.() ?? null;
         const handoffView = options.handoffView?.() ?? null;
         const doctorView = options.doctorView?.() ?? null;
-        return handleApi(
+        return withActPhrase(req, url.pathname, await handleApi(
           req,
           url,
           db,
@@ -445,7 +446,7 @@ export function startServer(
           authorizer,
           deskRuntime,
           { ...options, vigil: deskVigil(options) },
-        );
+        ));
       }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {

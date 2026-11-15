@@ -64,7 +64,7 @@ describe("POST /api/desk/voice/speak", () => {
     const fetchImpl = async (): Promise<Response> => Response.json({ detail: { status: "quota_exceeded", message: "..." } }, { status: 401 });
     const res = await handleDeskSpeak(speak("hi"), runtime(), { fetchImpl, readKey: key });
     expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ ok: false, error: NO_QUOTA });
+    expect(await res.json()).toMatchObject({ ok: false, error: NO_QUOTA });
   });
 
   it("separates a refused key, an unreachable provider and a missing key", async () => {
@@ -92,7 +92,7 @@ describe("POST /api/desk/voice/transcribe", () => {
     };
     const req = new Request("http://mc/api/desk/voice/transcribe", { method: "POST", body: new Blob([new Uint8Array([9, 9])], { type: "audio/webm" }) });
     const res = await handleDeskTranscribe(req, runtime(), { fetchImpl, readKey: key });
-    expect(await res.json()).toEqual({ ok: true, text: "what needs me" });
+    expect(await res.json()).toMatchObject({ ok: true, text: "what needs me" });
   });
 
   it("refuses an oversized recording before reading it", async () => {

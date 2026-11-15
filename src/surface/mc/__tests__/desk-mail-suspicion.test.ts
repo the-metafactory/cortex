@@ -193,7 +193,7 @@ describe("Report", () => {
     expect(view.items.find((i) => i.key === `mail:${phish.id}`)?.actions.map((a) => a.id)).toContain("mail.report");
     const q = queue([{ code: 0, stdout: JSON.stringify({ id: "d1", message: "Report draft saved in work Drafts." }), stderr: "" }]);
     const res = await handleDeskMail(post({ action: "report", key: `mail:${phish.id}` }), db, rt, { run: q.run, now: () => NOW });
-    expect(await res.json()).toEqual({ ok: true, message: "Report draft saved in work Drafts." });
+    expect(await res.json()).toMatchObject({ ok: true, message: "Report draft saved in work Drafts." });
     expect(q.calls).toEqual([{ argv: ["/opt/report"], stdin: { action: "report", account: "work", messageId: phish.id, to: "abuse@provider.example" } }]);
   });
 
@@ -202,13 +202,13 @@ describe("Report", () => {
     await composeDesk(db, plain.options ?? mailDesk(undefined), undefined, { now: NOW, handled: plain.ledger, ...(plain.sourceCache ? { sourceCache: plain.sourceCache } : {}) });
     const refused = await handleDeskMail(post({ action: "report", key: `mail:${phish.id}` }), db, plain, { run: queue().run, now: () => NOW });
     expect(refused.status).toBe(409);
-    expect(await refused.json()).toEqual({ ok: false, error: "Reporting mail is not set up on this stack." });
+    expect(await refused.json()).toMatchObject({ ok: false, error: "Reporting mail is not set up on this stack." });
     const desk: DeskOptions = { ...mailDesk(undefined), mailReport: { command: ["/opt/report"], timeoutSeconds: 15 } };
     const rt = runtime(desk);
     await composeDesk(db, desk, undefined, { now: NOW, handled: rt.ledger, ...(rt.sourceCache ? { sourceCache: rt.sourceCache } : {}) });
     const failed = await handleDeskMail(post({ action: "report", key: `mail:${phish.id}` }), db, rt, { run: queue([{ code: 1, stdout: "", stderr: "No Drafts folder." }]).run, now: () => NOW });
     expect(failed.status).toBe(502);
-    expect(await failed.json()).toEqual({ ok: false, error: "The mail was not reported: No Drafts folder." });
+    expect(await failed.json()).toMatchObject({ ok: false, error: "The mail was not reported: No Drafts folder." });
   });
 
   it("is configured with a command and an optional address", () => {

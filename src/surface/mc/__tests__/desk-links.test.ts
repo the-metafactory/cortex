@@ -56,7 +56,7 @@ describe("attach a mail to a task", () => {
     const rt = runtime([mail("m1")]);
     const first = await attach(rt);
     expect(first).toEqual({ status: 200, json: {
-      ok: true, message: "Attached “Venue quote” to “Kickoff prep”.",
+      ok: true, messagePhrase: expect.anything(), message: "Attached “Venue quote” to “Kickoff prep”.",
       link: { id: "link-1", from: { kind: "mail", key: "mail:m1", title: "Venue quote" }, to: { kind: "task", key: "kickoff", title: "Kickoff prep" }, origin: "desk", at: NOW },
     } });
     expect(await attach(rt)).toEqual(first);
@@ -93,10 +93,10 @@ describe("attach a mail to a task", () => {
   it("refuses a second attachment, a done task, a missing task and an unlisted mail", async () => {
     const rt = runtime([mail("m1"), mail("m2")]);
     await attach(rt);
-    expect(await attach(rt, "kickoff", "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed")).toEqual({ status: 409, json: { ok: false, error: "This mail is already attached to “Kickoff prep”. Undo that first." } });
-    expect(await attach(rt, "shipped", "2c9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", "mail:m2")).toEqual({ status: 409, json: { ok: false, error: "That task no longer exists or is done. Pick another one." } });
-    expect(await attach(rt, "nope", "3d9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", "mail:m2")).toEqual({ status: 409, json: { ok: false, error: "That task no longer exists or is done. Pick another one." } });
-    expect(await attach(rt, "kickoff", "4e9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", "mail:gone")).toEqual({ status: 409, json: { ok: false, error: "The Desk no longer lists this mail." } });
+    expect(await attach(rt, "kickoff", "1b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed")).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "This mail is already attached to “Kickoff prep”. Undo that first." } });
+    expect(await attach(rt, "shipped", "2c9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", "mail:m2")).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "That task no longer exists or is done. Pick another one." } });
+    expect(await attach(rt, "nope", "3d9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", "mail:m2")).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "That task no longer exists or is done. Pick another one." } });
+    expect(await attach(rt, "kickoff", "4e9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", "mail:gone")).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "The Desk no longer lists this mail." } });
     expect(await act(rt, { action: "attach", key: "mail:m2", requestId: "not-a-uuid", to: { kind: "task", id: "kickoff" } })).toMatchObject({ status: 400 });
     expect(activeMailLink(db, "m2")).toBeNull();
   });
@@ -115,18 +115,18 @@ describe("undo an attach", () => {
   it("brings the card back, logs restore, and refuses a second undo", async () => {
     const rt = runtime([mail("m1")]);
     await attach(rt);
-    expect(await act(rt, { action: "attach.undo", link: "link-1" })).toEqual({ status: 200, json: { ok: true, message: "“Venue quote” is back on the Desk.", restored: "mail:m1" } });
+    expect(await act(rt, { action: "attach.undo", link: "link-1" })).toEqual({ status: 200, json: { ok: true, messagePhrase: expect.anything(), message: "“Venue quote” is back on the Desk.", restored: "mail:m1" } });
     expect(readLink(db, "link-1")?.state).toBe("undone");
     expect(queryMailLog(db, {}).map((e) => e.action).sort()).toEqual(["attach", "restore"]);
     expect((await composeWith(db, options, rt, NOW)).items.some((i) => i.key === "mail:m1")).toBe(true);
     expect((await myDay(rt)).links).toEqual([]);
-    expect(await act(rt, { action: "attach.undo", link: "link-1" })).toEqual({ status: 409, json: { ok: false, error: "That is already undone." } });
-    expect(await act(rt, { action: "attach.undo", link: "link-9" })).toEqual({ status: 404, json: { ok: false, error: "The Desk has no record of that link." } });
+    expect(await act(rt, { action: "attach.undo", link: "link-1" })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "That is already undone." } });
+    expect(await act(rt, { action: "attach.undo", link: "link-9" })).toEqual({ status: 404, json: { ok: false, messagePhrase: expect.anything(), error: "The Desk has no record of that link." } });
   });
 
   it("says nothing returns when the mail left the inbox", async () => {
     await attach(runtime([mail("m1")]));
-    expect(await act(runtime([]), { action: "attach.undo", link: "link-1" })).toEqual({ status: 200, json: { ok: true, message: "The link to “Kickoff prep” is gone. “Venue quote” is no longer in your inbox, so nothing returns." } });
+    expect(await act(runtime([]), { action: "attach.undo", link: "link-1" })).toEqual({ status: 200, json: { ok: true, messagePhrase: expect.anything(), message: "The link to “Kickoff prep” is gone. “Venue quote” is no longer in your inbox, so nothing returns." } });
   });
 });
 
@@ -161,7 +161,7 @@ describe("link to a meeting", () => {
   it("attaches a mail to an upcoming meeting and lists it on the event", async () => {
     const rt = withEvents([mail("m1")], [meeting()]);
     expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } })).toEqual({ status: 200, json: {
-      ok: true, message: "Linked “Venue quote” to “Board call” today at 14:00.",
+      ok: true, messagePhrase: expect.anything(), message: "Linked “Venue quote” to “Board call” today at 14:00.",
       link: { id: "link-1", from: { kind: "mail", key: "mail:m1", title: "Venue quote" }, to: { kind: "meeting", key: EVENT, title: "Board call", at: at(4, 14), end: at(4, 15) }, origin: "desk", at: NOW },
     } });
     const view = await composeWith(db, options, rt, NOW);
@@ -171,10 +171,10 @@ describe("link to a meeting", () => {
 
   it("refuses a meeting that is over or unknown for a mail, and a reused request id for another mail", async () => {
     const rt = withEvents([mail("m1"), mail("m2")], [meeting(at(4, 8), at(4, 9))]);
-    expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } })).toEqual({ status: 409, json: { ok: false, error: "That meeting is already over." } });
-    expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: "cal:work-mail:nope" } })).toEqual({ status: 409, json: { ok: false, error: "The Desk no longer sees that meeting. Pick another one." } });
+    expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "That meeting is already over." } });
+    expect(await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: "cal:work-mail:nope" } })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "The Desk no longer sees that meeting. Pick another one." } });
     await attach(rt);
-    expect(await attach(rt, "kickoff", REQUEST, "mail:m2")).toEqual({ status: 409, json: { ok: false, error: "That request id was already used for another link." } });
+    expect(await attach(rt, "kickoff", REQUEST, "mail:m2")).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "That request id was already used for another link." } });
   });
 
   it("links a task and a note, past meetings included, once per pair, and a replay is idempotent", async () => {
@@ -182,15 +182,15 @@ describe("link to a meeting", () => {
     const note = addNote(db, "note", "Ask about the budget", null, NOW);
     const linkTask = { op: "link", requestId: REQUEST, from: { kind: "task", id: "kickoff" }, to: { kind: "meeting", event: EVENT } };
     const first = await link(rt, linkTask);
-    expect(first).toMatchObject({ status: 200, json: { ok: true, message: "Linked “Kickoff prep” to “Board call” today at 08:00.", link: { from: { kind: "task", key: "task:kickoff" } } } });
+    expect(first).toMatchObject({ status: 200, json: { ok: true, messagePhrase: expect.anything(), message: "Linked “Kickoff prep” to “Board call” today at 08:00.", link: { from: { kind: "task", key: "task:kickoff" } } } });
     expect(await link(rt, linkTask)).toEqual(first);
-    expect(await link(rt, { ...linkTask, requestId: "5f9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed" })).toEqual({ status: 409, json: { ok: false, error: "This is already linked to “Board call”." } });
+    expect(await link(rt, { ...linkTask, requestId: "5f9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed" })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "This is already linked to “Board call”." } });
     expect((await link(rt, { op: "link", requestId: "6a9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", from: { kind: "note", id: note.id }, to: { kind: "meeting", event: EVENT } })).status).toBe(200);
     expect((await eventLinks(rt))?.map((l) => [l.kind, l.title])).toEqual([["task", "Kickoff prep"], ["note", "Ask about the budget"]]);
     expect((await myDay(rt)).links).toMatchObject([{ from: { kind: "task", key: "task:kickoff" }, to: { kind: "meeting", key: EVENT, at: at(4, 8) } }]);
-    expect(await link(rt, { ...linkTask, requestId: "7b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", from: { kind: "task", id: "nope" } })).toEqual({ status: 404, json: { ok: false, error: "That task, thread or note no longer exists." } });
-    expect(await link(rt, { op: "link", from: { kind: "task", id: "kickoff" } })).toEqual({ status: 400, json: { ok: false, error: "A link needs a subject, a meeting and a request id." } });
-    expect(await link(rt, { op: "unlink", link: "link-1" })).toEqual({ status: 200, json: { ok: true, message: "“Kickoff prep” is no longer linked to “Board call”." } });
+    expect(await link(rt, { ...linkTask, requestId: "7b9d6bcd-bbfd-4b2d-9b5d-ab8dfbbd4bed", from: { kind: "task", id: "nope" } })).toEqual({ status: 404, json: { ok: false, messagePhrase: expect.anything(), error: "That task, thread or note no longer exists." } });
+    expect(await link(rt, { op: "link", from: { kind: "task", id: "kickoff" } })).toEqual({ status: 400, json: { ok: false, messagePhrase: expect.anything(), error: "A link needs a subject, a meeting and a request id." } });
+    expect(await link(rt, { op: "unlink", link: "link-1" })).toEqual({ status: 200, json: { ok: true, messagePhrase: expect.anything(), message: "“Kickoff prep” is no longer linked to “Board call”." } });
     expect((await eventLinks(rt))?.map((l) => l.kind)).toEqual(["note"]);
   });
 
@@ -202,13 +202,13 @@ describe("link to a meeting", () => {
     const back = (await composeWith(db, options, withEvents([mail("m1")], []), at(4, 18))).items.find((i) => i.key === "mail:m1");
     expect(readLink(db, "link-1")).toMatchObject({ state: "lost", reason: "“Board call (moved)” was cancelled" });
     expect(back?.why.startsWith("Back because “Board call (moved)” was cancelled.")).toBe(true);
-    expect(await act(withEvents([mail("m1")], []), { action: "attach.undo", link: "link-1" })).toEqual({ status: 409, json: { ok: false, error: "That link already ended: “Board call (moved)” was cancelled." } });
+    expect(await act(withEvents([mail("m1")], []), { action: "attach.undo", link: "link-1" })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "That link already ended: “Board call (moved)” was cancelled." } });
   });
 
   it("unlinking a mail through either door brings it back", async () => {
     const rt = withEvents([mail("m1")], [meeting()]);
     await act(rt, { action: "attach", key: "mail:m1", requestId: REQUEST, to: { kind: "meeting", event: EVENT } });
-    expect(await link(rt, { op: "unlink", link: "link-1" })).toEqual({ status: 200, json: { ok: true, message: "“Venue quote” is back on the Desk.", restored: "mail:m1" } });
+    expect(await link(rt, { op: "unlink", link: "link-1" })).toEqual({ status: 200, json: { ok: true, messagePhrase: expect.anything(), message: "“Venue quote” is back on the Desk.", restored: "mail:m1" } });
     expect(await eventLinks(rt)).toBeUndefined();
     expect((await composeWith(db, options, rt, NOW)).items.some((i) => i.key === "mail:m1")).toBe(true);
   });

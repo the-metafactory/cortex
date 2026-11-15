@@ -186,7 +186,7 @@ describe("Desk routines", () => {
     const id = String(card.fields.proposalId);
     const install = { action: "install", target: id, requestId: "install-recovery" } as const;
     s.refuse(true);
-    expect(await actOnRoutine(db, OPTIONS, install, NOW, s.run)).toEqual({ ok: false, error: "Target discovery is unavailable." });
+    expect(await actOnRoutine(db, OPTIONS, install, NOW, s.run)).toMatchObject({ ok: false, error: "Target discovery is unavailable." });
     s.refuse(false);
     expect((await actOnRoutine(db, OPTIONS, install, NOW, s.run)).ok).toBe(true);
     const routine = readRoutineProposal(db, id)?.routineId ?? "";

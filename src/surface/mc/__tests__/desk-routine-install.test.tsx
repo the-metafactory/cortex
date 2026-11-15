@@ -80,7 +80,7 @@ describe("installing a merged capability bundle", () => {
 
   it("keeps the failure reason and Install action, and retries with a new request", async () => {
     h.setInstall(() => Promise.resolve({ code: 2, stdout: "", stderr: "fetch failed\nbundle release missing\n" }));
-    expect(await actOnCapabilityInstall(db, OPTIONS, request(), none, { run: h.run, now: () => NOW })).toEqual({ ok: false, error: "install failed: bundle release missing" });
+    expect(await actOnCapabilityInstall(db, OPTIONS, request(), none, { run: h.run, now: () => NOW })).toMatchObject({ ok: false, error: "install failed: bundle release missing" });
     const page = await html();
     expect(page).toContain("install failed: bundle release missing");
     expect(page).toContain(">Install</button>");
@@ -271,7 +271,7 @@ describe("installing a merged capability bundle", () => {
     expect(await earlier).toMatchObject({ ok: false, uncertain: true });
     expect(readCapabilityInstall(db, undo.id)).toEqual(pending);
     second.resolve({ code: 0, stdout: "", stderr: "" });
-    expect(await newer).toEqual({ ok: true, message: "Bundle uninstalled." });
+    expect(await newer).toMatchObject({ ok: true, message: "Bundle uninstalled." });
     expect(readCapabilityInstall(db, undo.id)?.state).toBe("undone");
   });
 

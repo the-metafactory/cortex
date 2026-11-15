@@ -1,3 +1,4 @@
+import { withActPhrase } from "../desk/act-result";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -24,14 +25,7 @@ export interface DeskTaskHandoffDeps {
   newId?: () => string;
 }
 
-/**
- * POST {action: "preview", taskId, agent?, instruction?} returns the exact brief, its hash and what leaves the Desk;
- * {action: "hand", requestId, taskId, agent, instruction?, briefHash} publishes it to the agent over the local bus;
- * {action: "retry", requestId, id}, {action: "discard", id} and {action: "accept", id, done, requestId} act on one
- * hand-off. The rebind and identity gates in handleApi run before this handler. Task fields come from the Balance
- * store, never from the page.
- */
-export async function handleDeskTaskHandoff(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskTaskHandoffDeps = {}): Promise<Response> {
+async function handleDeskTaskHandoffRaw(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskTaskHandoffDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const desk = runtime?.options;
   if (!desk?.enabled) return fail(409, "The Desk is turned off on this stack.");
@@ -63,3 +57,12 @@ export async function handleDeskTaskHandoff(req: Request, db: Database, runtime:
 function answer(result: TaskHandoffResult): Response {
   return result.ok ? Response.json(result, { headers: noStore }) : fail(result.status, result.error);
 }
+
+/**
+ * POST {action: "preview", taskId, agent?, instruction?} returns the exact brief, its hash and what leaves the Desk;
+ * {action: "hand", requestId, taskId, agent, instruction?, briefHash} publishes it to the agent over the local bus;
+ * {action: "retry", requestId, id}, {action: "discard", id} and {action: "accept", id, done, requestId} act on one
+ * hand-off. The rebind and identity gates in handleApi run before this handler. Task fields come from the Balance
+ * store, never from the page.
+ */
+export const handleDeskTaskHandoff = async (req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskTaskHandoffDeps = {}): Promise<Response> => withActPhrase(req, new URL(req.url).pathname, await handleDeskTaskHandoffRaw(req, db, runtime, deps));

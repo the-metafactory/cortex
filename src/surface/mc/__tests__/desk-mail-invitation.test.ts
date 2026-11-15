@@ -133,11 +133,11 @@ describe("replies", () => {
   test("decline sends the reply command payload once, logs the decision and adds nothing to the calendar", async () => {
     const req = input();
     const result = await replyToInvitation(mail(), req, deps());
-    expect(result).toEqual({ ok: true, message: "Declined. The decline went to Olga." });
+    expect(result).toMatchObject({ ok: true, message: "Declined. The decline went to Olga." });
     expect(calls).toEqual([{ argv: ["invite-reply"], stdin: JSON.stringify({ action: "invite-reply", account: "work", messageId: "invite@example.org", uid: "uid-1", reply: "decline", requestId: req.requestId }) }]);
     expect(queryMailLog(db, {}).map((e) => [e.action, e.where])).toEqual([["decline", "desk"]]);
-    expect(await replyToInvitation(mail(), req, deps())).toEqual({ ok: true, message: "Declined. The decline went to Olga." });
-    expect(await replyToInvitation(mail(), input({ reply: "accept" }), deps())).toEqual({ ok: false, status: 409, error: "You already declined this invitation." });
+    expect(await replyToInvitation(mail(), req, deps())).toMatchObject({ ok: true, message: "Declined. The decline went to Olga." });
+    expect(await replyToInvitation(mail(), input({ reply: "accept" }), deps())).toMatchObject({ ok: false, status: 409, error: "You already declined this invitation." });
     expect(calls).toHaveLength(1);
   });
 
@@ -187,7 +187,7 @@ describe("replies", () => {
 
   test("a failed command is recorded and can be retried with a new request; a timeout makes it uncertain and blocks another answer", async () => {
     answer = () => ({ code: 1, stdout: "", stderr: "The work mail server did not take the reply: refused" });
-    expect(await replyToInvitation(mail(), input(), deps())).toEqual({ ok: false, status: 502, error: "The answer was not sent: The work mail server did not take the reply: refused" });
+    expect(await replyToInvitation(mail(), input(), deps())).toMatchObject({ ok: false, status: 502, error: "The answer was not sent: The work mail server did not take the reply: refused" });
     expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")?.status).toBe("failed");
     expect(queryMailLog(db, {})).toHaveLength(0);
     const { CommandTimeout } = await import("../common/spawn");
@@ -213,7 +213,7 @@ describe("replies", () => {
     const config: InvitationsConfig = { ...CONFIG, removeOnDecline: [{ account: "work", command: ["exchange-remover", "--ical-account", "me"] }] };
     const recurring = mail({ invitation: { ...INVITATION, recurring: true } });
     const result = await replyToInvitation(recurring, input(), deps({ config }));
-    expect(result).toEqual({ ok: true, message: "Declined. The decline went to Olga. Exchange's tentative copy is removed from your calendar." });
+    expect(result).toMatchObject({ ok: true, message: "Declined. The decline went to Olga. Exchange's tentative copy is removed from your calendar." });
     expect(calls.map((c) => c.argv[0])).toEqual(["invite-reply", "exchange-remover"]);
     expect(JSON.parse(calls[1]?.stdin ?? "{}")).toEqual({ action: "remove-declined", account: "work", uid: "uid-1", start: INVITATION.start, end: INVITATION.end, recurring: true });
     expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")).toMatchObject({ reply: "decline", status: "sent", calendar: "Exchange's tentative copy is removed from your calendar." });
@@ -230,7 +230,7 @@ describe("replies", () => {
     const config: InvitationsConfig = { ...CONFIG, removeOnDecline: [{ account: "work", command: ["exchange-remover"] }] };
     answer = (argv) => (argv[0] === "exchange-remover" ? { code: 1, stdout: "", stderr: "Exchange answered HTTP 401." } : { code: 0, stdout: JSON.stringify({ id: "r1", message: "The decline went to Olga." }), stderr: "" });
     const failed = await replyToInvitation(mail(), input(), deps({ config }));
-    expect(failed).toEqual({ ok: true, message: "Declined. The decline went to Olga. The calendar still holds the tentative copy: Exchange answered HTTP 401." });
+    expect(failed).toMatchObject({ ok: true, message: "Declined. The decline went to Olga. The calendar still holds the tentative copy: Exchange answered HTTP 401." });
     expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")).toMatchObject({ status: "sent", calendar: "The calendar still holds the tentative copy: Exchange answered HTTP 401." });
     expect(queryMailLog(db, {}).map((e) => e.action)).toEqual(["decline"]);
     const { CommandTimeout } = await import("../common/spawn");
@@ -239,14 +239,14 @@ describe("replies", () => {
       return { code: 0, stdout: JSON.stringify({ id: "r2" }), stderr: "" };
     };
     const timedOut = await replyToInvitation(mail({ id: "t@example.org" }), input(), deps({ config, run: slow }));
-    expect(timedOut).toEqual({ ok: true, message: "Declined. The calendar still holds the tentative copy: the remove command timed out after 30 s." });
+    expect(timedOut).toMatchObject({ ok: true, message: "Declined. The calendar still holds the tentative copy: the remove command timed out after 30 s." });
     const throwing: WriterRunner = async (argv) => {
       if (argv[0] === "exchange-remover") throw new Error("spawn failed");
       return { code: 0, stdout: JSON.stringify({ id: "r3" }), stderr: "" };
     };
-    expect(await replyToInvitation(mail({ id: "x@example.org" }), input(), deps({ config, run: throwing }))).toEqual({ ok: true, message: "Declined. The calendar still holds the tentative copy: spawn failed" });
+    expect(await replyToInvitation(mail({ id: "x@example.org" }), input(), deps({ config, run: throwing }))).toMatchObject({ ok: true, message: "Declined. The calendar still holds the tentative copy: spawn failed" });
     const silent: WriterRunner = async (argv) => ({ code: 0, stdout: argv[0] === "exchange-remover" ? "" : JSON.stringify({ id: "r4" }), stderr: "" });
-    expect(await replyToInvitation(mail({ id: "y@example.org" }), input(), deps({ config, run: silent }))).toEqual({ ok: true, message: "Declined. The remove command gave no answer, so the tentative copy may still be in your calendar." });
+    expect(await replyToInvitation(mail({ id: "y@example.org" }), input(), deps({ config, run: silent }))).toMatchObject({ ok: true, message: "Declined. The remove command gave no answer, so the tentative copy may still be in your calendar." });
   });
 
   test("removeOnDecline takes { account, command } entries and refuses an account listed twice", () => {
