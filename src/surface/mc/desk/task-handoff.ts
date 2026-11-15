@@ -60,7 +60,6 @@ export function openTask(db: Database, desk: DeskOptions, taskId: string): OpenT
   return null;
 }
 
-
 export function taskBrief(task: OpenTask, instruction: string | null): string {
   const { node, area } = task;
   const note = node.note?.trim() ?? "";
