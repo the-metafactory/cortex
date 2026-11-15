@@ -3,7 +3,7 @@ import { DEFAULT_YES_FILTER } from "./studio/view";
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { SourceEvent, SourceMail } from "./sources/command";
 import type { RangerMap, RangerMapNode, RangerNeedsYou, RangerState } from "./sources/ranger";
-import { rangerItemKey, rangerTitles } from "./sources/ranger";
+import { laneHolderName, rangerItemKey, rangerTitles } from "./sources/ranger";
 import { approvable, retryable } from "./actions";
 import { agentQuestion, RULING_ACTION, type RulingExplanation } from "./ruling";
 import { clock, DAY_MS, startOfDay } from "./time";
@@ -160,6 +160,13 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
     const failed = n.status === "failed";
     const links = issueLinks(n.url);
     const base = { ...(n.endedAt ? { sourceRevision: n.endedAt } : {}), ...(n.dueAt && Number.isFinite(Date.parse(n.dueAt)) ? { dueAt: n.dueAt } : {}), key: rangerItemKey(ref), source: "ranger", area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
+    const behind = n.queued && ranger ? laneHolderName(ranger, n.queued.lane) : undefined;
+    const queuedCard = n.queued
+      ? {
+          why: `Ranger queued the resume${behind ? ` behind "${behind}"` : ""}, at place ${n.queued.position}. It starts when the lane is free.`,
+          actions: [action("ranger.run-now", "Run both now", "primary", rangerActions && retryable(n)), LATER],
+        }
+      : {};
     const detail = {
       summary: n.reason?.detail ? `${n.reason.class ?? "Stopped"}: ${n.reason.detail}` : `The agent stopped (${n.status}).`,
       history: [`Stopped ${ago(now, endedAt)}`],
@@ -175,6 +182,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
         why: `The agent in ${repoName(n.repo)} cannot go on without a decision from you.`,
         score: 65 - ageDays * 2,
         actions: [rulingAction(n, n.url, rulingActions), LOOK, LATER],
+        ...queuedCard,
         detail,
         ...(question ? { question } : {}),
         ...(explanation ? { explanation } : {}),
@@ -186,6 +194,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
         why: `It stopped ${ago(now, endedAt)} in ${repoName(n.repo)}${failed ? ", and nothing moves until it is retried or parked" : ""}.`,
         score: (failed ? 60 : 40) - ageDays * 5,
         actions: [action("ranger.retry", "Let it retry", "primary", rangerActions && retryable(n)), LOOK, action("ranger.park", "Park it", "secondary", false)],
+        ...queuedCard,
         detail,
       });
     }

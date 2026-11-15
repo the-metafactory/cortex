@@ -695,7 +695,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (!result.ok && failOnCard) setCardNote(item.key, failOnCard(result));
     else setNote(result.text);
     if (!result.ok) return;
-    if (!keepVisible) {
+    if (!keepVisible && result.queued !== true) {
       setSnoozed((s) => new Set(s).add(item.key));
       setDetail((d) => (d?.key === item.key ? null : d));
     }

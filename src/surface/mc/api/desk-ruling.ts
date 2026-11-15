@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskRuntime } from "../desk/compose";
-import { oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner, type RangerRunResult } from "../desk/actions";
+import { oneLine, planResume, rangerActionsReady, spawnRanger, type RangerRunner, type RangerRunResult } from "../desk/actions";
 import { blockedEntry, MAX_RULING_LENGTH, needsYouEntry, ruleCommand } from "../desk/ruling";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
@@ -85,7 +85,7 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
     } catch (err) {
       return notResumed(`could not read Ranger: ${reason(err)}`);
     }
-    const plan = planRangerAction(state, "ranger.retry", key, desk.rangerCli);
+    const plan = planResume(state, key, desk.rangerCli);
     if (typeof plan === "string") return notResumed(plan);
     if (plan.handledKey !== null && runtime.ledger.has(plan.handledKey)) return notResumed("it was already sent to Ranger.");
     if (!runtime.ledger.claim(plan.claimKey)) return notResumed("a resume is already on its way to Ranger.");
@@ -99,6 +99,7 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
       runtime.ledger.release(plan.claimKey);
     }
     const title = needsYouEntry(state, key)?.title ?? "the node";
+    if (plan.queuedBehind !== undefined) return Response.json({ ok: true, message: `Recorded your ruling. The resume of "${title}" is queued behind "${plan.queuedBehind}".`, queued: true }, { headers: noStore });
     return Response.json({ ok: true, message: `Recorded your ruling and resumed "${title}".` }, { headers: noStore });
   } finally {
     rulings.release(requestId);
