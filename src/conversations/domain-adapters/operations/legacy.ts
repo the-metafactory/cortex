@@ -8,6 +8,7 @@ import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { canonicalGraphRef } from "../work-graph/read";
 import { flowName } from "../flow/schema";
 import { BALANCE_CREATE_CONTRACTS } from "../balance/create-contracts";
+import { MAIL_REPLY_DRAFT_CAPABILITY } from "../mail/reply-draft-host";
 import { OperationJournalStore, StoredSchema, type StoredOperation } from "./journal";
 import { parseWire, type Json, type OperationJournal } from "./types";
 import { canonicalWire } from "./validation";
@@ -80,6 +81,13 @@ function flowLegacyIssues(source: LegacySource, context: LegacyContext): string[
 }
 
 function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
+  if (source.record.owner === "mail-draft" && context.owner === "mail-draft" && context.capabilityId === MAIL_REPLY_DRAFT_CAPABILITY) {
+    const issues: string[] = [];
+    const [account] = context.destinations;
+    if (context.destinations.length !== 1 || account?.objectType !== "account") issues.push("legacy_destination_ambiguous");
+    if (context.canonicalReference && (context.canonicalReference.objectType !== "draft" || context.canonicalReference.canonicalId !== source.record.canonicalId)) issues.push("legacy_canonical_mapping_unsupported");
+    return issues;
+  }
   if (source.record.owner === "flow" && context.owner === "flow" && context.adapterId === "flow" && context.capabilityId === "flow.saved.create") return flowLegacyIssues(source, context);
   if (source.record.owner === "graph-node" && isGraphNodeBinding(context)) return graphNodeIssues(source, context);
   const objectType = balanceObjectType(context);
@@ -125,7 +133,7 @@ export function previewLegacyOperation(raw: LegacySource, mapping?: LegacyContex
   }
   if (source.createResult?.state === "created" && source.createResult.canonicalId !== canonical) issues.push("legacy_result_identity_conflict");
   if (source.readback?.found && source.readback.canonicalId !== canonical) issues.push("legacy_readback_identity_conflict");
-  if (!record.owner.startsWith("balance-") && !record.owner.startsWith("studio-") && !record.owner.startsWith("graph-") && record.owner !== "flow") issues.push("legacy_owner_identity_mapping_missing");
+  if (!record.owner.startsWith("balance-") && !record.owner.startsWith("studio-") && !record.owner.startsWith("graph-") && record.owner !== "flow" && record.owner !== "mail-draft") issues.push("legacy_owner_identity_mapping_missing");
   const evidence = { source, context, issues };
   const ownerRequestId = record.owner.startsWith("balance-") ? operationUuid(record.operationId) : record.owner.startsWith("studio-") || record.owner.startsWith("graph-") || record.owner === "flow" ? studioRequestId(record.operationId) : record.operationId;
   return { ...evidence, sourceDigest: hash(evidence), state: record.state === "created" && validCanonical ? "succeeded" : "uncertain", dispatchAllowed: false, retryAllowed: false, ownerRequestId };
