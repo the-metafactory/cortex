@@ -5,7 +5,7 @@ import { getVigilSubject, writeVigilSubject } from "../../../vigil/db";
 import { listVigilSubjects } from "../../../vigil/subjects-view";
 import { handleDeskRuling } from "../api/desk-ruling";
 import { HandledLedger, type RangerRunner } from "../desk/actions";
-import { composeDesk, type DeskOptions } from "../desk/compose";
+import { composeCurrentDay, composeDesk, currentDayItems, type DeskOptions } from "../desk/compose";
 import { EscalationRulings, escalationEntries, explainRuling, RULING_BODY_UNREADABLE, RULING_MODEL_FAILED, RULING_NOT_GROUNDED, RULING_NO_MODEL, RULING_POLICY_REFUSED, RulingExplainLoop, RulingLedger } from "../desk/ruling";
 import type { WaitingTask } from "../desk/sources/waiting";
 import { initDatabase } from "../db/init";
@@ -74,6 +74,49 @@ describe("Vigil escalation explanations and answers", () => {
     await loop.warm(await entries());
     expect((await compose(async () => node(), loop, allowed)).items[0]?.explanation).toEqual(EXPLANATION);
     expect(reads).toBe(2);
+  });
+
+  it.each(["currentDayItems", "composeCurrentDay"])("%s carries the configured escalation explanation into conversation context", async helper => {
+    const rulingExplain = new RulingExplainLoop(async () => EXPLANATION, async () => BODY);
+    await rulingExplain.warm(await entries());
+    const options = { ...DESK, rulingExplainer: { command: ["/opt/explain"], timeoutSeconds: 10, sourcePolicy: "local" as const } };
+    const context = { ...runtime(), options, rulingExplain, waitingTasks: { read: async () => TASKS } };
+    const items = helper === "currentDayItems"
+      ? await currentDayItems(db, context, { enabled: true }, NOW)
+      : (await composeCurrentDay(db, context, options, { enabled: true }, NOW)).items;
+    const card = items.find(item => item.key === KEY)!;
+    expect(card.detail.summary).not.toContain(RULING_NO_MODEL);
+    expect(card.explanation).toEqual(EXPLANATION);
+  });
+
+  it("bounds body reads and model calls across overlapping polls and warm calls", async () => {
+    let release = (): void => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const reads: string[] = [];
+    let models = 0;
+    const loop = new RulingExplainLoop(async () => { models++; return EXPLANATION; }, async (_repo, id) => {
+      reads.push(id);
+      await gate;
+      return BODY;
+    });
+    const entry = (await entries())[0]!;
+    const backlog = Array.from({ length: 9 }, (_, i) => ({ ...entry, nodeId: String(i + 1), itemKey: i % 2 ? `vigil:escalation-${i}` : undefined, reason: { class: i % 2 ? "escalation" : "blocked" } }));
+    const irrelevant = { ...entry, nodeId: "99", itemKey: undefined, reason: { class: "worker failed" } };
+    await loop.read(backlog.slice(0, 6));
+    const warming = loop.warm([...backlog, irrelevant]);
+    await loop.read([...backlog, irrelevant]);
+    try {
+      expect(reads).toHaveLength(4);
+    } finally {
+      release();
+      await warming;
+    }
+    const cached = await loop.read([...backlog, irrelevant]);
+    expect(cached.size).toBe(9);
+    expect([...cached.values()].every(value => value.kind === "explained")).toBe(true);
+    expect(new Set(reads).size).toBe(9);
+    expect(reads).toHaveLength(9);
+    expect(models).toBe(9);
   });
 
   it("names missing models, unreadable bodies, model failures and ungrounded answers", async () => {

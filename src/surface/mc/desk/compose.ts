@@ -43,7 +43,7 @@ import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestC
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
-import { escalationEntries, RULING_NO_MODEL, RULING_POLICY_REFUSED, type EscalationRulings, type RulingExplainLoop, type RulingLedger } from "./ruling";
+import { escalationEntries, RULING_NO_MODEL, RULING_POLICY_REFUSED, splitExplanations, type EscalationRulings, type RulingExplainLoop, type RulingLedger } from "./ruling";
 import type { ParserPermissions } from "../../../common/types/desk-parser";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
@@ -193,11 +193,11 @@ const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-trac
 export async function currentDayItems(db: Database, runtime: DeskRuntime, vigil: DeskVigilSource | undefined, now = Date.now()): Promise<DeskItem[]> {
   const desk = runtime.options;
   if (!desk?.enabled) return [];
-  return (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, escalationRulings: runtime.escalationRulings, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items;
+  return (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, rulingExplain: runtime.rulingExplain, escalationRulings: runtime.escalationRulings, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items;
 }
 
 export function composeCurrentDay(db: Database, runtime: DeskRuntime, desk: DeskOptions, vigil: DeskVigilSource | undefined, now = Date.now()): Promise<DeskView> {
-  return composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, escalationRulings: runtime.escalationRulings, handled: runtime.ledger, sourceCache: runtime.sourceCache, now, ...(runtime.adapterDay ? { adapterDay: runtime.adapterDay } : {}) });
+  return composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, rulingExplain: runtime.rulingExplain, escalationRulings: runtime.escalationRulings, handled: runtime.ledger, sourceCache: runtime.sourceCache, now, ...(runtime.adapterDay ? { adapterDay: runtime.adapterDay } : {}) });
 }
 
 export async function composeDesk(
@@ -343,8 +343,7 @@ export async function composeDesk(
   const entries = [...(ranger?.needsYou ?? []), ...escalations];
   const permitted = (repo: string): boolean => desk.rulingExplainer?.sourcePolicy !== "cloud" || repoIsCloud(desk.areas, repo);
   const explanationResults = await deps.rulingExplain?.read(entries.filter(entry => permitted(entry.repo)));
-  const explanations = new Map([...explanationResults ?? []].flatMap(([key, result]) => result.kind === "explained" ? [[key, result.explanation] as const] : []));
-  const explanationProblems = new Map([...explanationResults ?? []].flatMap(([key, result]) => result.kind === "unexplained" ? [[key, result.line] as const] : []));
+  const { explanations, problems: explanationProblems } = splitExplanations(explanationResults);
   for (const entry of escalations) {
     if (!permitted(entry.repo)) explanationProblems.set(entry.itemKey, RULING_POLICY_REFUSED);
     else if (!deps.rulingExplain) explanationProblems.set(entry.itemKey, RULING_NO_MODEL);

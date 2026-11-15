@@ -36,20 +36,21 @@ export function escalationEntries(subjects: VigilSubjectView[], tasks: ReadonlyM
 }
 
 const GraphNodeRead = z.object({ typed: z.boolean(), status: z.enum(["open", "closed"]), ref: z.object({ id: z.string() }) });
+const NODE_UNREADABLE = "The graph node could not be read. Answer on the issue.";
 
 export async function escalationRulingTarget(somaBin: string, ref: string, run: RangerRunner = argv => spawnRanger(argv, 4000)): Promise<{ repo: string; nodeId: string } | string> {
   const target = escalationTarget(ref);
   if (!target) return "The escalation does not name a forge issue. Answer on the issue.";
   try {
     const result = await run([somaBin, "graph", "node", target.nodeId, "--repo", `github:github.com/${target.repo}`, "--json"]);
-    if (result.code !== 0) return "The graph node could not be read. Answer on the issue.";
+    if (result.code !== 0) return NODE_UNREADABLE;
     const node = GraphNodeRead.safeParse(JSON.parse(result.stdout));
-    if (!node.success || node.data.ref.id !== target.nodeId) return "The graph node could not be read. Answer on the issue.";
+    if (!node.success || node.data.ref.id !== target.nodeId) return NODE_UNREADABLE;
     if (node.data.status !== "open") return "The graph node is closed. Answer on the issue.";
     if (!node.data.typed) return "The issue is not a typed graph node. Answer on the issue.";
     return target;
   } catch {
-    return "The graph node could not be read. Answer on the issue.";
+    return NODE_UNREADABLE;
   }
 }
 
@@ -102,7 +103,7 @@ export function agentQuestion(detail: string | undefined): AgentQuestion | null 
   return { condition: (m[1] ?? "").trim().replace(/,$/, "") || null, reason: (m[2] ?? "").trim() };
 }
 
-export const isBlocked = (n: RangerNeedsYou): boolean => n.reason?.class === "blocked";
+export const isBlocked = (n: Pick<RangerNeedsYou, "reason">): boolean => n.reason?.class === "blocked";
 
 export const needsYouEntry = (state: RangerState, itemKey: string): RangerNeedsYou | undefined =>
   state.needsYou.find((n) => rangerItemKey(`${n.repo}#${n.nodeId}`) === itemKey);
@@ -162,6 +163,16 @@ export interface RulingExplanation {
 }
 
 export type RulingExplain = { kind: "explained"; explanation: RulingExplanation } | { kind: "unexplained"; line: string };
+
+export function splitExplanations(results: ReadonlyMap<string, RulingExplain> = new Map()): { explanations: Map<string, RulingExplanation>; problems: Map<string, string> } {
+  const explanations = new Map<string, RulingExplanation>();
+  const problems = new Map<string, string>();
+  for (const [key, result] of results) {
+    if (result.kind === "explained") explanations.set(key, result.explanation);
+    else problems.set(key, result.line);
+  }
+  return { explanations, problems };
+}
 
 export type RulingExplainer = (prompt: string) => Promise<unknown>;
 
@@ -282,6 +293,8 @@ export async function readNodeBody(repo: string, nodeId: string, readers: { gith
 
 const EXPLAIN_REFRESH_MS = 6 * 60 * 60_000;
 const EXPLAIN_RETRY_MS = 2 * 60_000;
+const EXPLAIN_CONCURRENCY = 4;
+const explainable = (entry: RulingEntry): boolean => entry.itemKey !== undefined || isBlocked(entry);
 
 interface Explained {
   at: number;
@@ -297,6 +310,8 @@ interface Explained {
 export class RulingExplainLoop {
   private readonly cache = new Map<string, Explained>();
   private readonly running = new Map<string, Promise<RulingExplain>>();
+  private active = 0;
+  private readonly pending: (() => void)[] = [];
 
   constructor(
     private readonly explainer: RulingExplainer,
@@ -306,13 +321,12 @@ export class RulingExplainLoop {
   ) {}
 
   async explain(entries: RulingEntry[]): Promise<Map<string, RulingExplanation>> {
-    const results = await this.read(entries);
-    return new Map([...results].flatMap(([key, result]) => result.kind === "explained" ? [[key, result.explanation] as const] : []));
+    return splitExplanations(await this.read(entries)).explanations;
   }
 
   read(entries: RulingEntry[]): Promise<Map<string, RulingExplain>> {
     const now = this.clock();
-    const blocked = entries.filter(entry => entry.itemKey !== undefined || entry.reason?.class === "blocked");
+    const blocked = entries.filter(explainable);
     const live = new Set(blocked.map(nodeKey));
     for (const key of this.cache.keys()) if (!live.has(key)) this.cache.delete(key);
     const out = new Map<string, RulingExplain>();
@@ -326,7 +340,7 @@ export class RulingExplainLoop {
 
   async warm(entries: RulingEntry[]): Promise<void> {
     const now = this.clock();
-    await Promise.all(entries.filter(entry => entry.itemKey !== undefined || entry.reason?.class === "blocked").map((entry) => this.refresh(entry, now)));
+    await Promise.all(entries.filter(explainable).map((entry) => this.refresh(entry, now)));
   }
 
   private lookup(entry: RulingEntry, now: number): { result: RulingExplain; refresh: boolean } {
@@ -346,6 +360,8 @@ export class RulingExplainLoop {
   }
 
   private async compute(entry: RulingEntry, key: string, stamp: string, at: number): Promise<RulingExplain> {
+    if (this.active >= EXPLAIN_CONCURRENCY) await new Promise<void>(resolve => this.pending.push(resolve));
+    else this.active++;
     try {
       const body = await this.readBody(entry.repo, entry.nodeId);
       const result = await explainRuling(entry, body, this.explainer);
@@ -358,6 +374,9 @@ export class RulingExplainLoop {
       return result;
     } finally {
       this.running.delete(key);
+      const next = this.pending.shift();
+      if (next) next();
+      else this.active--;
     }
   }
 }
