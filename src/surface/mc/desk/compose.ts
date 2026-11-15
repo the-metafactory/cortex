@@ -18,7 +18,7 @@ import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoIsCloud, repoName, type AreaRule, type GoalActionsInput } from "./rank";
-import { DAY_MS, startOfDay } from "./time";
+import { DAY_MS, deskTimeZone, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
@@ -409,6 +409,7 @@ export async function composeDesk(
     calendars: [...calendars.values()],
     studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now, assistantName) : null,
     generatedAt: now,
+    timeZone: deskTimeZone(),
     displayName: desk.displayName || null,
     assistantName,
     topN: myDay.topN,

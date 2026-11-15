@@ -10,7 +10,7 @@ import { removeDeclined } from "./mail-invitation-remove";
 import type { Commitment } from "./mail-yes-filter";
 import { CommandTimeout } from "../common/spawn";
 import type { MailInvitation, SourceReading } from "./sources/command";
-import { clock, DAY_MS, startOfDay } from "./time";
+import { clock, DAY_MS, localDay, startOfDay } from "./time";
 import { DEFAULT_SLOTS, type InvitationSlotsConfig, type InvitationsConfig, type InviteReply, type InviteStatus } from "./mail-invitation-schema";
 
 export { DEFAULT_SLOTS, INVITATIONS_SQL, INVITE_REPLIES, type InvitationsConfig, type InviteReply } from "./mail-invitation-schema";
@@ -51,6 +51,8 @@ export interface InvitationView {
   uid: string;
   summary: string;
   when: string;
+  startIso: string;
+  endIso: string;
   start: string;
   end?: string;
   allDay?: boolean;
@@ -225,10 +227,13 @@ export function invitationView(mail: ListedMail, calendar: CalendarAvailability,
   const inv = mail.invitation;
   if (!inv) return undefined;
   const conflicts = invitationConflicts(inv, calendar);
+  const span = invitationSpan(inv);
   return {
     uid: inv.uid,
     summary: inv.summary,
     when: whenLine(inv),
+    startIso: inv.allDay ? localDay(span.at) : new Date(span.at).toISOString(),
+    endIso: inv.allDay ? localDay(span.end) : new Date(span.end).toISOString(),
     start: inv.start,
     ...(inv.end ? { end: inv.end } : {}),
     ...(inv.allDay ? { allDay: true } : {}),

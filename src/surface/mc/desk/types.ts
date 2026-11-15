@@ -215,6 +215,7 @@ export interface DeskGoal {
 }
 
 export interface DeskView {
+  timeZone: string;
   calendarAvailability?: CalendarAvailability;
   routines?: RoutineView;
   mailRules?: import("./mail-rules").MailRuleView[];

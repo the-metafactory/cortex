@@ -204,7 +204,7 @@ export function withSnoozeBack(item: DeskItem, back: SnoozeBack | undefined): De
 }
 
 interface SnoozeFailure { ok: false; status: number; error: string }
-type SnoozeResult = { ok: true; message: string; until: string } | SnoozeFailure;
+type SnoozeResult = { ok: true; message: string; until: string; untilIso: string | null } | SnoozeFailure;
 
 const refuse = (status: number, error: string): SnoozeFailure => ({ ok: false, status, error });
 const ADDRESS_RE = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
@@ -248,7 +248,7 @@ export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice,
   const features = mailFeatures(db, mail);
   insertSnooze(db, mail, resolved, ctx.now);
   logMailDecision(db, features, "snooze", "desk", ctx.now);
-  return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. Its read status in your mail stays unchanged.`, until: resolved.label };
+  return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. Its read status in your mail stays unchanged.`, until: resolved.label, untilIso: resolved.untilAt === null ? null : new Date(resolved.untilAt).toISOString() };
 }
 
 /** Ends a snooze now: the mail is back on the Desk as it was, without a reason line. */
