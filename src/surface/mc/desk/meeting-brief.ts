@@ -58,7 +58,7 @@ function readMail(row: LinkRow, readings: readonly SourceReading[], configured: 
   const connection = row.mail?.sourceId;
   if (configured.length === 0 || connection !== undefined && !configured.includes(connection)) return unreadable("no-adapter", mailIdentity(item, connection));
   if (connection === undefined) return { ok: false, reason: "read-failed", identity: mailIdentity(item), needsRelink: true };
-  const hits = readings.filter(reading => connection === undefined || reading.id === connection).flatMap((reading) =>
+  const hits = readings.filter(reading => reading.id === connection).flatMap((reading) =>
     reading.mail.filter((m) => `mail:${m.id}` === item && (account === null || (m.account ?? null) === account)).map((mail) => ({ reading, mail })),
   );
   const [hit] = hits;
@@ -70,7 +70,7 @@ function readMail(row: LinkRow, readings: readonly SourceReading[], configured: 
       ...(mail.url ? { link: mail.url } : {}), fingerprint: digest([mail.subject, mail.from.address, mail.receivedAt, mail.firstParagraph ?? null, mail.url ?? null]),
     };
   }
-  return unreadable("read-failed", mailIdentity(item, connection ?? hit?.reading.id));
+  return unreadable("read-failed", mailIdentity(item, connection));
 }
 
 const taskIdentity = (item: string): BriefSourceIdentity => ({ kind: "task", adapter: null, owner: BALANCE_OWNER, item });
