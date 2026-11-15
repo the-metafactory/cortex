@@ -35,6 +35,7 @@ export interface PlannedAction {
   claimKey: string;
   handledKey: string | null;
   done: string;
+  subject: { repo: string; nodeId: string; title: string };
 }
 
 const NODE_ID = /^[1-9]\d*$/;
@@ -67,6 +68,7 @@ export function planRangerAction(state: RangerState, action: RangerActionId, ite
         claimKey: approveKey(map, node),
         handledKey: approveKey(map, node),
         done: `Approved "${node.title}". Ranger will start it.`,
+        subject: { repo: map.repo, nodeId: node.id, title: node.title },
       };
     }
     return "Ranger no longer waits for an approval on this node.";
@@ -80,6 +82,7 @@ export function planRangerAction(state: RangerState, action: RangerActionId, ite
       claimKey: `retry:${entry.key}/${entry.nodeId}`,
       handledKey: retryKey(entry),
       done: `Ranger is running "${entry.title}" beside the node that holds its lane.`,
+      subject: { repo: entry.repo, nodeId: entry.nodeId, title: entry.title },
     };
   }
   if (!retryable(entry) || !NODE_ID.test(entry.nodeId) || !MAP_KEY.test(entry.key)) return "Ranger does not offer a retry for this node.";
@@ -88,6 +91,7 @@ export function planRangerAction(state: RangerState, action: RangerActionId, ite
     claimKey: `retry:${entry.key}/${entry.nodeId}`,
     handledKey: retryKey(entry),
     done: `Ranger is retrying "${entry.title}".`,
+    subject: { repo: entry.repo, nodeId: entry.nodeId, title: entry.title },
   };
 }
 
@@ -117,6 +121,7 @@ export function planResume(state: RangerState, itemKey: string, cli: RangerCli):
     claimKey: plan.claimKey,
     handledKey: queued,
     done: `Ranger queued "${entry.title}" behind "${holder}".`,
+    subject: plan.subject,
     queuedBehind: holder,
   };
 }

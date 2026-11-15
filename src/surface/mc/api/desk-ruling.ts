@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskRuntime } from "../desk/compose";
 import { oneLine, planResume, rangerActionsReady, spawnRanger, type RangerRunner, type RangerRunResult } from "../desk/actions";
-import { activeEscalation, blockedEntry, escalationRulingTarget, MAX_RULING_LENGTH, needsYouEntry, ruleCommand, type EscalationSubject } from "../desk/ruling";
+import { activeEscalation, RULING_ACTION, blockedEntry, escalationRulingTarget, MAX_RULING_LENGTH, needsYouEntry, ruleCommand, type EscalationSubject } from "../desk/ruling";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
 const noStore = { "Cache-Control": "no-store" };
@@ -12,6 +12,12 @@ const fail = (status: number, error: string, extra: Record<string, unknown> = {}
 const reason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 const REQUEST_ID = /^[\w-]{8,64}$/;
 const failureLine = (result: RangerRunResult): string => oneLine(result.stderr || result.stdout, `exit code ${result.code}`);
+
+async function escalationTitle(runtime: DeskRuntime, target: { repo: string; nodeId: string }): Promise<string> {
+  const ref = `${target.repo}#${target.nodeId}`;
+  const task = (await runtime.waitingTasks?.read([ref]))?.get(ref);
+  return task && task.kind !== "unavailable" ? task.title : ref;
+}
 
 export interface DeskRulingDeps {
   soma?: RangerRunner;
@@ -59,16 +65,21 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
 
   if (!rulings.claim(requestId)) return fail(409, "This ruling is already on its way.");
   try {
-    let recorded = rulings.recordedFor(requestId, key);
+    const operationKey = `ruling:${requestId}`;
+    const decisions = runtime.decisions;
+    let recorded = rulings.recordedFor(requestId, key) || decisions?.has(operationKey, key) === true;
     if (!recorded) {
       let entry;
+      let title: string | undefined;
       if (escalation) {
         const subject = deps.readSubject?.(key.slice("vigil:".length));
         if (!subject || !activeEscalation(subject)) return fail(409, "Vigil no longer lists this issue as waiting for you.");
         entry = await escalationRulingTarget(somaBin, subject.ref, deps.soma);
+        if (typeof entry !== "string") title = await escalationTitle(runtime, entry);
       } else {
         try {
           entry = blockedEntry(await read(), key);
+          if (typeof entry !== "string") title = entry.title;
         } catch (err) {
           return fail(502, `Could not read Ranger: ${reason(err)}`);
         }
@@ -84,13 +95,18 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
       }
       if (refused !== null) return fail(502, `Your ruling was not recorded: ${refused}`);
       rulings.add(requestId, key, now());
+      decisions?.record({ operationKey, itemKey: key, action: RULING_ACTION, target: entry, title: title ?? `${entry.repo}#${entry.nodeId}`, text, outcome: { state: escalation ? "not-requested" : "pending" } });
       recorded = true;
     }
 
     if (escalation) return Response.json({ ok: true, message: "Recorded your ruling on the escalated issue." }, { headers: noStore });
     if (!rangerActionsReady(desk)) return fail(409, "Rulings are not set up on this stack.");
 
-    const notResumed = (why: string): Response => fail(502, `Your ruling is recorded; Ranger did not resume: ${why}`, { recorded });
+    const notResumed = (why: string): Response => {
+      decisions?.settle(operationKey, { state: "failed", detail: why });
+      return notResumedResponse(why);
+    };
+    const notResumedResponse = (why: string): Response => fail(502, `Your ruling is recorded; Ranger did not resume: ${why}`, { recorded });
     let state;
     try {
       state = await read();
@@ -105,6 +121,7 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
       const result = await (deps.ranger ?? spawnRanger)(plan.argv);
       if (result.code !== 0) return notResumed(failureLine(result));
       if (plan.handledKey !== null) runtime.ledger.add(plan.handledKey, now());
+      decisions?.settle(operationKey, { state: plan.queuedBehind === undefined ? "accepted" : "queued" });
     } catch (err) {
       return notResumed(reason(err));
     } finally {
