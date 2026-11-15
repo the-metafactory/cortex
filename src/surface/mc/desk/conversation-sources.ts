@@ -2,7 +2,7 @@ import { grillingSource, type GrillingReads } from "./grilling-conversation";
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
-import type { ObjectRef, OwnerWriter, SourceState } from "../../../conversations/types";
+import type { ObjectRef, OwnerWriter, OwnerWriters, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { routedBalanceCreateWriter, type BalanceCreateCutover } from "./balance-create-cutover";
 import type { BalanceProjectCutover } from "./balance-project-cutover";
@@ -23,7 +23,7 @@ import { mailDraftReady, mailDraftWriter } from "./mail-draft-conversation-write
 import type { RoutineRunner } from "./routine-command";
 import { reminderWriter } from "./reminder-conversation-writer";
 import { routineWriter } from "./routine-conversation-writer";
-import { tanaNoteReady, tanaNoteWriter } from "./tana-note-conversation-writer";
+import { noteWriter, noteWriterKey } from "./note-conversation-writer";
 import { studioCaptureWriter, studioCloseWriter, studioNoteWriter, studioReadback, studioResponseWriter, studioThreadWriter } from "./studio-conversation-writer";
 import type { CaptureModel } from "./studio/capture";
 import type { GitRunner } from "./studio/git";
@@ -138,8 +138,11 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const calendar = calendarWriter(writerDeps("calendar"));
   const reminder = reminderWriter(writerDeps("reminder"));
   const goal = goalWriter({ ...writerDeps("goal"), ...(deps.listGoals ? { list: deps.listGoals } : {}) });
-  const tanaNote = tanaNoteWriter(writerDeps("note"));
   const deskNote = deskNoteWriter(writerDeps("note"));
+  const noteWriterEntry = (desk: DeskOptions): OwnerWriters => {
+    const key = noteWriterKey(desk);
+    return key ? { [key]: noteWriter(writerDeps("note")) } : {};
+  };
   const workerDeps = { db: deps.db, desk: deps.desk, ...(deps.runWorker ? { run: deps.runWorker } : {}), ...(deps.now ? { now: deps.now } : {}) };
   const { lookupMail, ledger } = deps;
   const mailDraft = lookupMail && ledger ? mailDraftWriter({ desk: deps.desk, lookupMail, ledger, ...(deps.runMailDraft ? { run: deps.runMailDraft } : {}), ...(deps.now ? { now: deps.now } : {}) }) : undefined;
@@ -157,7 +160,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}),
         ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}),
         ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}),
-        ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}),
+        ...noteWriterEntry(desk),
         ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }),
         ...(mailDraft && mailDraftReady(desk) ? { "mail-draft": mailDraft } : {}),
         ...(desk.workers ? { "work-brief": workBriefWriter(workerDeps), "work-start": workStartWriter(workerDeps), "work-cancel": workCancelWriter(workerDeps) } : {}),

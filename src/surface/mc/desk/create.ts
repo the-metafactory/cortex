@@ -10,6 +10,7 @@ export const WRITER_KINDS = ["calendar", "task", "goal", "note", "reminder"] as 
 export type WriterKind = (typeof WRITER_KINDS)[number];
 export type DeskWriters = Partial<Record<WriterKind, string[]>>;
 export type DeskWriterOwners = Partial<Record<WriterKind, string>>;
+export interface DeskWriterLabels { note?: { objects: string; noun: string; fallback: string } }
 const KEPT_ON_DESK: readonly AskKind[] = ["reminder", "note"];
 
 export function writableKinds(writers: DeskWriters, studio = false): Set<AskKind> {

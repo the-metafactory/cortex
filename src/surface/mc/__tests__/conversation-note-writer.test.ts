@@ -1,18 +1,45 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import type { DeskOptions } from "../desk/compose";
+import { conversationSources } from "../desk/conversation-sources";
 import { DeskSchema } from "../../../common/types/config";
 import { studioRequestId } from "../desk/conversation-sources";
 import { deskWriterRig } from "./conversation-writer-rig";
 
 const WRITER = ["desk-note-tana.ts"];
 const TANA_ID = "kX9_tana-node";
-const open = deskWriterRig({ prefix: "conversation-tana-note-", label: "ai.meta-factory.cortex.tana-note-writer-test", kind: "note", type: "tana-note", canonicalId: TANA_ID, owner: "tana" });
+const open = deskWriterRig({ prefix: "conversation-note-", label: "ai.meta-factory.cortex.tana-note-writer-test", kind: "note", type: "tana-note", canonicalId: TANA_ID, owner: "tana", labels: { note: { objects: "Tana notes", noun: "Tana notes", fallback: "the Tana inbox" } } });
 const rig = (writer: string[] | null = WRITER, policy: "local" | "cloud" = "cloud") => open(writer, policy);
 
 const NOTE = { text: "Ivy probe 0a1b — safe to delete" };
 const answer = (id: string) => () => Promise.resolve({ code: 0, stdout: JSON.stringify({ id, message: "Added the note to your Tana Inbox." }), stderr: "" });
 const refusal = (stderr: string) => () => Promise.resolve({ code: 1, stdout: "", stderr });
 
-describe("Tana note writer for conversation proposals", () => {
+describe("Note writer for conversation proposals", () => {
+  test("labels default to neutral words and an empty label fails the config naming its key", async () => {
+    const plain = await deskWriterRig({ prefix: "conversation-note-", label: "ai.meta-factory.cortex.note-writer-neutral-test", kind: "note", type: "tana-note", canonicalId: TANA_ID, owner: "tana" })(WRITER);
+    const refused = await plain.confirm(await plain.propose({ ...NOTE, target: "otherNode" }));
+    expect(refused.body.error).toBe("This stack adds notes only to the inbox. Nothing was created.");
+    const empty = DeskSchema.safeParse({ ask: { writers: { note: WRITER }, writerLabels: { note: { objects: "Notes", noun: "", fallback: "the inbox" } } } });
+    expect(empty.success).toBe(false);
+    expect(JSON.stringify(empty.error?.issues)).toContain("writerLabels.note.noun");
+  });
+
+  test("the note writer registers under the catalog's note slot for any owner, and under none without an owner", () => {
+    const keys = (owner?: string): string[] => {
+      const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ask: { parser: [], timeoutSeconds: 5, writers: { note: WRITER }, ...(owner ? { writerOwners: { note: owner } } : {}), taskMaps: [] } };
+      const db = new Database(":memory:");
+      db.run("CREATE TABLE desk_balance (id TEXT)");
+      const registered = Object.keys(conversationSources({ db, desk: () => options }).writers ?? {});
+      db.close();
+      return registered;
+    };
+    expect(keys("tana")).toContain("tana-note");
+    expect(keys("obsidian")).toContain("tana-note");
+    expect(keys("obsidian")).not.toContain("obsidian-note");
+    expect(keys().filter(key => key === "tana-note")).toEqual([]);
+  });
+
   test("the stack config declares a writer's owner on the writer, and a plain argument array declares none", () => {
     const declared = DeskSchema.parse({ ask: { writers: { note: { command: WRITER, owner: "tana" }, goal: ["desk-goal.ts"] } } }).ask;
     expect(declared.writers).toEqual({ note: WRITER, goal: ["desk-goal.ts"] });
@@ -22,7 +49,7 @@ describe("Tana note writer for conversation proposals", () => {
     expect(DeskSchema.safeParse({ ask: { writers: { note: { command: [] } } } }).success).toBe(false);
   });
 
-  test("the type is ready only when the note writer declares owner tana on an enabled Desk", async () => {
+  test("the type is ready only when the note writer declares an owner on an enabled Desk", async () => {
     const ready = await rig();
     expect(await ready.capability()).toBe("ready");
     ready.options.enabled = false;
@@ -30,7 +57,7 @@ describe("Tana note writer for conversation proposals", () => {
     ready.options.enabled = true;
     const ask = ready.options.ask ?? { parser: [], timeoutSeconds: 5, writers: {}, taskMaps: [] };
     ask.writerOwners = { note: "keep" };
-    expect(await ready.capability()).toBe("blocked:3039");
+    expect(await ready.capability()).toBe("ready");
     delete ask.writerOwners;
     expect(await ready.capability()).toBe("blocked:3039");
     expect(await (await rig(null)).capability()).toBe("blocked:3039");
