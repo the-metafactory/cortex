@@ -1,5 +1,5 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["src/surface/mc/dashboard-v2/main.tsx", "src/runner/hooks/*.ts", "src/taps/cc-events/*.ts"],
+  "entry": ["src/surface/mc/dashboard-v2/main.tsx", "src/runner/hooks/*.ts", "src/taps/cc-events/*.ts", "src/**/*.test.{ts,tsx}", "scripts/**/*.test.ts", "eslint/**/*.test.ts"],
   "ignore": ["docs/**", "src/services/network-registry/**", "src/surface/mc/worker/**", "src/taps/gh-webhook/**"]
 }
