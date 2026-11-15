@@ -12,6 +12,7 @@ import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrol
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
 import { writeVigilSubject } from "../../../vigil/db";
+import { seedDeskEscalation } from "./fixtures/vigil-escalation";
 import { startServer } from "../server";
 
 const NOW = Date.parse("2026-10-30T11:16:00.000Z");
@@ -264,12 +265,7 @@ describe("the Desk action route through Mission Control", () => {
   });
 
   it("records an escalation through the HTTP ruling route without a configured Ranger and keeps identity gates", async () => {
-    const subjectKey = "state:escalation:default:example/app#12";
-    writeVigilSubject(db, {
-      subject_key: subjectKey, subject_kind: "state", vocab: "escalation", ref: "example/app#12",
-      value: "needs-principal", healthy: 0, goal_id: null, producer: "soma", stack: "default", run_kind: null,
-      last_run_id: "run-1", last_ended_at: NOW, last_seen_at: NOW,
-    }, NOW);
+    const subjectKey = seedDeskEscalation(db, NOW);
     const desk = startDesk(rangerState(), true);
     const calls = await confirmedRulingCalls(desk, { key: `vigil:${subjectKey}`, text: "Use JSON.", requestId: "escalation-http-1" }, true);
     expect(calls).toEqual(["soma graph node 12", "soma graph rule 12"]);

@@ -1,3 +1,4 @@
+import { writeMailActionPackage } from "../../src/conversations/domain-adapters/__tests__/fixtures/mail-action-package";
 import { expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,3 +78,18 @@ test("an external Mail read package reads listed mail on two connections through
 test("the Surface SDK stays at 1.3.0", () => {
   expect(readFileSync(join(ROOT, "src/surface-sdk/index.ts"), "utf8")).toContain('export const SURFACE_SDK_VERSION = "1.3.0";');
 });
+
+for (const action of ["move", "reply"] as const) test(`external ${action} fixture settles by real lookup through public exports`, async () => {
+  const root = mkdtempSync(join(tmpdir(), "mail-action-export-"));
+  try {
+    const packageDir = writeMailActionPackage(join(root, "fixture"), { action, timeout: true, stateKey: "public-mail-action-proof" });
+    const result = await probeConformanceExport(packageDir, "run-mail-action.ts");
+    expect(result.stderr).not.toContain("error:");
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as { sdkVersion: string; report: { stages: { state: string }[]; ownerCalls: { dispatch: number; lookup: number } }; provider: { effects: unknown[] } };
+    expect(report.sdkVersion).toBe(DESK_ADAPTER_SDK_VERSION);
+    expect(report.report.stages.map(stage => stage.state)).toEqual(["uncertain", "uncertain", "succeeded", "succeeded", "succeeded"]);
+    expect(report.report.ownerCalls).toMatchObject({ dispatch: 1, lookup: 1 });
+    expect(report.provider.effects).toHaveLength(1);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);

@@ -137,10 +137,12 @@ import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { DESK_OUTLINE_ASK_PATH, handleDeskOutlineAsk } from "./api/desk-outline-ask";
+import { DESK_OUTLINE_HISTORY_PATH, handleDeskOutlineHistory } from "./api/desk-outline-history";
 import { handleConversations, importedSessions, type ConversationAccess } from "./api/conversations";
 import { conversationWebPrincipal } from "../../conversations/discord-dm";
 import { conversationSources } from "./desk/conversation-sources";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
+import { DecisionStore } from "./desk/decisions";
 import { EscalationRulings, RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
 import { DigestFlagger } from "./desk/mail-digest";
 import { WaitingClassifier } from "./desk/mail-waiting";
@@ -300,7 +302,7 @@ export function startServer(
   } : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
   const routineCapabilities = () => localRoutineCapabilities(options.agentPresence?.() ?? null);
-  const deskRuntime: DeskRuntime = { conversations: () => options.conversations?.()?.state === "ready", routineCapabilities, ...(options.deskDispatch ? { dispatch: options.deskDispatch } : {}), waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(routineCapabilities), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(options.desk?.somaBin ? { escalationRulings: new EscalationRulings(options.desk.somaBin, undefined, Date.now, db) } : {}), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.mailClassifier?.local ? { localMailClassifier: new MailClassifier(options.desk.mailClassifier.local, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes, assistantNameOf(options.desk), sourceBoundary(options.desk)), undefined, taskCloser(options.desk.ask, spawnWithStdin)) } : {}) };
+  const deskRuntime: DeskRuntime = { conversations: () => options.conversations?.()?.state === "ready", routineCapabilities, ...(options.deskDispatch ? { dispatch: options.deskDispatch } : {}), waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(routineCapabilities), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), decisions: new DecisionStore(db), ...(options.desk?.somaBin ? { escalationRulings: new EscalationRulings(options.desk.somaBin, undefined, Date.now, db) } : {}), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.mailClassifier?.local ? { localMailClassifier: new MailClassifier(options.desk.mailClassifier.local, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes, assistantNameOf(options.desk), sourceBoundary(options.desk)), undefined, taskCloser(options.desk.ask, spawnWithStdin)) } : {}) };
   const conversationHost = options.conversations?.();
   if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, ...(options.lifecycles ? { lifecycles: options.lifecycles } : {}), desk: () => deskRuntime.options, deskItems: () => currentDayItems(db, deskRuntime, deskVigil(options)), listedMail: key => findListedMail(deskRuntime.sourceCache?.cached() ?? [], key), lookupMail: key => resolveListedMail(deskRuntime.sourceCache?.cached() ?? [], key), ledger: deskRuntime.ledger }));
   const maxClients = config.ws.maxClients;
@@ -714,6 +716,7 @@ async function handleApi(
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
   if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk, { imported: importedSessions(conversations) });
   if (pathname === DESK_OUTLINE_ASK_PATH) return handleDeskOutlineAsk(req, db, desk);
+  if (pathname === DESK_OUTLINE_HISTORY_PATH) return handleDeskOutlineHistory(req, db, desk);
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);

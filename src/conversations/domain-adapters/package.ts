@@ -12,6 +12,7 @@ import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskAdapterDefinition, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
 import { mailJudgementBridge, mailReadBridge, type MailReadSource } from "./mail-read";
+import { mailExecutionBridge, type MailExecutionSource } from "./mail-execution";
 import type { MailJudgementStore } from "./mail/judgement-store";
 import { adaptDeskBackend, type DeskBackendConnector } from "./package-backend";
 import type { TrustedConnector } from "../authority";
@@ -156,6 +157,7 @@ export interface DeskPackageLoaderOptions {
   now?: () => Date;
   mail?: MailReadSource;
   mailJudgements?: MailJudgementStore;
+  mailExecution?: MailExecutionSource;
 }
 
 export interface DeskAdapterCatalogEntry {
@@ -747,6 +749,7 @@ export class DeskPackageLoader {
       },
       mail: mailReadBridge(this.options.mail, acting.adapterId, published),
       mailJudgements: mailJudgementBridge(this.options.mail, acting.adapterId, published, this.options.mailJudgements),
+      mailExecution: mailExecutionBridge(this.options.mail, this.options.mailExecution, acting.adapterId, published),
     };
     let definition: DeskAdapterDefinition;
     try {

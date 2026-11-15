@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.11.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.13.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -744,6 +744,24 @@ export interface ObservationRequest {
 	continuation?: string;
 	limit: number;
 }
+export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe";
+export interface DeskMailExecutionConnection {
+	readonly version: number;
+	readonly methods: readonly DeskMailExecutionMethod[];
+}
+export interface DeskMailOperationContext {
+	readonly operationId: string;
+	readonly attemptId: string;
+	readonly ownerRequestId: string;
+	readonly snapshotDigest: string;
+	readonly snapshot: ApprovedSnapshot;
+}
+export interface DeskMailExecutionBridge {
+	connection(connection: DeskAdapterConnection): DeskMailExecutionConnection | null;
+	invoke(connection: DeskAdapterConnection, method: DeskMailExecutionMethod, input: unknown): Promise<unknown>;
+	lookupContext(connection: DeskAdapterConnection, request: LookupRequest): Promise<DeskMailOperationContext>;
+}
+declare const replySubject: (subject: string) => string;
 declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 	z.ZodObject<{
 		action: z.ZodLiteral<"unimportant">;
@@ -772,13 +790,13 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 			canonicalId: z.ZodString;
 		}, z.core.$strict>;
 		said: z.ZodEnum<{
-			archive: "archive";
 			trash: "trash";
+			archive: "archive";
+			junk: "junk";
 			todo: "todo";
 			plan: "plan";
 			reply: "reply";
 			keep: "keep";
-			junk: "junk";
 			matters: "matters";
 			"not-bulk": "not-bulk";
 		}>;
@@ -944,6 +962,58 @@ export declare function mailReportSnapshot(options: {
 	input: MailReportInput;
 	provenance: Provenance;
 }): ApprovedSnapshot;
+export declare const MAIL_MOVE_CAPABILITY = "mail.move";
+export declare const MAIL_TRASH_CAPABILITY = "mail.trash";
+export declare const MAIL_RESTORE_CAPABILITY = "mail.restore";
+export declare const MAIL_MOVE_CAPABILITIES: readonly [
+	"mail.move",
+	"mail.trash",
+	"mail.restore"
+];
+export type MailMoveAction = "move" | "trash" | "restore";
+declare const MAIL_MOVE_TARGETS: readonly [
+	"archive",
+	"junk"
+];
+export type MailMoveTarget = (typeof MAIL_MOVE_TARGETS)[number];
+/** The declaration a Mail adapter publishes for the move verbs. The Cortex runtime registers it as the contract a fixture binding or a real adapter must meet. */
+export declare function mailMoveDeclaration(adapterId: string, only?: readonly MailMoveAction[]): AdapterDeclaration;
+export declare const mailAccountRef: (adapterId: string, connectionId: string, account: string) => ObjectReference;
+export declare const mailMessageRef: (adapterId: string, connectionId: string, messageId: string) => ObjectReference;
+export type MailMoveInput = {
+	action: "move";
+	message: ObjectReference;
+	target: MailMoveTarget;
+} | {
+	action: "trash";
+	message: ObjectReference;
+} | {
+	action: "restore";
+	message: ObjectReference;
+	from: string;
+};
+export declare function mailMoveSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: ObjectReference;
+	input: MailMoveInput;
+	provenance: Provenance;
+	policy?: "local" | "cloud";
+}): ApprovedSnapshot;
+export declare const MAIL_REPLY_DRAFT_CAPABILITY = "mail.reply-draft.create";
+/** The existing reply-draft wire contract, shared by the host and external Mail adapters. */
+export declare function mailReplyDraftDeclaration(adapterId?: string): AdapterDeclaration;
+/** Builds the exact message/account approval shape without trimming the reply text. */
+export declare function mailReplyDraftSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: ObjectReference;
+	message: ObjectReference;
+	body: string;
+	provenance: Provenance;
+	policy?: "local" | "cloud";
+	capability?: CapabilityDeclaration;
+}): ApprovedSnapshot;
 /**
  * The call a package's module supplies for one query capability. The host passes the validated fetch request for
  * the capability and releases the result only after it parses as a `QueryPage`.
@@ -1017,6 +1087,10 @@ export interface DeskListedMail {
 	readonly receivedAt: string;
 	readonly unread: boolean;
 	readonly firstParagraph?: string;
+	readonly unsubscribe?: {
+		readonly oneClick: true;
+		readonly host: string;
+	};
 }
 /**
  * A connection's provider health. `fresh` means the source's last listing succeeded. `stale` means it failed
@@ -1055,6 +1129,7 @@ export interface DeskAdapterHost {
 	registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
 	readonly mail: DeskMailReadBridge;
 	readonly mailJudgements?: DeskMailJudgementBridge;
+	readonly mailExecution?: DeskMailExecutionBridge;
 }
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {
@@ -1067,5 +1142,9 @@ export type CreateDeskAdapter = (host: DeskAdapterHost) => DeskAdapterDefinition
 export interface DeskAdapterModule {
 	readonly createDeskAdapter: CreateDeskAdapter;
 }
+
+export {
+	replySubject as mailReplySubject,
+};
 
 export {};

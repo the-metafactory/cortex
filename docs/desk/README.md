@@ -17,15 +17,17 @@ Example adapters that need no personal tools live in [cortex-desk-adapters](http
 
 ## What the Desk reads
 
-Without any `mc.desk` configuration, the Desk shows what Cortex knows itself:
+The Desk combines Cortex's own data with the integrations you configure:
 
 - **Vigil**: goal checks and their readings, escalations from agents, and the goals in the right margin. Vigil feeds the Desk on the stack named `default` when `vigil.enabled` is true.
 - **Ranger**: agents that stopped, are blocked on a decision, or wait for an approval or a grilling. The Desk reads Ranger when `mc.desk.ranger.url` is set.
 - **Notes and reminders** that you make in the command bar. Cortex keeps them in the Mission Control database.
 
+Ranger and Soma are optional built-ins. Ranger adds its items, actions (`mc.desk.ranger.bin`) and Studio thinking. Soma adds rulings and conversation graph writers (`mc.desk.soma.bin`), plus goal status reads and pausing through the separate `mc.desk.goals.somaBin`. A stack can leave both out: the Desk loads without their items, while configured sources, local notes and reminders, Studio files and independent Vigil readings still work. Actions that need a missing integration explain what is not set up. See [Optional built-ins: Ranger and Soma](configuration.md#optional-built-ins-ranger-and-soma) for the keys and exact refusal messages.
+
 Everything personal comes from **sources**: commands that you list under `mc.desk.sources` and that print the Desk's JSON. A calendar source adds meetings to the timeline. A mail source adds unread mail as items. Cortex runs each command on a timer, without a shell, and drops each entry that does not match the contract. A dropped entry shows on the Desk as a system line that names the field.
 
-The Desk never hard-wires a provider. A calendar, a mail account, a model that sorts mail, a place to write notes and a push channel all plug in as commands in the stack config. Each contract is in [Command contracts](commands.md).
+A calendar, a mail account, a model that sorts mail, a place to write notes and a push channel all plug in as commands in the stack config. Each contract is in [Command contracts](commands.md).
 
 `GET /api/desk` returns `ahead[]` with the calendar events and reminders that start from tomorrow through the sixth day after today (the window ends at the start of the seventh day). The Desk never fills in days a source did not read. To find them, read `calendarAvailability.sources[]`: each calendar source reports `to`, the end of its declared coverage. Days after that `to` are unread, not empty.
 

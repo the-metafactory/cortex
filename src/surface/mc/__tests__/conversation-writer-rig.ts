@@ -56,13 +56,13 @@ export interface ConversationWriterReply { ok: boolean; error: string; proposal:
 
 export type DeskWriterReply = ConversationWriterReply;
 export interface DeskWriterCall { argv: string[]; stdin: { kind: string; requestId: string; fields: Record<string, string> } }
-interface DeskWriterSetup { prefix: string; label: string; kind: DeskWriterKind; type: string; canonicalId: string; somaBin?: string; owner?: string }
+interface DeskWriterSetup { prefix: string; label: string; kind: DeskWriterKind; type: string; canonicalId: string; somaBin?: string; owner?: string; labels?: NonNullable<DeskOptions["ask"]>["writerLabels"] }
 
 export function deskWriterRig(setup: DeskWriterSetup) {
   const writerRig = conversationWriterRig(setup.prefix, setup.label);
   return async (writer: string[] | null, policy: "local" | "cloud" = "cloud") => {
     const db = writerRig.database();
-    const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(setup.somaBin ? { somaBin: setup.somaBin } : {}), ...(writer ? { ask: { parser: [], timeoutSeconds: 5, writers: { [setup.kind]: writer }, ...(setup.owner ? { writerOwners: { [setup.kind]: setup.owner } } : {}), taskMaps: [] } } : {}) };
+    const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(setup.somaBin ? { somaBin: setup.somaBin } : {}), ...(writer ? { ask: { parser: [], timeoutSeconds: 5, writers: { [setup.kind]: writer }, ...(setup.owner ? { writerOwners: { [setup.kind]: setup.owner } } : {}), ...(setup.labels ? { writerLabels: setup.labels } : {}), taskMaps: [] } } : {}) };
     const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
     const rig = await writerRig.open<DeskWriterReply>(db, runtime);
     const calls: DeskWriterCall[] = [];

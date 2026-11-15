@@ -12,7 +12,6 @@ import type { ListedMail } from "../../../surface/mc/desk/mail-actions";
 import type { DeskOptions } from "../../../surface/mc/desk/compose";
 import { DomainAdapterRegistry } from "../registry";
 import { fixtureBindings } from "../fixtures";
-import { objectReferenceSchema, objectSchema, schemaRef } from "../schema-primitives";
 import { AT } from "../operations/fixtures";
 import { OperationBridge } from "../operations/dispatch";
 import { ownerResultKit, requestParts } from "../operations/owner-results";
@@ -22,24 +21,15 @@ import { syntheticWriterPlan, syntheticWriterSteps } from "../operations/writer-
 import { legacyFixture } from "../operations/legacy-fixtures";
 import type { LegacyContext } from "../operations/legacy";
 import { openFixtureAuthority } from "../operations/lifecycle-fixtures";
-import { mailAccountRef, mailMoveDeclaration } from "./move-contract";
+import { mailAccountRef } from "./move-contract";
 import { createMailReplyDraftFacade, MAIL_REPLY_DRAFT_CAPABILITY, type MailReplyDraftConnection } from "./reply-draft-host";
+
+import { mailReplyDraftDeclaration } from "./reply-draft-contract";
 
 export const DRAFT_CONNECTION_ID = "mail-example";
 export const DRAFT_ACCOUNT = "account-example";
 export const DRAFT_MAIL: ListedMail = { kind: "mail", id: "message-example", account: DRAFT_ACCOUNT, sourceId: "source-example", from: { address: "sender@example.org" }, subject: "Example subject", receivedAt: "2026-11-01T00:00:00Z", unread: true };
 
-function draftDeclaration() {
-  const declaration = mailMoveDeclaration("mail", []);
-  const input = schemaRef(`${MAIL_REPLY_DRAFT_CAPABILITY}.input`);
-  const output = schemaRef(`${MAIL_REPLY_DRAFT_CAPABILITY}.output`);
-  declaration.schemas.push(
-    { ...input, schema: objectSchema({ message: objectReferenceSchema("mail", "message"), body: { type: "string", minLength: 1, maxLength: 20_000 } }, ["message", "body"]) },
-    { ...output, schema: objectSchema({ ref: objectReferenceSchema("mail", "draft") }, ["ref"]) },
-  );
-  declaration.capabilities.push({ capabilityId: MAIL_REPLY_DRAFT_CAPABILITY, label: "Save reply draft", kind: "action", objectTypes: ["message"], inputSchemaRef: input, outputSchemaRef: output, errorSchemaRef: schemaRef("mail.mail.error") });
-  return declaration;
-}
 
 export function mailDraftLegacyFixture(canonicalId = "draft-example") {
   const source = legacyFixture();
@@ -57,7 +47,7 @@ export function mailDraftLegacyFixture(canonicalId = "draft-example") {
 export async function openMailReplyDraftRig(conversationPolicy: "local" | "cloud" = "local") {
   const dir = await mkdtemp(join(tmpdir(), "mail-reply-draft-"));
   const registry = new DomainAdapterRegistry();
-  const declaration = draftDeclaration();
+  const declaration = mailReplyDraftDeclaration();
   const registered = registry.register(declaration, fixtureBindings(declaration));
   if (!registered.ok) throw new Error(registered.error.code);
   const open = async () => {

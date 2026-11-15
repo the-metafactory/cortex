@@ -47,7 +47,7 @@ test("real committed think-tonight enqueues native arguments once, without mode"
   expect(await runOverseer(r.config)).toEqual({ queued: ["alpha"], proposals: [] });
   expect(await runOverseer(r.config)).toEqual({ queued: [], proposals: [] });
   const args = JSON.parse((await readFile(r.calls, "utf8")).trim());
-  expect(args).toEqual(["job", "enqueue", "ivy-think", "--param", "thread=alpha", "--param", "trigger=Asked to think tonight"]);
+  expect(args).toEqual(["job", "enqueue", "assistant-think", "--param", "thread=alpha", "--param", "trigger=Asked to think tonight"]);
   expect(r.git("status", "--porcelain")).toBe("");
 });
 
