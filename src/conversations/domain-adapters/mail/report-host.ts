@@ -128,8 +128,10 @@ export class MailReportHost {
 
   async receipts(limit = 100): Promise<MailReportReceipt[]> {
     const stored = await loadOperations(this.options, await this.options.index.list());
-    const projected = await Promise.all(stored.map(async item => this.project(item, await this.loadRestores(item.journal.operationId))));
-    return projected.filter((receipt): receipt is MailReportReceipt => receipt !== null).sort((a, b) => b.at.localeCompare(a.at) || b.operationId.localeCompare(a.operationId)).slice(0, limit);
+    const reports = stored.filter(item => this.project(item, []) !== null);
+    const newestFirst = reports.sort((a, b) => (b.journal.events[0]?.at ?? "").localeCompare(a.journal.events[0]?.at ?? "") || b.journal.operationId.localeCompare(a.journal.operationId)).slice(0, limit);
+    const projected = await Promise.all(newestFirst.map(async item => this.project(item, await this.loadRestores(item.journal.operationId))));
+    return projected.filter((receipt): receipt is MailReportReceipt => receipt !== null);
   }
 
   private declared(capabilityId: string): boolean {

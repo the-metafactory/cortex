@@ -330,6 +330,7 @@ Every attempt writes a receipt with `undo: false`; a completed receipt says ther
 
 Execute `bun scripts/probe-desk-mail-unsubscribe.ts` for the Cortex-side live probe. It runs a fixture binding against a real journal: the prompt, the grant, the completed receipt, a refused account and a missing message. The production helm-mail declaration, binding and real provider parity probe belong to the dependent adapter build; this Cortex slice does not activate them.
 
+<!-- glossary-ignore: node, message -->
 ## Mail report kinds (SDK 1.11.0, node #3542)
 
 Mail has two kinds of report. Report as draft saves a report draft for the principal to send; it needs no grant, runs on a confirmation, and has no Undo here. A provider report (spam or phishing) submits the report to the mail provider. A package can import `mailReportDeclaration`, `mailReportSnapshot`, `MAIL_REPORT_CAPABILITY` and the `MailReportKind` type from the Desk SDK. The declaration defines `mail.report.draft`, `mail.report.spam` and `mail.report.phishing`, each taking one connection-qualified Mail message reference and returning that reference plus the folder the mail now sits in. A connection declares only the kinds it supports, and provider reports also need `mail.restore`, because Undo moves the mail back.
