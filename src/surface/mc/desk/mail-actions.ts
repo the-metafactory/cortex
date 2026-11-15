@@ -1,3 +1,4 @@
+import { MAX_REPLY_CHARS } from "../../../conversations/domain-adapters/mail/reply-draft-contract";
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
 import { forgetClassification, saveUnimportant } from "./classify";
@@ -28,7 +29,7 @@ export type ListedMail = SourceMail & { sourceId: string };
 
 const draftKey = (messageId: string): string => `draft:${messageId}`;
 
-export const MAX_REPLY_CHARS = 20_000;
+export { MAX_REPLY_CHARS } from "../../../conversations/domain-adapters/mail/reply-draft-contract";
 
 export type MailActionResult = MoveResult;
 

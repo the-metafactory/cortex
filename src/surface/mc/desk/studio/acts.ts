@@ -325,7 +325,7 @@ const NEEDS_OPEN_THREAD = new Set<StudioAct["act"]>(["respond", "think", "close"
 function threadAct(ctx: Ctx, act: Exclude<StudioAct, { act: "open" }>, found: Found): ActPlan | ActRefusal {
   switch (act.act) {
     case "spar":
-      return refuse(400, "Sparring requires the native ivy-think queue.");
+      return refuse(400, "Sparring requires the native assistant-think queue.");
     case "respond":
       return respond(ctx, act, found);
     case "keep":

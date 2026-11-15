@@ -37,20 +37,40 @@ The Mission Control views stay reachable at `/mc/` and `/mc/<asset>` while this 
 | `displayName` | `""` | Name used in the greeting. |
 | `assistantName` | `Assistant` | The name the Desk shows for the assistant, a display label not tied to a configured agent: 1 to 60 characters on one line. `GET /api/desk` returns it as `assistantName`; the text the Desk composes, its model prompts and the bundled Desk use it. |
 | `topN` | `5` | Integer from 1 to 10. Number of ranked items shown before the rest fold away. |
-| `ranger.url` | `""` | Ranger API base URL. Empty disables Ranger readings. |
-| `ranger.bin` | `""` | Ranger CLI executable for actions. Empty disables those actions. |
+| `ranger.url` (`rangerUrl`) | `""` | Optional Ranger API base URL. Adds running agents, blocked or failed tasks, approvals and grillings. Empty means no Ranger readings or items; Ranger actions also need this URL. |
+| `ranger.bin` (`rangerCli.bin`) | `""` | Optional Ranger CLI executable. Adds Ranger actions and Studio thinking. Empty leaves Ranger items readable when the URL is set, but disables Ranger actions and Studio thinking. |
 | `ranger.config` | `""` | Optional Ranger config path passed to its CLI. |
-| `soma.bin` | `""` | Soma executable for recording rulings on work-graph nodes. |
+| `soma.bin` (`somaBin`) | `""` | Optional Soma executable. Adds work-graph rulings and conversation graph writers. Empty disables those writes. Soma goal status reads and pausing use the separate optional `goals.somaBin` below. |
 | `areas` | `[]` | Area definitions described below. |
 | `sources` | `[]` | Calendar and mail commands described below. |
 | `studio` | absent | Optional Studio directory settings. |
 | `conversations` | absent | Model lanes and pi settings for conversations, described below. |
 
-`ranger.bin`, `ranger.config`, and `soma.bin` accept a leading `~`. Rulings need both Ranger actions and `soma.bin`.
+`ranger.bin`, `ranger.config`, and `soma.bin` accept a leading `~`. Rulings on Ranger items need both Ranger actions and `soma.bin`. Vigil escalation rulings use Soma directly for an open typed graph node.
 
 Each `areas` entry has required nonempty `id` and `label` strings. Its optional fields are `color` (default `""`), `repos` and `goals` (string arrays, default `[]`), and `policy` (`local` or `cloud`, default `cloud`). Repository and goal lists associate Cortex items with an area. A source's `area` associates all its entries with that area. Studio uses the policy to choose where a thread may be processed.
 
 `studio.dir` is a required nonempty directory path when Studio is configured. `studio.maxActive` defaults to 5 and accepts integers from 1 to 20. Optional `studio.yesFilter` contains 1 to 12 nonempty questions, each at most 200 characters after trimming. Without it, Studio asks "Is this mine to do?", "Does it fit my capacity?", and "What will I stop doing for it?" before a new commitment. See [Desk Studio: thread files](../desk-studio.md).
+
+### Optional built-ins: Ranger and Soma
+
+Ranger and Soma are built-in integrations that a stack can leave out. The table uses YAML keys; names in parentheses are their programmatic `DeskOptions` fields. `rangerCli` holds `bin` and the optional `config` path. Do not put `rangerUrl`, `rangerCli` or the top-level `somaBin` in YAML.
+
+Ranger supplies its items, actions and the queue for Studio thinking. Soma supplies graph rulings and graph writers; `goals.somaBin` adds Soma goal status reads and pausing. Goal readings themselves come through Vigil, and goal checks use `goals.check` commands. Leaving out Soma does not disable either independently configured facility.
+
+With `ranger.url`, `ranger.bin`, `soma.bin` and `goals.somaBin` unset, the Desk still loads and adds no items from Ranger or Soma. Configured sources, local notes and reminders, Studio files and independent Vigil readings remain available. If no source or Vigil reading is enabled, there are no integration items, and the briefing says: "The Desk cannot see anything yet: no source is connected."
+
+The missing integrations refuse requests with these exact messages, pinned alongside the compose regression in [`desk-optional-builtins.test.ts`](../../src/surface/mc/__tests__/desk-optional-builtins.test.ts):
+
+| Request or availability | Refusal |
+|---|---|
+| Ranger action | "Ranger actions are not set up on this stack." |
+| Work-graph ruling | "Rulings are not set up on this stack." |
+| Vigil escalation card without Soma | "Soma rulings are not set up on this stack. Answer on the issue." |
+| Studio thinking | "Thinking needs Ranger configured on this stack." |
+| Pause a goal | "Pausing goals is not set up on this stack." |
+| Run an unconfigured goal check | "No check is set up for this goal." |
+| Create a graph node from a conversation | "Soma is not set up on this stack. Nothing was created." |
 
 ## Sources
 
@@ -73,7 +93,8 @@ The first Desk request waits for the first read. Later requests use the cached r
 | `parser` | `[]` | Argument array for an optional text parser. Empty uses the built-in rules. |
 | `timeoutSeconds` | `30` | Integer from 1 to 120. Timeout for the parser and writers. |
 | `routing` | absent | Optional `{ permitted: [claude, codex, pi] }`. Enables required version 1 routing metadata. Request and area restrictions narrow this list before selection. |
-| `writers` | `{}` | Optional commands keyed by `calendar`, `task`, `goal`, `note`, or `reminder`. Each is a nonempty argument array, or `{ command, owner }` where `command` is that array and `owner` names the system the writer saves to, in lowercase letters, digits and dashes. A conversation with the assistant adds Tana notes only when the `note` writer declares `owner: tana`. |
+| `writers` | `{}` | Optional commands keyed by `calendar`, `task`, `goal`, `note`, or `reminder`. Each is a nonempty argument array, or `{ command, owner }` where `command` is that array and `owner` names the system the writer saves to, in lowercase letters, digits and dashes. A conversation with the assistant adds notes only when the `note` writer declares an owner, and the writer serves the conversation catalog's single note type whichever owner is named. |
+| `writerLabels` | `{}` | Words the note writer shows. `note` takes `objects`, `noun` and `fallback`, all nonempty, for example `{ objects: "Obsidian notes", noun: "Obsidian notes", fallback: "the Obsidian inbox" }`. Without it the Desk says "notes", "notes" and "the inbox", so a refusal reads "This stack adds notes only to the inbox." |
 | `taskMaps` | `[]` | Allowed task destinations, each with `ref` and `label`. A ref has the form `owner/repo#123`. |
 
 Notes and reminders stay in the Mission Control database when no writer is configured for their kind. A configured writer replaces that local storage. Calendar entries, tasks, and goal drafts need writers. Legacy parser failure falls back to the built-in rules. Routed parser failure returns an unavailable explanation. See [Parsers and writers](commands.md#parsers-and-writers).
@@ -172,6 +193,7 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 | `command` | absent | Nonempty argument array for a classifier command. |
 | `baseUrl` | absent | OpenAI-compatible API base URL, normally ending in `/v1`. Requires HTTPS except on loopback. Cortex appends `/chat/completions`. |
 | `model` | absent | Nonempty model name for the endpoint form. |
+| `sourcePolicy` | `cloud` for a command; `local` on a loopback endpoint with no declaration | `local` or `cloud`; see below. |
 | `apiKeyEnv` | absent | Environment variable containing the key. Mutually exclusive with `apiKeyFile`. |
 | `apiKeyFile` | absent | File containing the key. Mutually exclusive with `apiKeyEnv`. |
 | `caFile` | absent | PEM CA file for the endpoint form. For a command, pass its CA option in `command` instead. |
@@ -179,6 +201,8 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 | `maxPerPass` | `10` | Integer from 1 to 100. Maximum unclassified mail items processed per pass. |
 
 A configured key reaches a command as `DESK_CLASSIFIER_KEY`. A classifier failure leaves rule-based ranking in place and permits another attempt after ten minutes. The command form can return summaries and evidence in addition to a category. See [Mail classifiers](commands.md#mail-classifiers).
+
+`sourcePolicy: local` is the principal's statement that the command keeps content on this machine, and the Desk does not second-guess it. A command declared `local` is local even when its arguments contain a client name such as `codex` or `claude`; a command with no declaration is `cloud`. The Desk cannot verify that a declared local command stays on this machine, so a command that names a cloud client belongs in a cloud slot or not at all. The rule is the same for every Desk model command, including the digest and waiting models, the Studio filer and the ruling explainer. An endpoint is local only when it declares `sourcePolicy: local` or is a loopback address with no declaration.
 
 `mail.actions.trash` and `mail.actions.draft` are optional nonempty command arrays. `mail.actions.timeoutSeconds` defaults to 30 and accepts integers from 1 to 120. Both actions require the mail source to supply `account`. A draft command saves the person's reply to Drafts and never sends it. **Unimportant** records the sender and invokes `trash` when configured. Without `trash`, it hides the item locally.
 
@@ -253,7 +277,7 @@ mc:
 
 ## Goal actions
 
-`goals.somaBin` defaults to `""`. Setting it enables goal status reads and pausing through Soma. It is separate from `soma.bin`, which records rulings.
+`goals.somaBin` is optional and defaults to `""`. Setting it enables goal status reads and pausing through Soma. It is separate from `soma.bin`, which records rulings and serves conversation graph writers. Without it, Vigil goal readings remain visible, but Soma status filtering and pausing are unavailable.
 
 `goals.check` defaults to `{}`. It maps a goal id to a command definition. A key starts with a letter and contains at most 64 letters, digits, underscores, dots, or hyphens. Each definition has a required nonempty `command` array, optional `env` object (default `{}`), and `timeoutSeconds` (default 60, integer from 1 to 300). Environment keys must be valid variable names. The executable and environment values accept a leading `~`.
 

@@ -1,0 +1,1 @@
+{"firstStatus":200,"retryStatus":409,"skipOutcomes":1,"planned":"2026-11-02","skippedOn":"2026-11-12","timesDone":1,"next":"2026-11-16","temporaryStackOnly":true}

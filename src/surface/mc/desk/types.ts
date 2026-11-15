@@ -1,3 +1,4 @@
+import type { DeskDecision } from "./decisions";
 import type { MyDayView } from "./my-day";
 import type { DeskCalendar } from "./calendars";
 import type { ClassifierConfig } from "./classify";
@@ -48,6 +49,11 @@ export interface DeskLink {
   kind: "mail" | "issue" | "report" | "source" | "unsubscribe-page" | "task" | "meeting" | "meeting-join";
   label: string;
   labelPhrase?: DeskPhrase;
+  url: string;
+}
+
+export interface DeskMention {
+  text: string;
   url: string;
 }
 
@@ -124,6 +130,7 @@ export interface DeskItem {
   urgency: DeskUrgency;
   title: string;
   why: string;
+  mentions?: DeskMention[];
   whyPhrase?: import("./phrases").DeskPhrase;
   whyContent?: DeskWhyContent;
   score: number;
@@ -265,6 +272,7 @@ export interface DeskView {
   notifications: boolean;
   voice: DeskVoice;
   autonomy: DeskAutonomy;
+  decisions: DeskDecision[];
   corrections: DeskCorrection[];
   interruptions: InterruptReasonView[];
   studioBriefing?: string | null;

@@ -10,10 +10,11 @@ import { suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import type { SourceMail } from "./sources/command";
 import { DEFAULT_UNSUBSCRIBE, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
 import { isVip } from "./vips";
+import { unsubscribeMethod } from "../../../conversations/domain-adapters/mail/unsubscribe-method";
+export { unsubscribeMethod } from "../../../conversations/domain-adapters/mail/unsubscribe-method";
+export type UnsubscribeMethod = NonNullable<ReturnType<typeof unsubscribeMethod>>;
 
 export { DEFAULT_UNSUBSCRIBE, UNSUBSCRIBE_SQL, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
-
-export type UnsubscribeMethod = { kind: "one-click"; url: string } | { kind: "page"; url: string };
 
 export type UnsubscribeOffer =
   | { kind: "one-click"; url: string; host: string; dismissed: number; failed?: string }
@@ -24,33 +25,6 @@ export interface UnsubscribeView {
   kind: UnsubscribeOffer["kind"];
   host: string;
   url?: string;
-}
-
-const ONE_CLICK = "list-unsubscribe=one-click";
-const URI_RE = /<([^>]{1,2000})>/g;
-
-const uriOf = (raw: string): URL | null => {
-  const text = raw.replace(/\s+/g, "");
-  if (!URL.canParse(text)) return null;
-  const url = new URL(text);
-  return ["https:", "http:", "mailto:"].includes(url.protocol) ? url : null;
-};
-
-/** The unsubscribe the List-Unsubscribe headers offer (RFC 2369, RFC 8058): One-Click needs an HTTPS URI and the exact List-Unsubscribe-Post value. */
-export function unsubscribeMethod(headers: SourceMail["headers"]): UnsubscribeMethod | null {
-  const raw = headers?.listUnsubscribe;
-  if (!raw) return null;
-  const uris: URL[] = [];
-  URI_RE.lastIndex = 0;
-  for (let m = URI_RE.exec(raw); m !== null; m = URI_RE.exec(raw)) {
-    const url = m[1] === undefined ? null : uriOf(m[1]);
-    if (url) uris.push(url);
-  }
-  const secure = uris.find((u) => u.protocol === "https:");
-  const post = headers.listUnsubscribePost?.replace(/\s+/g, "").toLowerCase();
-  if (secure && post === ONE_CLICK) return { kind: "one-click", url: secure.href };
-  const page = secure ?? uris.find((u) => u.protocol === "http:") ?? uris.find((u) => u.protocol === "mailto:");
-  return page ? { kind: "page", url: page.href } : null;
 }
 
 const hostOf = (url: string): string => {

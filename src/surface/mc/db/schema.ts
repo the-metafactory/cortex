@@ -18,6 +18,7 @@ import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
 import { INTERRUPT_SWITCHES_SQL } from "../desk/interrupt-switches";
 import { LINKS_SQL } from "../desk/links-schema";
+import { MEETING_BRIEF_SQL } from "../desk/meeting-brief-schema";
 import { WORKER_HANDOFF_SQL } from "../desk/worker-handoff-store";
 import { TASK_HANDOFF_SQL } from "../desk/task-handoff-schema";
 
@@ -104,6 +105,8 @@ const ATTENTION_INDEX_SQL = [
  */
 
 export const TABLE_NAMES = [
+  "desk_escalation_statuses",
+  "desk_decisions",
   "tasks",
   "agents",
   "agent_task_assignment",
@@ -183,6 +186,9 @@ export const TABLE_NAMES = [
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  "CREATE TABLE IF NOT EXISTS desk_decisions (id TEXT PRIMARY KEY, operation_key TEXT NOT NULL UNIQUE, item_key TEXT NOT NULL, action TEXT NOT NULL, repo TEXT NOT NULL, node_id TEXT NOT NULL, title TEXT NOT NULL, text TEXT, decided_at INTEGER NOT NULL, outcome TEXT NOT NULL, outcome_detail TEXT, outcome_at INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS desk_decisions_decided ON desk_decisions (decided_at)",
+  "CREATE TABLE IF NOT EXISTS desk_escalation_statuses (source TEXT NOT NULL, ref TEXT NOT NULL, expires_at INTEGER NOT NULL, refusal TEXT, PRIMARY KEY (source, ref))",
   "CREATE TABLE IF NOT EXISTS desk_mail_decisions (id TEXT PRIMARY KEY, binding TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS desk_mail_decision_lookup ON desk_mail_decisions (json_extract(binding, '$.source'), json_extract(binding, '$.messageId'), created_at)",
   "CREATE TABLE IF NOT EXISTS desk_mail_moves (id TEXT PRIMARY KEY, account TEXT NOT NULL, message_id TEXT NOT NULL, target TEXT NOT NULL, sender TEXT NOT NULL, folder TEXT, created_at INTEGER NOT NULL, undone_at INTEGER)",
@@ -207,6 +213,7 @@ export const SCHEMA_SQL: string[] = [
   ...SNOOZE_SQL,
   ...INTERRUPT_SWITCHES_SQL,
   ...LINKS_SQL,
+  ...MEETING_BRIEF_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_capability_installs (

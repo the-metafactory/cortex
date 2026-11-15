@@ -18,6 +18,7 @@ import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoIsCloud, repoName, type AreaRule, type GoalActionsInput } from "./rank";
+import { readDecisions, type DecisionStore } from "./decisions";
 import { DAY_MS, deskTimeZone, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
@@ -47,7 +48,7 @@ import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli 
 import { escalationEntries, RULING_NO_MODEL, RULING_POLICY_REFUSED, splitExplanations, type EscalationRulings, type RulingExplainLoop, type RulingLedger } from "./ruling";
 import type { ParserPermissions } from "../../../common/types/desk-parser";
 import type { AskMap } from "./ask";
-import { writableKinds, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
+import { writableKinds, type DeskWriterLabels, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry, type PromotableAction } from "./autonomy";
@@ -67,6 +68,8 @@ import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type G
 import { studioBriefing } from "./studio/overseer";
 import { routeOf, sourceBoundary } from "./source-boundary";
 import { AUTO_LINK_GRANT, autoLinkMeeting } from "./mail-auto-link";
+import type { ToolProject } from "../../../common/types/desk-conversations";
+import { mentionRepositories, withMentions } from "./mentions";
 
 export interface AdapterCapabilityRequest {
   adapterId: string;
@@ -97,6 +100,7 @@ export interface DeskRuntime {
   rulingExplain?: RulingExplainLoop;
   escalationRulings?: EscalationRulings;
   rulings?: RulingLedger;
+  decisions?: DecisionStore;
   mailRules?: MailRuleLoop;
   dmarc?: DmarcLoop;
   digestFlagger?: DigestFlagger;
@@ -111,6 +115,7 @@ export interface DeskAskOptions {
   timeoutSeconds: number;
   writers: DeskWriters;
   writerOwners?: DeskWriterOwners;
+  writerLabels?: DeskWriterLabels;
   taskMaps: AskMap[];
   taskCloser?: string[];
 }
@@ -130,6 +135,7 @@ export interface DeskOptions {
   rangerCli?: RangerCli;
   somaBin?: string;
   areas: AreaRule[];
+  conversationProjects?: readonly Pick<ToolProject, "forge">[];
   studio?: StudioOptions;
   sources: DeskSourceConfig[];
   ask?: DeskAskOptions;
@@ -402,7 +408,8 @@ export async function composeDesk(
   if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects).map((goal) => { const areas = desk.areas.filter((area) => area.goals.includes(goal.id)); return { ...goal, local: areas.length === 0 || areas.some((area) => area.policy !== "cloud") }; }), now, cloudAreas), localSources, now);
   const digestFlags = readDigestFlags(db, digests.map((g) => g.id));
   const moved = movedKeys(db);
-  const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
+  const repositories = mentionRepositories(desk.areas, desk.conversationProjects ?? [], rangerResult?.state ?? null);
+  const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => withMentions({ ...i, todoFingerprint: sourceIdentity(i) }, repositories));
   return {
     ...(routines ? { routines } : {}),
     calendarAvailability: availability,
@@ -436,6 +443,7 @@ export async function composeDesk(
     voice: voiceView(desk.voice, assistantName),
     chime: rules.chime,
     notifications: rules.notifications,
+    decisions: readDecisions(db, now),
     autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier) }),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),

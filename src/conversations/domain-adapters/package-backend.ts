@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { TrustedConnector } from "../authority";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskObservationBinding } from "../../desk-sdk";
-import { OwnerSupportSchema, type DispatchRequest, type OwnerSupport } from "./operations/types";
+import { OwnerSupportSchema, type DispatchRequest, type LookupRequest, type OwnerSupport } from "./operations/types";
 import type { ObservationConnector } from "./reads/observation-types";
 import { QueryPageSchema } from "./reads/query-types";
 import type { AdapterDeclaration, BoundaryError } from "./types";
@@ -32,11 +32,19 @@ const NO_DISPATCH_CAPABILITY = "desk.dispatch.unavailable";
 const settled = <T>(run: () => T): Promise<Awaited<T>> => new Promise(resolve => { resolve(run() as Awaited<T>); });
 
 const admittedCalls = new AsyncLocalStorage<string>();
-const admittedDispatches = new AsyncLocalStorage<{ request: DispatchRequest; active: boolean }>();
-export const admittedDispatch = (): DispatchRequest | undefined => {
-  const scope = admittedDispatches.getStore();
-  return scope?.active ? structuredClone(scope.request) : undefined;
-};
+interface AdmittedExecution<T> { request: T; active: boolean; signal: AbortSignal }
+const admittedDispatches = new AsyncLocalStorage<AdmittedExecution<DispatchRequest>>();
+const admittedLookups = new AsyncLocalStorage<AdmittedExecution<LookupRequest>>();
+function activeRequest<T>(storage: AsyncLocalStorage<AdmittedExecution<T>>): T | undefined {
+  const scope = storage.getStore();
+  return scope?.active && !scope.signal.aborted ? structuredClone(scope.request) : undefined;
+}
+export const admittedDispatch = (): DispatchRequest | undefined => activeRequest(admittedDispatches);
+export const admittedLookup = (): LookupRequest | undefined => activeRequest(admittedLookups);
+function withExecution<T, R>(storage: AsyncLocalStorage<AdmittedExecution<T>>, request: T, signal: AbortSignal, run: () => R): Promise<Awaited<R>> {
+  const scope = { request: structuredClone(request), active: true, signal };
+  return settled(() => storage.run(scope, run)).finally(() => { scope.active = false; });
+}
 /** The adapter-and-connection key of a backend call. */
 export const connectionKey = (connection: DeskAdapterConnection): string => JSON.stringify([connection.adapterId, connection.connectionId]);
 /** The key of the connection whose admitted backend call is running now, if any. */
@@ -131,11 +139,12 @@ export function adaptDeskBackend(input: DeskBackendInput): DeskBackendConnector 
     },
     dispatch: (request, signal) => {
       if (!dispatchable || typeof action.dispatch !== "function") return Promise.reject(new DeskBackendUnavailableError(dispatchState.available ? { code: "dispatch_unavailable", message: "The dispatch path is unavailable." } : dispatchState.error));
-      const scope = { request: structuredClone(request), active: true };
-      return settled(() => call(() => admittedDispatches.run(scope, () => action.dispatch?.(structuredClone(request), signal)))).finally(() => { scope.active = false; });
+      return settled(() => call(() => withExecution(admittedDispatches, request, signal, () => action.dispatch?.(structuredClone(request), signal))));
     },
     ...(action && typeof action.cancel === "function" ? { cancel: (request, signal) => settled(() => call(() => action.cancel?.(structuredClone(request), signal))) } : {}),
-    ...(action && typeof action.lookup === "function" ? { lookup: (request, signal) => settled(() => call(() => action.lookup?.(structuredClone(request), signal))) } : {}),
+    ...(action && typeof action.lookup === "function" ? { lookup: (request, signal) => {
+      return settled(() => call(() => withExecution(admittedLookups, request, signal, () => action.lookup?.(structuredClone(request), signal))));
+    } } : {}),
     ...(readbackReady ? { readbackCapabilityId: readbackTarget, readback: (request, signal) => settled(() => call(() => action.readback?.(structuredClone(request), signal))) } : {}),
     ...(hasQuery ? {
       query: async (request, signal) => {

@@ -235,11 +235,12 @@ export interface ParserRequest {
   routing?: ParserPermissions;
 }
 
+export const ParserAnswerSchema = z.object({ kind: z.string(), fields: z.unknown().optional(), reason: z.string().optional(), routing: z.unknown().optional() });
+
 export type ParserRunner = (argv: string[], stdin: string, timeoutMs: number) => Promise<string>;
 
 export async function parseWithCommand(argv: string[], request: ParserRequest, run: ParserRunner, timeoutMs: number): Promise<ParseResult | null> {
   const invalid = (): ParseResult => ({ kind: "none", reason: "The parser returned an invalid answer.", routing: parserUnavailable("invalid-output") });
-  const envelope = z.object({ kind: z.string(), fields: z.unknown().optional(), reason: z.string().optional(), routing: z.unknown().optional() });
   let raw: unknown;
   try {
     raw = JSON.parse(await run(argv, JSON.stringify(request), timeoutMs));
@@ -247,7 +248,7 @@ export async function parseWithCommand(argv: string[], request: ParserRequest, r
     return request.routing ? invalid() : null;
   }
   const routed = request.routing !== undefined || (typeof raw === "object" && raw !== null && "routing" in raw);
-  const parsed = envelope.safeParse(raw);
+  const parsed = ParserAnswerSchema.safeParse(raw);
   if (!parsed.success) return routed ? invalid() : null;
   const answer = parsed.data;
   let routing: ParserRouting | undefined;

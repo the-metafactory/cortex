@@ -25,16 +25,12 @@ export const NOT_LOCAL_CONTENT: PromptContent = Object.freeze({ local: false });
 /** Content that must stay on this machine, for a reason the caller already knows. */
 export const LOCAL_CONTENT: PromptContent = Object.freeze({ local: true });
 
-const CLOUD_CLIENT = /(?:^|[\s/=-])(?:codex|claude|desk-codex-json)(?:\.[a-z]+)?(?:[\s=]|$)/;
-
-const namesCloudClient = (command: readonly string[]): boolean => command.some((arg) => CLOUD_CLIENT.test(arg));
-
 /**
- * Where a model configuration sends its prompts. A command is local only when it is declared local and names no known
- * cloud client. An endpoint is local when declared so, or on loopback with no declaration.
+ * Where a model configuration sends its prompts. A command follows its declared source policy and nothing else. An
+ * endpoint is local when declared so, or on loopback with no declaration.
  */
 export function routeOf(config: RouteInput): ModelRouteKind {
-  if (config.command?.length) return config.sourcePolicy === "local" && !namesCloudClient(config.command) ? "local" : "cloud";
+  if (config.command?.length) return config.sourcePolicy === "local" ? "local" : "cloud";
   if (config.sourcePolicy) return config.sourcePolicy;
   return config.baseUrl !== undefined && isLoopbackSideband(config.baseUrl) ? "local" : "cloud";
 }

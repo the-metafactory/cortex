@@ -56,7 +56,7 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "conformance-principal", stack: STACK, identityBindingRevision: "1", status: "active" };
   const connection: ConnectionRecord = {
     version: 1, status: "active", connectionId: input.connectionId, adapterId: input.adapterId, principalRef: principal.principalRef, connectionRevision: "1",
-    credentialHandle: SYNTHETIC_CREDENTIAL_HANDLE, accountScope: { account: "conformance-account", resource: "conformance-resource" },
+    credentialHandle: SYNTHETIC_CREDENTIAL_HANDLE, accountScope: { account: input.mailBinding?.account ?? "conformance-account", resource: "conformance-resource" },
     readCapabilityIds: [...input.readCapabilityIds], writeCapabilityIds: [...input.writeCapabilityIds], readDestinations: [...input.destinations], writeDestinations: [...input.destinations],
     connectorId: "conformance-connector", executionBindingRef: input.connector.support.declarationId, registryRevision: "registry-1",
   };
@@ -142,11 +142,12 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
       connection.status = "revoked";
       await service().publishHostRecord({ kind: "connection", value: connection }, revision);
     },
-    async reopen(): Promise<void> {
+    async reopen(connector?: TrustedConnector): Promise<void> {
       await host().close();
       opened.host = null;
       opened.service = null;
       opened.context = null;
+      if (connector) bindings.connectors = new Map([[connection.connectorId, connector]]);
       await boot(false);
     },
     async close() {
@@ -179,6 +180,6 @@ export interface ConformanceRig {
   restrictions: readonly RestrictionRecord[];
   registry: DomainAdapterRegistry;
   revokeConnection(): Promise<void>;
-  reopen(): Promise<void>;
+  reopen(connector?: TrustedConnector): Promise<void>;
   close(): Promise<void>;
 }
