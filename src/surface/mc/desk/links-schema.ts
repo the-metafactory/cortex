@@ -36,6 +36,7 @@ export type LinkState = "linked" | "undone" | "lost";
 
 /** What a mail link keeps of the mail, so the link still reads after the mail leaves the inbox. */
 export interface MailSnapshot {
+  sourceId?: string;
   sender: string;
   senderName: string | null;
   receivedAt: string;

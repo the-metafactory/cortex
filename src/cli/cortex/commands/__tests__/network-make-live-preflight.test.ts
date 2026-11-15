@@ -1,3 +1,4 @@
+import { usesListenerPort } from "./nats-listener-ports";
 /**
  * cortex#2533 — the pure make-live pre-flight helpers: JetStream store_dir
  * parsing, `$G` store reporting + move target, include inlining, and the
@@ -190,11 +191,19 @@ describe("renderBootTestConfig", () => {
   });
 
   test("moves every listener to a random loopback port", () => {
-    const { conf } = renderBootTestConfig(SNAPSHOT, OPTS);
-    expect(conf).not.toContain("4222");
-    expect(conf).not.toContain("6222");
-    expect(conf).not.toContain(":7422");
-    expect(conf).not.toContain("8080");
+    const { conf } = renderBootTestConfig(SNAPSHOT, { ...OPTS, scratchDir: "/private/tmp/fixture-4222-6222-7422-8080-8222" });
+    expect(conf).toContain("/private/tmp/fixture-4222-6222-7422-8080-8222/store");
+    const originalPorts = [4222, 6222, 7422, 8080, 8222];
+    expect(usesListenerPort(conf, originalPorts)).toBe(false);
+    for (const port of originalPorts) {
+      expect(usesListenerPort(`listen: "127.0.0.1:${port}"`, originalPorts)).toBe(true);
+      expect(usesListenerPort(`leafnodes { port: ${port} }`, originalPorts)).toBe(true);
+      for (const key of ["http", "https", "http_port", "https_port", "monitor_port", "prof_port"]) {
+        const control = `${key}: ${port}`;
+        expect(usesListenerPort(control, originalPorts)).toBe(true);
+        expect(usesListenerPort(renderBootTestConfig(control, OPTS).conf, originalPorts)).toBe(false);
+      }
+    }
     expect(conf).not.toContain("0.0.0.0");
     expect(conf).toContain(`listen: "127.0.0.1:-1"`);
     expect(conf).toContain("port: -1");

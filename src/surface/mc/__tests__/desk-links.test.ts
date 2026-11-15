@@ -75,7 +75,7 @@ describe("attach a mail to a task", () => {
     expect(rt.ledger.has("move:archive:m1")).toBe(false);
     expect((await myDay(rt)).links).toEqual([{
       id: "link-1", from: { kind: "mail", key: "mail:m1", title: "Venue quote" }, to: { kind: "task", key: "kickoff", title: "Kickoff prep" }, origin: "desk", at: NOW,
-      mail: { sender: "ada@example.org", senderName: "Ada Lovelace", receivedAt: new Date(at(4, 9)).toISOString(), url: "message://m1", account: "work" },
+      mail: { sourceId: "work-mail", sender: "ada@example.org", senderName: "Ada Lovelace", receivedAt: new Date(at(4, 9)).toISOString(), url: "message://m1", account: "work" },
     }]);
     expect(loadBalanceState(db)?.outline.children[0]?.children[0]?.note).toBeUndefined();
   });

@@ -107,6 +107,8 @@ export function meetingLinks(db: Database, since: number): Map<string, EventLink
   return out;
 }
 
+export const linksToMeeting = (db: Database, eventKey: string): LinkRow[] => rows(db, "state = 'linked' AND to_kind = 'meeting' AND to_key = ?", eventKey);
+
 /** Message ids whose mail is attached somewhere. */
 export function linkedMailIds(db: Database): Set<string> {
   return new Set(rows(db, "from_kind = 'mail' AND state = 'linked'").map((r) => messageIdOf(r.fromKey)));
@@ -172,7 +174,7 @@ export function attachRefusal(db: Database, messageId: string, requestId: string
   return active && active.requestId !== requestId ? refuse(409, `This mail is already attached to ${quoted(active.toTitle)}. Undo that first.`) : null;
 }
 
-const snapshot = (mail: ListedMail): MailSnapshot => ({ sender: mail.from.address.toLowerCase(), senderName: mail.from.name ?? null, receivedAt: mail.receivedAt, url: mail.url ?? null, account: mail.account ?? null });
+const snapshot = (mail: ListedMail): MailSnapshot => ({ sourceId: mail.sourceId, sender: mail.from.address.toLowerCase(), senderName: mail.from.name ?? null, receivedAt: mail.receivedAt, url: mail.url ?? null, account: mail.account ?? null });
 
 export const mailSubject = (mail: ListedMail): LinkSubject => ({ kind: "mail", key: mailKey(mail.id), title: mail.subject.slice(0, 300), mail: snapshot(mail) });
 
