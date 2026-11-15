@@ -1,7 +1,8 @@
 import type { Provenance } from "../operations/types";
 import type { RuleMatch } from "../../../surface/mc/desk/mail-rules-schema";
 import { MailMoveHost, type MailMoveAuthority, type MailMoveReceipt, type ReceiptState } from "./move-host";
-import { inLoopSelection, loopActionOf, loopCapabilityIds, type LoopMail, type MailLoopAction, type MailLoopGrant, type MailLoopKind, type MailLoopSelection, type MailLoopTarget } from "./loop-contract";
+import { inLoopSelection, type LoopMail, type MailLoopAction, type MailLoopGrant, type MailLoopKind, type MailLoopSelection, type MailLoopTarget } from "./loop-contract";
+import { mailActionCapabilityIds, mailActionForTarget } from "./move-contract";
 import type { MailLoopGrants } from "./loop-grant-store";
 
 export const MAIL_LOOP_REFUSALS = ["no-grant", "outside-selection", "denied"] as const;
@@ -82,7 +83,7 @@ export class MailLoopHost {
   }
 
   async grant(input: { loop: MailLoopKind; actions: readonly MailLoopAction[]; selection: MailLoopSelection }): Promise<MailLoopGrant | null> {
-    const authorityGrantId = await this.options.authority.grant(loopCapabilityIds(input.actions));
+    const authorityGrantId = await this.options.authority.grant(mailActionCapabilityIds(input.actions));
     if (!authorityGrantId) return null;
     return this.options.grants.issue({ ...input, adapterId: this.options.adapterId, connectionId: this.options.connectionId, authorityGrantId }, this.now());
   }
@@ -143,7 +144,7 @@ export class MailLoopHost {
       if (seen.has(item.mail.id)) continue;
       seen.add(item.mail.id);
       const grant = this.activeGrant(loop);
-      const action = loopActionOf(item.target);
+      const action = mailActionForTarget(item.target);
       const runnable = this.runnable(grant, loop, item, action);
       if (runnable.kind === "refused") {
         pass.proposals.push(this.proposal(loop, grant, item, runnable.reason, runnable.message));

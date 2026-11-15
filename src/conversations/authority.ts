@@ -286,7 +286,7 @@ export class AuthorityMediator {
     });
   }
 
-  async grantConnectionActions(context: HostContext, connectionId: string, capabilityIds: readonly string[]): Promise<string | null> {
+  async grantConnectionActions(context: HostContext, connectionId: string, capabilityIds: readonly string[], exact?: { destinations: readonly ObjectReference[]; target: ObjectReference }): Promise<string | null> {
     const wanted = [...new Set(capabilityIds)];
     if (!wanted.length) return null;
     return this.exclusive(async () => {
@@ -296,7 +296,10 @@ export class AuthorityMediator {
       if (policy.conversationPolicy === "local" && wanted.includes(MAIL_REPLY_DRAFT_CAPABILITY)) return null;
       if (binding.maintenance || !policy.operationVisible || !policy.readsAllowed || !policy.writesAllowed || !wanted.every(id => connection.writeCapabilityIds.includes(id))) return null;
       return this.commit(state => {
-        return this.openGrant(state, resolved, { adapterId: connection.adapterId, connectionId, capabilityIds: wanted, selection: "connection", destinations: [], context: { kind: "principal" }, sourceReleaseCeiling: "local" });
+        const constraints: GrantRecord["constraints"] = exact
+          ? { adapterId: connection.adapterId, connectionId, capabilityIds: wanted, destinations: [...exact.destinations], target: exact.target, context: { kind: "principal" }, sourceReleaseCeiling: "local" }
+          : { adapterId: connection.adapterId, connectionId, capabilityIds: wanted, selection: "connection", destinations: [], context: { kind: "principal" }, sourceReleaseCeiling: "local" };
+        return this.openGrant(state, resolved, constraints);
       });
     });
   }
