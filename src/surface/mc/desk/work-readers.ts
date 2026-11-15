@@ -40,6 +40,25 @@ const reader = (all: () => Promise<WorkObject[]>, one: (id: string) => Promise<W
   },
 });
 
+type BalanceNodeRead =
+  | { state: "available"; node: OutlineNode; area: DeskOptions["areas"][number] }
+  | { state: "unavailable"; reason: "unauthorized" | "gone" };
+
+export function readBalanceNode(db: Database, desk: DeskOptions | undefined, kind: "balance-task" | "balance-project", id: string): BalanceNodeRead {
+  if (!desk?.enabled) return { state: "unavailable", reason: "unauthorized" };
+  const state = loadBalanceState(db);
+  if (!state) return { state: "unavailable", reason: "gone" };
+  for (const root of state.outline.children) {
+    const node = findNode(root, id);
+    if (!node || node === root) continue;
+    const area = desk.areas.find(candidate => root.id === `area:${candidate.id}`);
+    if (!area) return { state: "unavailable", reason: "unauthorized" };
+    if ((node.children.length ? "balance-project" : "balance-task") !== kind) return { state: "unavailable", reason: "gone" };
+    return { state: "available", node, area };
+  }
+  return { state: "unavailable", reason: "gone" };
+}
+
 export function workReaders(deps: WorkReaderDeps): WorkReaders {
   const studio = async (): Promise<WorkObject[]> => {
     const desk = deps.desk();
@@ -72,19 +91,8 @@ export function workReaders(deps: WorkReaderDeps): WorkReaders {
     return found;
   };
   const balanceOne = (kind: "balance-task" | "balance-project") => (id: string): Promise<WorkRead> => {
-    const desk = deps.desk();
-    if (!desk?.enabled) return Promise.resolve(NOT_AUTHORIZED);
-    const state = loadBalanceState(deps.db);
-    if (!state) return Promise.resolve(GONE);
-    for (const root of state.outline.children) {
-      const node = findNode(root, id);
-      if (!node || node === root) continue;
-      const area = desk.areas.find(a => root.id === `area:${a.id}`);
-      if (!area) return Promise.resolve(NOT_AUTHORIZED);
-      if ((node.children.length ? "balance-project" : "balance-task") !== kind) return Promise.resolve(GONE);
-      return Promise.resolve({ state: "available", object: balanceObject(kind, node, area, deps.now()) });
-    }
-    return Promise.resolve(GONE);
+    const read = readBalanceNode(deps.db, deps.desk(), kind, id);
+    return Promise.resolve(read.state === "available" ? { state: "available", object: balanceObject(kind, read.node, read.area, deps.now()) } : read);
   };
   const items = async (): Promise<WorkObject[]> => {
     const desk = deps.desk();

@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "./compose";
-import { linksToMeeting, readTaskNode, type LinkRow } from "./links";
+import { linksToMeeting, type LinkRow } from "./links";
 import { readingEvents } from "./mail-snooze";
-import { readMyDay } from "./my-day";
 import { listOpenNotes, type DeskNote } from "./notes";
 import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import { oneLine } from "./studio/edit";
 import type { StudioView } from "./studio/view";
-import { workReaders } from "./work-readers";
+import { readBalanceNode } from "./work-readers";
 import { withSyncedBalance } from "./studio-my-day";
 import type { SourceReading } from "./sources/command";
 import {
@@ -77,22 +76,23 @@ const taskIdentity = (item: string): BriefSourceIdentity => ({ kind: "task", ada
 const threadIdentity = (item: string): BriefSourceIdentity => ({ kind: "thread", adapter: null, owner: STUDIO_OWNER_KIND, item });
 const noteIdentity = (item: string): BriefSourceIdentity => ({ kind: "note", adapter: null, owner: NOTES_OWNER, item });
 
-type Day = Parameters<typeof readTaskNode>[0];
 type Studio = StudioView | null;
 
-async function loadDay(db: Database, runtime: DeskRuntime, now: number): Promise<{ day: Day; studio: Studio } | null> {
+async function loadStudio(db: Database, runtime: DeskRuntime, now: number): Promise<{ studio: Studio } | null> {
   const desk = runtime.options;
   if (!desk) return null;
-  return withSyncedBalance(db, desk, now, (source, studio) => ({ day: readMyDay(db, desk, now, source), studio }), true).catch((err: unknown) => {
+  return withSyncedBalance(db, desk, now, (_source, studio) => ({ studio }), true).catch((err: unknown) => {
     process.stderr.write(`[meeting-brief] the outline could not be read: ${err instanceof Error ? err.message : String(err)}\n`);
     return null;
   });
 }
 
-function readTask(row: LinkRow, loaded: { day: Day } | null): BriefRead {
+function readTask(db: Database, runtime: DeskRuntime, row: LinkRow, loaded: { studio: Studio } | null): BriefRead {
   const identity = taskIdentity(row.fromKey);
-  const node = loaded ? readTaskNode(loaded.day, row.fromKey.slice("task:".length)) : null;
-  if (!node) return unreadable("read-failed", identity);
+  if (!loaded) return unreadable("read-failed", identity);
+  const read = readBalanceNode(db, runtime.options, "balance-task", row.fromKey.slice("task:".length));
+  if (read.state === "unavailable") return unreadable(read.reason === "unauthorized" ? "access-denied" : "read-failed", identity);
+  const node = read.node;
   const note = node.note ? clip(node.note) : "";
   return {
     ok: true, identity, text: `Task${node.done ? " (done)" : ""}: ${clip(node.title)}`, excerpt: note || clip(node.title),
@@ -122,15 +122,11 @@ function readNote(openNotes: Map<string, DeskNote>, row: LinkRow): BriefRead {
 async function defaultReaders(db: Database, runtime: DeskRuntime, now: number): Promise<BriefReaders> {
   const desk = runtime.options;
   const readings = currentReadings(runtime);
-  const loaded = await loadDay(db, runtime, now);
+  const loaded = await loadStudio(db, runtime, now);
   const openNotes = new Map(listOpenNotes(db).map((n) => [`note:${n.id}`, n]));
-  const policyReaders = workReaders({ db, desk: () => runtime.options, studioView: () => loaded?.studio ? Promise.resolve(loaded.studio) : null, now: () => now });
   return {
     mail: (row) => readMail(row, readings, desk?.sources.map(source => source.id) ?? []),
-    task: async (row) => {
-      const policy = await policyReaders["balance-task"]?.read(row.fromKey.slice("task:".length));
-      return policy?.state === "unavailable" && policy.reason === "unauthorized" ? unreadable("access-denied", taskIdentity(row.fromKey)) : readTask(row, loaded);
-    },
+    task: (row) => readTask(db, runtime, row, loaded),
     thread: (row) => readThread(row, loaded, desk?.studio !== undefined),
     note: (row) => readNote(openNotes, row),
   };
