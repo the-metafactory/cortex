@@ -346,15 +346,15 @@ export class SourceCache {
     return [...this.readings.values()];
   }
 
-  async read(sources: DeskSourceConfig[], now: number): Promise<SourceReading[]> {
-    return Promise.all(sources.map((s) => this.readOne(s, now)));
+  async read(sources: DeskSourceConfig[], now: number, fresh = false): Promise<SourceReading[]> {
+    return Promise.all(sources.map((s) => this.readOne(s, now, fresh)));
   }
 
-  private readOne(source: DeskSourceConfig, now: number): Promise<SourceReading> {
+  private readOne(source: DeskSourceConfig, now: number, fresh: boolean): Promise<SourceReading> {
     const cached = this.readings.get(source.id);
-    if (cached && now - cached.readAt < source.everySeconds * 1000) return Promise.resolve(cached);
+    if (!fresh && cached && now - cached.readAt < source.everySeconds * 1000) return Promise.resolve(cached);
     const next = this.running.get(source.id) ?? this.refresh(source, now, cached);
-    return cached ? Promise.resolve(cached) : next;
+    return cached && !fresh ? Promise.resolve(cached) : next;
   }
 
   private refresh(source: DeskSourceConfig, now: number, cached: SourceReading | undefined): Promise<SourceReading> {

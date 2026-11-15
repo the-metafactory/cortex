@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_SETTINGS, type AppState } from "../../../balance";
+import * as classify from "../desk/classify";
 import { handleDeskMeetingBrief } from "../api/desk-meeting-brief";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
@@ -17,24 +17,10 @@ import { addNote } from "../desk/notes";
 import { SourceCache } from "../desk/sources/command";
 import { startServer } from "../server";
 
-const NOW = new Date(2026, 10, 4, 10).getTime();
-const EVENT = "cal:cal:standup";
+import { NOW, EVENT, PRINCIPAL, SECRET_TITLE, seed, fixture, briefOptions, type Fixture } from "./fixtures/meeting-brief";
+import { meetingBriefHttpProbe } from "./fixtures/meeting-brief-http";
+
 const BASE_URL = "http://localhost/api/desk/meeting-brief";
-const PRINCIPAL = "principal@example.com";
-const SECRET_TITLE = "Saved title that must never be quoted as content";
-
-const task = (id: string, title: string) => ({ id, title, weight: 50, ordering: "parallel" as const, children: [], effort: 1 as const });
-const seed = (): AppState => ({
-  outline: { id: "root", title: "Outline", weight: 100, ordering: "parallel", children: [{ id: "area:work", title: "Work", weight: 50, ordering: "parallel", children: [task("kickoff", "Kickoff prep")] }] },
-  settings: { ...DEFAULT_SETTINGS }, log: [], history: { deficits: {}, lastSurfaced: {} }, dayState: null,
-});
-
-interface Fixture { events: unknown[]; items: unknown[] }
-const fixture = (over: Partial<Fixture> = {}): Fixture => ({
-  events: [{ id: "standup", title: "Weekly sync", start: new Date(NOW + 3_600_000).toISOString(), end: new Date(NOW + 7_200_000).toISOString() }],
-  items: [{ kind: "mail", id: "m1", from: { name: "Ada Lovelace", address: "ada@example.org" }, subject: "Venue quote", firstParagraph: "The venue costs 900.", receivedAt: new Date(NOW - 3_600_000).toISOString(), unread: true, account: "work", url: "https://mail.example.test/m1" }],
-  ...over,
-});
 
 const subject = (kind: LinkSubject["kind"], key: string, mail: LinkSubject["mail"] = null): LinkSubject => ({ kind, key, title: SECRET_TITLE, mail });
 const MAIL_SNAPSHOT = { sender: "ada@example.org", senderName: "Ada Lovelace", receivedAt: new Date(NOW).toISOString(), url: null, account: "work" };
@@ -42,7 +28,7 @@ const MAIL_SNAPSHOT = { sender: "ada@example.org", senderName: "Ada Lovelace", r
 let db: Database;
 let dir: string;
 let seq = 0;
-let models = 0;
+let model: ReturnType<typeof spyOn<typeof classify, "modelJson">>;
 let options: DeskOptions;
 
 const link = (from: LinkSubject): void => {
@@ -72,10 +58,11 @@ beforeEach(() => {
   saveBalanceState(db, seed());
   dir = mkdtempSync(join(tmpdir(), "desk-brief-"));
   seq = 0;
-  models = 0;
-  options = { enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [] }], sources: [{ id: "cal", command: ["cat", join(dir, "source.json")], everySeconds: 300, timeoutSeconds: 5 }] };
+  model = spyOn(classify, "modelJson");
+  options = briefOptions(dir);
 });
 afterEach(() => {
+  model.mockRestore();
   db.close();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -103,7 +90,7 @@ describe("POST and GET /api/desk/meeting-brief", () => {
     expect(brief.synthesis).toMatchObject({ state: "unavailable", reason: "not-configured", phrase: { code: "brief.synthesis-not-configured" } });
     expect(BRIEF_SYNTHESIS_STATES).toEqual(["preparing", "ready", "unavailable", "failed"]);
     expect(BRIEF_PREVIOUS_MEETING_STATES).toEqual(["identified", "unidentified", "unavailable"]);
-    expect(models).toBe(0);
+    expect(model).not.toHaveBeenCalled();
 
     const read = await call(get(), rt);
     expect(read).toEqual({ status: 200, json: prepared.json });
@@ -161,7 +148,7 @@ describe("POST and GET /api/desk/meeting-brief", () => {
     expect(empty.gaps).toEqual([expect.objectContaining({ reason: "no-linked-material", source: { kind: "meeting", adapter: null, connection: "cal", item: EVENT } })]);
     link(subject("mail", "mail:m9", { ...MAIL_SNAPSHOT, account: "elsewhere" }));
     const other = briefOf((await call(post({ event: EVENT, refresh: true }), rt)).json);
-    expect(other.gaps.map((g) => [g.source.item, g.reason])).toEqual([["mail:m9", "no-adapter"]]);
+    expect(other.gaps.map((g) => [g.source.item, g.reason])).toEqual([["mail:m9", "read-failed"]]);
   });
 
   it("keeps equal item keys in different accounts apart, by the account the link recorded", async () => {
@@ -218,6 +205,47 @@ describe("POST and GET /api/desk/meeting-brief", () => {
     expect(rebuilt.gaps.map((g) => g.reason)).toEqual(["read-failed"]);
   });
 
+  it("invalidates task URL-only changes and reads actual Studio content", async () => {
+    const state = seed();
+    const task = state.outline.children[0]?.children[0];
+    if (!task) throw new Error("Fixture task missing");
+    task.external = { source: "jira", url: "https://tasks.example.test/old", syncedAt: new Date(NOW).toISOString() };
+    saveBalanceState(db, state);
+    link(subject("task", "task:kickoff"));
+    const rt = await runtime();
+    const first = briefOf((await call(post({ event: EVENT }), rt)).json);
+    task.external.url = "https://tasks.example.test/new";
+    saveBalanceState(db, state);
+    expect((await call(get(), rt)).status).toBe(409);
+    const next = briefOf((await call(post({ event: EVENT }), rt)).json);
+    expect(next.revision).not.toBe(first.revision);
+    expect(next.facts[0]?.sources[0]?.link).toBe(task.external.url);
+
+    mkdirSync(join(dir, ".git"));
+    mkdirSync(join(dir, "threads"));
+    writeFileSync(join(dir, "threads/planning.md"), "---\ntype: question\nareas: [work]\nstate: active\nopened: 2026-11-01\n---\n## Question\nWhat is next?\n## Where I stand\nThe budget is approved.\n");
+    rt.options = { ...options, studio: { dir, maxActive: 3 } };
+    link(subject("thread", "thread:planning"));
+    const studio = briefOf((await call(post({ event: EVENT }), rt)).json);
+    expect(studio.facts.find(fact => fact.sources[0]?.kind === "thread")).toMatchObject({ text: "Studio thread: What is next?", sources: [{ kind: "thread", adapter: null, owner: "studio", item: "thread:planning", excerpt: "The budget is approved." }] });
+    expect(model).not.toHaveBeenCalled();
+  });
+
+  it("refuses retained cache entries after their connection is removed, and fails closed on ambiguous Mail identity", async () => {
+    link(subject("mail", "mail:m1", MAIL_SNAPSHOT));
+    const rt = await runtime();
+    await call(post({ event: EVENT }), rt);
+    const sources = [...options.sources, { ...options.sources[0]!, id: "other" }];
+    rt.options = { ...options, sources };
+    const ambiguous = briefOf((await call(post({ event: EVENT }), rt)).json);
+    expect(ambiguous.facts).toEqual([]);
+    expect(ambiguous.gaps[0]?.reason).toBe("read-failed");
+    rt.options = { ...options, sources: [] };
+    const removed = await call(get(), rt);
+    expect(removed.status).toBe(404);
+    expect(JSON.stringify(removed.json)).not.toContain("venue");
+  });
+
   it("stops serving a prepared brief once the meeting is gone from the source", async () => {
     link(subject("note", `note:${addNote(db, "note", "Agenda", null, NOW).id}`));
     await call(post({ event: EVENT }), await runtime());
@@ -228,6 +256,11 @@ describe("POST and GET /api/desk/meeting-brief", () => {
 });
 
 describe("the route behind the Host, Origin and identity gates", () => {
+  it("revalidates live source contents without warming the Desk, and never returns a stale private snapshot", async () => {
+    await meetingBriefHttpProbe();
+    expect(model).not.toHaveBeenCalled();
+  });
+
   it("refuses GET and POST for a stranger and a foreign origin, and serves the principal", async () => {
     link(subject("note", `note:${addNote(db, "note", "Agenda", null, NOW).id}`));
     writeFixture(fixture());

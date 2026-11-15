@@ -1482,7 +1482,7 @@ describe("bootTestSnapshotConfig (live adapter, scripted process) — cortex#253
     const conf = deps.confs[0] ?? "";
     expect(conf).toContain(`account: "${FED_ACC}"`);
     expect(conf).not.toContain("hub.example.invalid");
-    expect(conf).not.toContain("4222");
+    expect(conf).not.toMatch(/(?:listen|port)\s*[:=]\s*"?(?:[^"\s]*:)?4222(?:"|\s|$)/m);
     expect(conf).not.toContain("/data/nats");
     expect(deps.kills).toEqual(["SIGTERM"]);
     expect(existsSync(argv[2] ?? "")).toBe(false); // scratch dir cleaned up

@@ -17,7 +17,7 @@ const STALE = "The meeting or its linked material changed since this brief was p
 
 const refreshRequired = (): Response => {
   const body: BriefRefreshRequired = { ok: false, error: STALE, code: REFRESH_REQUIRED };
-  return Response.json({ ...body, messagePhrase: { code: "act.closed-item" } }, { status: 409, headers: noStore });
+  return Response.json({ ...body, messagePhrase: { code: "brief.refresh-required" } }, { status: 409, headers: noStore });
 };
 
 async function prepare(req: Request, db: Database, runtime: DeskRuntime, deps: BriefDeps): Promise<Response> {
@@ -45,6 +45,7 @@ async function read(url: URL, db: Database, runtime: DeskRuntime, deps: BriefDep
 }
 
 async function currentEvidence(db: Database, runtime: DeskRuntime, event: string, deps: BriefDeps) {
+  await runtime.sourceCache?.read(runtime.options?.sources ?? [], (deps.now ?? Date.now)(), true);
   const meeting = resolveMeeting(runtime, event);
   if (!meeting) {
     dropPrepared(db, event);
@@ -53,10 +54,6 @@ async function currentEvidence(db: Database, runtime: DeskRuntime, event: string
   return { meeting, evidence: await gatherEvidence(db, runtime, event, meeting, deps) };
 }
 
-/**
- * POST {event, refresh?} prepares the brief for one Desk event, or returns the prepared one while its revision still matches the meeting and its
- * linked material; GET ?event= reads the prepared brief and answers 409 refresh-required when its inputs changed. Neither calls a model.
- */
 export async function handleDeskMeetingBrief(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: BriefDeps = {}): Promise<Response> {
   if (req.method !== "GET" && req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });
   if (!runtime?.options?.enabled) return fail(409, "The Desk is turned off on this stack.");

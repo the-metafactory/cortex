@@ -15,6 +15,11 @@ import {
   type BriefFact, type BriefGap, type BriefGapReason, type BriefSourceIdentity, type BriefSourceRef, type MeetingBrief,
 } from "./meeting-brief-contract";
 
+const currentReadings = (runtime: DeskRuntime): SourceReading[] => {
+  const configured = new Set(runtime.options?.sources.map(source => source.id) ?? []);
+  return (runtime.sourceCache?.cached() ?? []).filter(reading => configured.has(reading.id));
+};
+
 const BALANCE_OWNER = "balance";
 const NOTES_OWNER = "desk-notes";
 
@@ -23,14 +28,12 @@ const REVISION_VERSION = 1;
 
 type UnreadableReason = Exclude<BriefGapReason, "no-linked-material">;
 
-/** What one source read gave back for one linked item. A read that came back with nothing to quote is an empty read, not a failure. */
 export type BriefRead =
   | { ok: true; identity: BriefSourceIdentity; text: string; excerpt: string; link?: string; fingerprint: string }
   | { ok: false; reason: UnreadableReason; identity: BriefSourceIdentity };
 
 type BriefReader = (row: LinkRow) => BriefRead | Promise<BriefRead>;
 
-/** One reader per kind of linked item. The Desk's own readers are the default; a caller may replace any of them. */
 export type BriefReaders = Record<LinkRow["fromKind"], BriefReader>;
 
 export interface BriefDeps {
@@ -64,9 +67,7 @@ function readMail(row: LinkRow, readings: readonly SourceReading[], configured: 
       ...(mail.url ? { link: mail.url } : {}), fingerprint: digest([mail.subject, mail.from.address, mail.receivedAt, mail.firstParagraph ?? null, mail.url ?? null]),
     };
   }
-  const accountsListed = new Set(readings.flatMap((r) => r.mail.map((m) => m.account ?? null)));
-  const sourceMissing = hits.length === 0 && readings.every((r) => r.error === null) && account !== null && readings.length > 0 && !accountsListed.has(account);
-  return unreadable(sourceMissing ? "no-adapter" : "read-failed", mailIdentity(item, hit?.reading.id ?? account ?? undefined));
+  return unreadable("read-failed", mailIdentity(item, hit?.reading.id ?? account ?? undefined));
 }
 
 const taskIdentity = (item: string): BriefSourceIdentity => ({ kind: "task", adapter: null, owner: BALANCE_OWNER, item });
@@ -79,7 +80,7 @@ type Studio = StudioView | null;
 async function loadDay(db: Database, runtime: DeskRuntime, now: number): Promise<{ day: Day; studio: Studio } | null> {
   const desk = runtime.options;
   if (!desk) return null;
-  return withSyncedBalance(db, desk, now, (source, studio) => ({ day: readMyDay(db, desk, now, source), studio })).catch((err: unknown) => {
+  return withSyncedBalance(db, desk, now, (source, studio) => ({ day: readMyDay(db, desk, now, source), studio }), true).catch((err: unknown) => {
     process.stderr.write(`[meeting-brief] the outline could not be read: ${err instanceof Error ? err.message : String(err)}\n`);
     return null;
   });
@@ -117,7 +118,7 @@ function readNote(openNotes: Map<string, DeskNote>, row: LinkRow): BriefRead {
 
 async function defaultReaders(db: Database, runtime: DeskRuntime, now: number): Promise<BriefReaders> {
   const desk = runtime.options;
-  const readings = runtime.sourceCache?.cached() ?? [];
+  const readings = currentReadings(runtime);
   const loaded = await loadDay(db, runtime, now);
   const openNotes = new Map(listOpenNotes(db).map((n) => [`note:${n.id}`, n]));
   return {
@@ -139,15 +140,17 @@ interface MeetingFacts {
   at: number;
   end: number;
   connection: string | null;
+  fingerprint: string;
 }
 
-/** The meeting the current source readings list under this Desk event key, never anything a caller describes. */
 export function resolveMeeting(runtime: DeskRuntime, eventKey: string): MeetingFacts | null {
-  const readings = runtime.sourceCache?.cached() ?? [];
-  const event = readingEvents(readings).get(eventKey);
+  const readings = currentReadings(runtime);
+  const readable = readings.filter(reading => reading.error === null);
+  const event = readingEvents(readable).get(eventKey);
   if (!event) return null;
-  const connection = readings.find((r) => r.events.some((e) => `cal:${r.id}:${e.id}` === eventKey))?.id ?? null;
-  return { title: event.title, at: event.at, end: event.end, connection };
+  const source = readable.find((r) => r.events.some((e) => `cal:${r.id}:${e.id}` === eventKey));
+  const config = runtime.options?.sources.find(candidate => candidate.id === source?.id);
+  return { title: event.title, at: event.at, end: event.end, connection: source?.id ?? null, fingerprint: digest([source?.events.find(e => `cal:${source.id}:${e.id}` === eventKey), config]) };
 }
 
 interface BriefEvidence {
@@ -159,7 +162,6 @@ interface BriefEvidence {
 const emptyMeetingGap = (eventKey: string, meeting: MeetingFacts): BriefGap =>
   gapOf("no-linked-material", { kind: "meeting", adapter: null, ...(meeting.connection ? { connection: meeting.connection } : {}), item: eventKey });
 
-/** Reads every item explicitly linked to the meeting from its own source. A link's saved title is never quoted as source content. */
 export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKey: string, meeting: MeetingFacts, deps: BriefDeps = {}): Promise<BriefEvidence> {
   const rows = linksToMeeting(db, eventKey);
   const facts = new Map<string, BriefFact>();
@@ -183,7 +185,9 @@ export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKe
     }
   }
   const revision = digest([
-    REVISION_VERSION, eventKey, meeting.title, meeting.at, meeting.end,
+    REVISION_VERSION, eventKey, meeting.title, meeting.at, meeting.end, meeting.connection, meeting.fingerprint,
+    runtime.options?.sources,
+    currentReadings(runtime).map(reading => [reading.id, reading.error !== null, reading.dropped, reading.problems, reading.capabilities, reading.calendarCoverage]),
     [...facts.values()].map((f) => [f.id, fingerprints.get(f.id)]).sort(),
     [...gaps.values()].map((g) => [g.id, g.reason]).sort(),
   ]);

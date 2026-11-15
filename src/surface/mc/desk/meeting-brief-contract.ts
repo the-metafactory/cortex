@@ -10,7 +10,6 @@ export type BriefGapReason = (typeof BRIEF_GAP_REASONS)[number];
 export const BRIEF_SYNTHESIS_STATES = ["preparing", "ready", "unavailable", "failed"] as const;
 export const BRIEF_PREVIOUS_MEETING_STATES = ["identified", "unidentified", "unavailable"] as const;
 
-/** Where a fact or gap comes from. `adapter` is null for a built-in owner or a configured Desk source; `owner` names a built-in owner; `connection` scopes the item to one configured source. */
 export interface BriefSourceIdentity {
   kind: BriefSourceKind;
   adapter: string | null;
@@ -60,7 +59,6 @@ export interface MeetingBrief {
 
 export const REFRESH_REQUIRED = "refresh-required";
 
-/** What a GET answers with when the prepared brief no longer matches its inputs or no brief was prepared. It carries no brief content. */
 export interface BriefRefreshRequired {
   ok: false;
   error: string;

@@ -1,0 +1,130 @@
+{
+  "fixtureVersion": 1,
+  "scope": "meeting-brief endpoint examples; not an API-wide wire version",
+  "cases": [
+    {
+      "name": "prepared",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief",
+        "body": {
+          "event": "cal:cal:standup"
+        }
+      },
+      "status": 200,
+      "response": {
+        "event": "cal:cal:standup",
+        "revision": "opaque-evidence-revision",
+        "preparedAt": "2026-11-04T09:00:00.000Z",
+        "facts": [
+          {
+            "id": "fact-f2ee69f64143abe0",
+            "text": "Mail from Ada Lovelace: Venue quote",
+            "sources": [
+              {
+                "kind": "mail",
+                "adapter": null,
+                "item": "mail:m1",
+                "connection": "cal",
+                "excerpt": "The venue costs 900.",
+                "link": "https://mail.example.test/m1"
+              }
+            ]
+          },
+          {
+            "id": "fact-79f3483e0cf84fb6",
+            "text": "Task: Kickoff prep",
+            "sources": [
+              {
+                "kind": "task",
+                "adapter": null,
+                "owner": "balance",
+                "item": "task:kickoff",
+                "excerpt": "Kickoff prep"
+              }
+            ]
+          },
+          {
+            "id": "fact-6a9a57fdef5afcfc",
+            "text": "Note: Bring the budget sheet",
+            "sources": [
+              {
+                "kind": "note",
+                "adapter": null,
+                "owner": "desk-notes",
+                "item": "note:1",
+                "excerpt": "Bring the budget sheet"
+              }
+            ]
+          }
+        ],
+        "gaps": [],
+        "previousMeeting": {
+          "state": "unidentified",
+          "phrase": {
+            "code": "brief.previous-unidentified"
+          },
+          "message": "No previous meeting identified."
+        },
+        "synthesis": {
+          "state": "unavailable",
+          "reason": "not-configured",
+          "phrase": {
+            "code": "brief.synthesis-not-configured"
+          },
+          "message": "No summary model is configured, so the evidence is shown as it is."
+        }
+      }
+    },
+    {
+      "name": "400",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief",
+        "body": {
+          "event": "cal:cal:standup",
+          "description": "untrusted"
+        }
+      },
+      "status": 400,
+      "response": {
+        "ok": false,
+        "error": "A brief needs the event key of a meeting, and refresh may only be true or false.",
+        "messagePhrase": {
+          "code": "act.invalid"
+        }
+      }
+    },
+    {
+      "name": "409",
+      "request": {
+        "method": "GET",
+        "path": "/api/desk/meeting-brief?event=cal:cal:standup"
+      },
+      "status": 409,
+      "response": {
+        "ok": false,
+        "error": "The meeting or its linked material changed since this brief was prepared. Refresh it.",
+        "code": "refresh-required",
+        "messagePhrase": {
+          "code": "brief.refresh-required"
+        }
+      }
+    },
+    {
+      "name": "404",
+      "request": {
+        "method": "GET",
+        "path": "/api/desk/meeting-brief?event=cal:cal:standup"
+      },
+      "status": 404,
+      "response": {
+        "ok": false,
+        "error": "The Desk no longer sees that meeting.",
+        "messagePhrase": {
+          "code": "act.unknown-target"
+        }
+      }
+    }
+  ]
+}

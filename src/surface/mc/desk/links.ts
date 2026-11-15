@@ -107,10 +107,8 @@ export function meetingLinks(db: Database, since: number): Map<string, EventLink
   return out;
 }
 
-/** Every active link to one meeting, oldest first, with the mail snapshot a mail link keeps. */
 export const linksToMeeting = (db: Database, eventKey: string): LinkRow[] => rows(db, "state = 'linked' AND to_kind = 'meeting' AND to_key = ?", eventKey);
 
-/** A task the synced outline or the Balance inbox still holds, as it reads now. */
 export const readTaskNode = (day: OutlineDay, id: string): OutlineNode | null => nodeIn(day, id);
 
 /** Message ids whose mail is attached somewhere. */

@@ -190,8 +190,9 @@ describe("renderBootTestConfig", () => {
   });
 
   test("moves every listener to a random loopback port", () => {
-    const { conf } = renderBootTestConfig(SNAPSHOT, OPTS);
-    expect(conf).not.toContain("4222");
+    const { conf } = renderBootTestConfig(SNAPSHOT, { ...OPTS, scratchDir: "/private/tmp/fixture-4222" });
+    expect(conf).toContain("/private/tmp/fixture-4222/store");
+    expect(conf).not.toMatch(/(?:listen|port)\s*[:=]\s*"?(?:[^"\s]*:)?4222(?:"|\s|$)/m);
     expect(conf).not.toContain("6222");
     expect(conf).not.toContain(":7422");
     expect(conf).not.toContain("8080");
