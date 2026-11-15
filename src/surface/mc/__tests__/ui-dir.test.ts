@@ -9,6 +9,7 @@ import { dispatchConfig } from "../../../cli/cortex/commands/config";
 import { DEFAULT_CONFIG, loadConfig } from "../config";
 import { initDatabase } from "../db/init";
 import { startMissionControl } from "../embed";
+import { shellFrameCsp } from "../desk/adapter-frame-contract";
 import { DASHBOARD_DIST, startServer, type ServerContext } from "../server";
 import type { Config } from "../types";
 
@@ -59,6 +60,7 @@ describe("Mission Control mc.ui.dir", () => {
     for (const path of ["/", "/index.html"]) {
       const response = await fetch(base + path);
       expect(response.status).toBe(200);
+      expect(response.headers.get("content-security-policy")).toBe(shellFrameCsp(base));
       expect(await response.arrayBuffer()).toEqual(await Bun.file(join(DASHBOARD_DIST, "index.html")).arrayBuffer());
     }
     const asset = readdirSync(DASHBOARD_DIST).find(name => /^[\w.-]+\.js$/.test(name));
@@ -69,15 +71,13 @@ describe("Mission Control mc.ui.dir", () => {
   });
 
   test("serves configured files and gives both shell paths the Desk CSP", async () => {
-    const bundled = serve();
     const base = serve({ ui: { dir: ui } });
-    const expectedCsp = (await fetch(`${bundled}/index.html`)).headers.get("content-security-policy")?.replaceAll(bundled, base);
     for (const path of ["/", "/index.html"]) {
       const response = await fetch(base + path);
       expect(response.status).toBe(200);
       expect(await response.text()).toBe(html);
       expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
-      expect(response.headers.get("content-security-policy")).toBe(expectedCsp!);
+      expect(response.headers.get("content-security-policy")).toBe(shellFrameCsp(base));
     }
     const response = await fetch(`${base}/app.js`);
     expect(response.status).toBe(200);

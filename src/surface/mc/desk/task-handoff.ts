@@ -4,6 +4,7 @@ import { findNode, type OutlineNode } from "../../../balance";
 import { buildDirectTaskPublishSubject } from "../../../bus/dispatch-source-publisher";
 import { buildBaseEnvelope } from "../../../bus/envelope-builder";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import { mayReachAgent, releaseToAgent, type ReleasedToAgent } from "../../../common/residency";
 import { loadMeta, loadMyDayState } from "./balance-sync";
 import type { DeskOptions } from "./compose";
 import { handoffAction as act, MAX_INSTRUCTION, OPEN_STATES } from "./handoff";
@@ -59,8 +60,6 @@ export function openTask(db: Database, desk: DeskOptions, taskId: string): OpenT
   return null;
 }
 
-const allows = (area: AreaRule, agent: DispatchAgent): boolean => area.policy === "cloud" || agent.policy === "local";
-
 export function taskBrief(task: OpenTask, instruction: string | null): string {
   const { node, area } = task;
   const note = node.note?.trim() ?? "";
@@ -89,14 +88,20 @@ const cleanInstruction = (instruction: string | undefined): string | null => {
   return asked === "" ? null : asked;
 };
 
-type Chosen = { agent: DispatchAgent; allowed: DispatchAgent[] } | { refused: string };
+interface TaskBrief {
+  readonly text: string;
+  readonly policy: AreaRule["policy"];
+}
 
-function chooseAgent(dispatch: DispatchOptions, task: OpenTask, requested: string | undefined): Chosen {
-  const allowed = dispatch.agents.filter((a) => allows(task.area, a));
+type Chosen = { agent: DispatchAgent; allowed: DispatchAgent[]; brief: ReleasedToAgent<TaskBrief> } | { refused: string };
+
+function chooseAgent(dispatch: DispatchOptions, task: OpenTask, requested: string | undefined, text: string): Chosen {
+  const allowed = dispatch.agents.filter((a) => mayReachAgent(task.area.policy, a.policy));
   const named = requested === undefined ? (allowed[0] ?? dispatch.agents[0]) : dispatch.agents.find((a) => a.id === requested);
   if (!named) return { refused: `${requested ?? "That agent"} does not take Desk tasks on this stack.` };
-  if (!allows(task.area, named)) return { refused: `This task's area allows only a local model, and ${named.label} runs on a cloud model.` };
-  return { agent: named, allowed };
+  const brief = releaseToAgent({ text, policy: task.area.policy }, named.policy);
+  if (!brief) return { refused: `This task's area allows only a local model, and ${named.label} runs on a cloud model.` };
+  return { agent: named, allowed, brief };
 }
 
 export interface TaskPreview {
@@ -111,33 +116,32 @@ export interface TaskPreview {
 interface Refusal { ok: false; status: number; error: string }
 interface ResolvedBrief {
   task: OpenTask;
-  chosen: { agent: DispatchAgent; allowed: DispatchAgent[] };
+  chosen: Exclude<Chosen, { refused: string }>;
   instruction: string | null;
-  brief: string;
 }
 
 function resolveBrief(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): ResolvedBrief | Refusal {
   const task = openTask(db, desk, input.taskId);
   if (!task) return { ok: false, status: 409, error: TASK_GONE };
-  const chosen = chooseAgent(desk.dispatch, task, input.agent);
-  if ("refused" in chosen) return { ok: false, status: 409, error: chosen.refused };
   const instruction = cleanInstruction(input.instruction);
-  return { task, chosen, instruction, brief: taskBrief(task, instruction) };
+  const chosen = chooseAgent(desk.dispatch, task, input.agent, taskBrief(task, instruction));
+  if ("refused" in chosen) return { ok: false, status: 409, error: chosen.refused };
+  return { task, chosen, instruction };
 }
 
 /** The exact brief a hand-off would send, its hash and what leaves the Desk. Writes nothing. */
 export function previewHandoff(db: Database, desk: DeskOptions & { dispatch: DispatchOptions }, input: { taskId: string; agent?: string; instruction?: string }): { ok: true; preview: TaskPreview } | Refusal {
   const resolved = resolveBrief(db, desk, input);
   if ("ok" in resolved) return resolved;
-  const { task, chosen, instruction, brief } = resolved;
+  const { task, chosen, instruction } = resolved;
   return {
     ok: true,
     preview: {
       task: { id: task.node.id, title: task.node.title, area: task.area.id, dueDate: task.node.dueDate ?? null },
       agent: { id: chosen.agent.id, label: chosen.agent.label },
       agents: chosen.allowed,
-      brief,
-      briefHash: briefHash(brief),
+      brief: chosen.brief.text,
+      briefHash: briefHash(chosen.brief.text),
       leaves: leavesLine(task, instruction, chosen.agent),
     },
   };
@@ -159,9 +163,9 @@ export function deskTaskEnvelope(bus: Pick<TaskDispatchBus, "principal" | "stack
 
 const reasonOf = (err: unknown): string => oneLine(err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR) || "no reason given";
 
-async function send(deps: HandoffDeps, row: { id: string; attempt: string; brief: string }, agent: DispatchAgent): Promise<TaskHandoffResult | null> {
+async function send(deps: HandoffDeps, row: { id: string; attempt: string }, brief: ReleasedToAgent<TaskBrief>, agent: DispatchAgent): Promise<TaskHandoffResult | null> {
   try {
-    const { envelope, subject } = deskTaskEnvelope(deps.bus, agent, row.attempt, row.brief);
+    const { envelope, subject } = deskTaskEnvelope(deps.bus, agent, row.attempt, brief.text);
     await deps.bus.publish(envelope, subject);
     return null;
   } catch (err) {
@@ -196,7 +200,8 @@ export async function handTask(input: HandInput, deps: HandoffDeps): Promise<Tas
   }
   const resolved = resolveBrief(db, desk, input);
   if ("ok" in resolved) return resolved;
-  const { task, chosen, instruction, brief } = resolved;
+  const { task, chosen, instruction } = resolved;
+  const brief = chosen.brief.text;
   const busy = openTaskHandoffs(db).find((r) => r.taskId === input.taskId && r.state !== "failed");
   if (busy) {
     const label = agentLabel(desk.dispatch, busy.agent);
@@ -211,7 +216,7 @@ export async function handTask(input: HandInput, deps: HandoffDeps): Promise<Tas
     ).run(input.requestId, task.node.id, task.node.title, task.area.id, chosen.agent.id, instruction, brief, attempt, input.requestId, now, now);
     db.query("UPDATE desk_task_handoffs SET state = 'discarded', closed_at = ? WHERE task_id = ? AND state = 'failed' AND id != ?").run(now, task.node.id, input.requestId);
   })();
-  const failed = await send(deps, { id: input.requestId, attempt, brief }, chosen.agent);
+  const failed = await send(deps, { id: input.requestId, attempt }, chosen.brief, chosen.agent);
   return failed ?? { ok: true, id: input.requestId, message: handedMessage(chosen.agent.label) };
 }
 
@@ -225,13 +230,12 @@ export async function retryTask(input: { requestId: string; id: string }, deps: 
   if (row.state !== "failed") return refuse(409, "Only a failed hand-off can be tried again.");
   const task = openTask(db, desk, row.taskId);
   if (!task) return refuse(409, TASK_GONE);
-  const chosen = chooseAgent(desk.dispatch, task, row.agent);
+  const chosen = chooseAgent(desk.dispatch, task, row.agent, row.brief);
   if ("refused" in chosen) return refuse(409, chosen.refused);
-  const agent = chosen.agent;
   const attempt = deps.newId();
   db.query("UPDATE desk_task_handoffs SET state = 'working', attempt = ?, attempt_request = ?, sent_at = ?, started_at = NULL, result = NULL, error = NULL, finished_at = NULL WHERE id = ? AND state = 'failed'")
     .run(attempt, input.requestId, now, row.id);
-  const failed = await send(deps, { id: row.id, attempt, brief: row.brief }, agent);
+  const failed = await send(deps, { id: row.id, attempt }, chosen.brief, chosen.agent);
   return failed ?? { ok: true, id: row.id, message: retriedMessage(label) };
 }
 
