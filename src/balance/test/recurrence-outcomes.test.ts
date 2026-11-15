@@ -173,6 +173,12 @@ describe("stopping limits", () => {
     completeCalendarOccurrence(state, "t", repeat, "2026-11-17");
     expect(state.outcomes?.map(o => o.planned)).toEqual(["2026-11-05"]);
   });
+  test("a weekly interval of one records the in-range Monday as missed before the until date", () => {
+    const state = stateWith();
+    const everyWeek: Recurrence = { ...mondayThursday, interval: 1, until: "2026-11-10", occurrence: "2026-11-05" };
+    completeCalendarOccurrence(state, "t", everyWeek, "2026-11-17");
+    expect(state.outcomes?.map(o => o.planned)).toEqual(["2026-11-05", "2026-11-09"]);
+  });
   test("applyRecurrence does not reopen a finished calendar task", () => {
     const task = leaf("t", { ...mondayThursday, count: 1, timesDone: 1, occurrence: "2026-11-05" }, { done: true, completedAt: "2026-11-02" });
     expect(applyRecurrence(task, "2026-12-01").respawned).toEqual([]);
