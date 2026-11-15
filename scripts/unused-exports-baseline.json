@@ -185,7 +185,7 @@
   "src/common/registry/signing.ts": 5,
   "src/common/registry/types.ts": 1,
   "src/common/registry/verify-assertion.ts": 1,
-  "src/common/residency.ts": 2,
+  "src/common/residency.ts": 1,
   "src/common/sideband/loopback.ts": 1,
   "src/common/sideband/metrics.ts": 1,
   "src/common/sideband/proxy.ts": 2,

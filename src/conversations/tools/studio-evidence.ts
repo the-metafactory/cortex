@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { routePolicy } from "../types";
+import { releasedTo } from "../../common/residency";
 import { mayRelease, readEach, type WorkObject, type WorkOwner } from "./work-context";
 
 export const OVERSEER_WORK_ID = "@overseer";
@@ -53,9 +54,10 @@ export function studioEvidenceTools(owner: WorkOwner): ToolDefinition[] {
       const sources = [initial.object, ...evidence.sources];
       const fresh = await readEach(reader, sources.map(source => source.id));
       if (fresh.some((result, index) => result.state !== "available" || result.object.policy !== sources[index]?.policy)) return JSON.stringify(studioEvidenceAccessChanged());
-      if (fresh.some(result => result.state === "available" && !mayRelease(session, result.object.policy))) return policyDenied(session, input.scope);
+      const cleared = sources.flatMap(source => releasedTo(session, source) ?? []);
+      if (cleared.length !== sources.length) return policyDenied(session, input.scope);
       signal.throwIfAborted();
-      if (!await owner.remember(session, sources, signal)) return JSON.stringify({ status: "unavailable", reason: "Source authorization changed" });
+      if (!await owner.remember(session, cleared, signal)) return JSON.stringify({ status: "unavailable", reason: "Source authorization changed" });
       const body = JSON.stringify(evidence.data);
       return body.length <= 18000 ? body : JSON.stringify({ status: "unavailable", reason: "Evidence exceeds the response limit; retry limit 1 or advance contentOffset" });
     },
