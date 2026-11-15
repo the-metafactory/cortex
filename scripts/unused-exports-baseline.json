@@ -4,7 +4,6 @@
   "scripts/check-duplication.ts": 1,
   "scripts/check-release-pins.ts": 6,
   "scripts/check-shippable-hygiene.ts": 1,
-  "scripts/check-unused-exports.ts": 2,
   "scripts/desk-adapter-hosted/checks.ts": 1,
   "scripts/desk-adapter-hosted/preflight.ts": 2,
   "scripts/desk-capability-node.ts": 6,

@@ -25,18 +25,16 @@ const PROMISE_COMBINATORS = new Set(["all", "allSettled", "race", "any"]);
 const combinesPromises = (call: CallExpression): boolean =>
   call.callee.type === "MemberExpression" && call.callee.object.type === "Identifier" && call.callee.object.name === "Promise" && PROMISE_COMBINATORS.has(propertyName(call.callee) ?? "");
 
-const TEST_RUNNERS = new Set(["test", "it", "beforeAll", "beforeEach", "afterAll", "afterEach"]);
+const RESULT_DROPPING_CALLERS = new Set(["forEach", "setTimeout", "setInterval", "queueMicrotask"]);
 
-function runnerName(callee: Expression | Super): string | undefined {
+function calleeName(callee: Expression | Super): string | undefined {
   if (callee.type === "Identifier") return callee.name;
-  if (callee.type === "MemberExpression") return runnerName(callee.object);
-  if (callee.type === "CallExpression") return runnerName(callee.callee);
-  return undefined;
+  return propertyName(callee);
 }
 
-function isTestCallback(fn: Node & Rule.NodeParentExtension): boolean {
+function resultDropped(fn: Node & Rule.NodeParentExtension): boolean {
   const { parent } = fn;
-  return parent.type === "CallExpression" && parent.callee !== fn && TEST_RUNNERS.has(runnerName(parent.callee) ?? "");
+  return parent.type === "CallExpression" && parent.callee !== fn && RESULT_DROPPING_CALLERS.has(calleeName(parent.callee) ?? "");
 }
 
 function enclosingFunction(node: Node & Rule.NodeParentExtension): (Node & Rule.NodeParentExtension) | undefined {
@@ -52,10 +50,10 @@ function isAwaited(node: Node & Rule.NodeParentExtension): boolean {
       return true;
     case "ReturnStatement": {
       const fn = enclosingFunction(parent);
-      return fn !== undefined && isTestCallback(fn);
+      return fn !== undefined && !resultDropped(fn);
     }
     case "ArrowFunctionExpression":
-      return parent.body === node && isTestCallback(parent);
+      return parent.body === node && !resultDropped(parent);
     case "ChainExpression":
       return isAwaited(parent);
     case "ArrayExpression":

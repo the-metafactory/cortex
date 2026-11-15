@@ -1,11 +1,11 @@
 import { type Baseline, grownFiles, type RatchetGate, runRatchet, sortedCounts } from "./lib/ratchet";
 
-export const BASELINE = "scripts/unused-exports-baseline.json";
+const BASELINE = "scripts/unused-exports-baseline.json";
 
 interface Named {
   name: string;
 }
-export interface KnipIssue {
+interface KnipIssue {
   file: string;
   exports: Named[];
   types: Named[];
