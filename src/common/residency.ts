@@ -40,3 +40,9 @@ export function release<T extends { readonly policy: unknown }>(value: T, to: De
   const refusal = releaseRefusal(value.policy, to);
   return refusal === null ? { released: value as Released<T> } : { refusal };
 }
+
+/** The value cleared for `to` by the residency gate, or null when its policy keeps it out. */
+export function releasedTo<T extends { readonly policy: unknown }>(to: Destination, value: T): Released<T> | null {
+  const outcome = release(value, to);
+  return "released" in outcome ? outcome.released : null;
+}

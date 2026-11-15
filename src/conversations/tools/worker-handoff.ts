@@ -3,8 +3,8 @@ import { WORKER_NODE_REF, WORKER_REPOSITORY_REF } from "../../common/types/desk-
 import type { Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
-import type { Released } from "../../common/residency";
-import { releasedTo, STALE_AFTER_MS } from "./work-context";
+import { releasedTo, type Released } from "../../common/residency";
+import { STALE_AFTER_MS } from "./work-context";
 import type { CreationOwner } from "./proposals";
 import { proposalResult } from "./proposals";
 

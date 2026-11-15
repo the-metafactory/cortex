@@ -1,7 +1,8 @@
 import { z } from "zod/v4";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { routePolicy } from "../types";
-import { mayRelease, readEach, releasedTo, type WorkObject, type WorkOwner } from "./work-context";
+import { releasedTo } from "../../common/residency";
+import { mayRelease, readEach, type WorkObject, type WorkOwner } from "./work-context";
 
 export const OVERSEER_WORK_ID = "@overseer";
 export const STUDIO_PRIVATE_WORK_ID = "@studio-private";

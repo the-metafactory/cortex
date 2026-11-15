@@ -2,8 +2,8 @@ import { z } from "zod/v4";
 import type { Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
-import type { Released } from "../../common/residency";
-import { mayRelease, releasedTo, STALE_AFTER_MS } from "./work-context";
+import { releasedTo, type Released } from "../../common/residency";
+import { mayRelease, STALE_AFTER_MS } from "./work-context";
 
 export const REQUIRED_FAMILIES = ["email", "calendar", "reminders", "discord", "mattermost"] as const;
 export const ID_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;

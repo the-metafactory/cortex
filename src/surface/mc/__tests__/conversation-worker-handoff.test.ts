@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { CreateRequest, CreateResult } from "../../../conversations/types";
-import { releasedTo } from "../../../conversations/tools/work-context";
+import { releasedTo } from "../../../common/residency";
 import type { WorkerHandoffOptions } from "../../../common/types/desk-workers";
 import type { DeskOptions } from "../desk/compose";
 import { initDatabase } from "../db/init";
