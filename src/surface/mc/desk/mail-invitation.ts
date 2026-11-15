@@ -226,14 +226,16 @@ export function invitationDecisions(db: Database, messageIds: string[]): Map<str
 export function invitationView(mail: ListedMail, calendar: CalendarAvailability, config: InvitationsConfig | undefined, decision?: InvitationDecision): InvitationView | undefined {
   const inv = mail.invitation;
   if (!inv) return undefined;
-  const conflicts = invitationConflicts(inv, calendar);
   const span = invitationSpan(inv);
+  if (!Number.isFinite(span.at) || !Number.isFinite(span.end)) return undefined;
+  const conflicts = invitationConflicts(inv, calendar);
+  const iso = (at: number): string => inv.allDay ? localDay(at) : new Date(at).toISOString();
   return {
     uid: inv.uid,
     summary: inv.summary,
     when: whenLine(inv),
-    startIso: inv.allDay ? localDay(span.at) : new Date(span.at).toISOString(),
-    endIso: inv.allDay ? localDay(span.end) : new Date(span.end).toISOString(),
+    startIso: iso(span.at),
+    endIso: iso(span.end),
     start: inv.start,
     ...(inv.end ? { end: inv.end } : {}),
     ...(inv.allDay ? { allDay: true } : {}),

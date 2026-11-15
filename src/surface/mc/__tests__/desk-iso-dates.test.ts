@@ -23,6 +23,16 @@ const mail: ListedMail = {
 const calendar = { sources: [], events: [] };
 
 describe("Desk ISO dates", () => {
+  it.each([
+    { start: "invalid", end: invitation.end },
+    { start: invitation.start, end: "invalid" },
+    { start: "invalid", end: undefined },
+  ])("omits invitations with unparseable bounds: %j", (bounds) => {
+    for (const allDay of [false, true]) {
+      expect(invitationView({ ...mail, invitation: { ...invitation, ...bounds, allDay } }, calendar, undefined)).toBeUndefined();
+    }
+  });
+
   it("preserves the invitation text and source bounds beside canonical instants", () => {
     const view = invitationView(mail, calendar, undefined);
     expect(view).toMatchObject({
