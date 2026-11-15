@@ -3,7 +3,7 @@ import { DEFAULT_YES_FILTER } from "./studio/view";
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { SourceEvent, SourceMail } from "./sources/command";
 import type { RangerMap, RangerMapNode, RangerNeedsYou, RangerState } from "./sources/ranger";
-import { rangerItemKey, rangerTitles } from "./sources/ranger";
+import { laneHolderName, rangerItemKey, rangerTitles } from "./sources/ranger";
 import { approvable, retryable } from "./actions";
 import { agentQuestion, RULING_ACTION, type RulingExplanation } from "./ruling";
 import { clock, DAY_MS, startOfDay } from "./time";
@@ -11,12 +11,13 @@ import { isUnimportant, isVip } from "./vips";
 import { deadlineLine, deadlineToday } from "./deadline";
 import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
 import { assistantNameOf } from "./assistant-name";
-import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
+import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind, DeskLink } from "./types";
 import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "./mail-triage";
 import { ACTION_LABEL, precedentLine } from "./mail-similar";
 import { suspicionLine, suspicionOf, waivedSuspicion, type SuspicionContext } from "./mail-suspicion";
 import type { UnsubscribeOffer } from "./mail-unsubscribe";
 import { decisionSentence, type InvitationView } from "./mail-invitation";
+import type { DeskPhrase, MailPhraseModifiers } from "./phrases";
 
 export interface AreaRule extends DeskArea {
   repos: string[];
@@ -36,6 +37,8 @@ export interface RankInput {
   hidden?: ReadonlySet<string>;
   goalActions?: GoalActionsInput;
   explanations?: ReadonlyMap<string, RulingExplanation>;
+  explanationProblems?: ReadonlyMap<string, string>;
+  escalationRulings?: ReadonlyMap<string, string | null>;
 }
 
 export interface GoalActionsInput {
@@ -59,6 +62,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   grilling: "Questions agents want to grill you on",
   escalation: "Older escalations",
   mail: "Mail you may want to read",
+  "mail-junk": "Junk mail to review",
   reminder: "Reminders",
   meeting: "Meetings starting soon",
   "mail-rule": "Mail rules the Desk proposes",
@@ -120,7 +124,8 @@ export const parsedOr = (iso: string | undefined, fallback: number): number => {
   return Number.isFinite(at) ? at : fallback;
 };
 
-const issueLinks = (url: string | undefined) => (url ? [{ label: "Issue", url }] : []);
+const issueLinks = (url: string | undefined) => (url ? [{ kind: "issue" as const, label: "Issue", url }] : []);
+export const mailLink = (url: string): DeskLink => ({ kind: "mail", label: "Open in Mail", url });
 
 export function rankItems(input: RankInput): DeskItem[] {
   const items = new Map<string, DeskItem>();
@@ -132,14 +137,23 @@ export function rankItems(input: RankInput): DeskItem[] {
     if (task?.kind === "closed") return;
     if (item.source === "ranger" && listedTasks.has(rangerItemKey(ref))) return;
     if (item.source === "ranger") listedTasks.add(rangerItemKey(ref));
+    const question = task?.kind === "open" ? task.question ?? item.question?.condition ?? item.question?.reason : undefined;
+    const repo = ref.split("#")[0] ?? ref;
     const enriched = task?.kind === "open" ? {
       ...item,
       title: `"${task.title}" needs you.`,
-      why: `${task.question ?? item.question?.condition ?? item.question?.reason ?? QUESTION_UNAVAILABLE} In ${repoName(ref.split("#")[0] ?? ref)}.`,
+      why: `${question ?? QUESTION_UNAVAILABLE} In ${repoName(repo)}.`,
+      ...questionPhrase(question, repo),
       detail: { ...item.detail, links: issueLinks(task.url) },
     } : item;
-    const why = item.kind === "grilling" && !input.conversations ? "Conversations are not set up on this stack." : enriched.why;
-    if (!items.has(item.key)) items.set(item.key, { ...enriched, why: task?.kind === "unavailable" ? `${why} ${task.reason}` : why });
+    const unavailable = item.kind === "grilling" && !input.conversations;
+    const why = unavailable ? "Conversations are not set up on this stack." : enriched.why;
+    if (!items.has(item.key)) items.set(item.key, {
+      ...enriched,
+      ...(unavailable ? { whyPhrase: { code: "ranger.conversations-unavailable" } as const, whyContent: undefined } : {}),
+      ...(task?.kind === "unavailable" ? { whyContent: { ...enriched.whyContent, sourceStatusReason: task.reason } } : {}),
+      why: task?.kind === "unavailable" ? `${why} ${task.reason}` : why,
+    });
   };
   rangerNeedsYouItems(input, add);
   rangerMapItems(input, add);
@@ -160,6 +174,14 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
     const failed = n.status === "failed";
     const links = issueLinks(n.url);
     const base = { ...(n.endedAt ? { sourceRevision: n.endedAt } : {}), ...(n.dueAt && Number.isFinite(Date.parse(n.dueAt)) ? { dueAt: n.dueAt } : {}), key: rangerItemKey(ref), source: "ranger", area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
+    const behind = n.queued && ranger ? laneHolderName(ranger, n.queued.lane) : undefined;
+    const queuedCard = n.queued
+      ? {
+          why: `Ranger queued the resume${behind ? ` behind "${behind}"` : ""}, at place ${n.queued.position}. It starts when the lane is free.`,
+          whyPhrase: { code: "ranger.resume-queued", params: { position: n.queued.position, ...(behind ? { behind } : {}) } } as const,
+          actions: [action("ranger.run-now", "Run both now", "primary", rangerActions && retryable(n)), LATER],
+        }
+      : {};
     const detail = {
       summary: n.reason?.detail ? `${n.reason.class ?? "Stopped"}: ${n.reason.detail}` : `The agent stopped (${n.status}).`,
       history: [`Stopped ${ago(now, endedAt)}`],
@@ -173,8 +195,10 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
         ...base, kind: "agent-blocked",
         title: `"${n.title}" waits for your ruling.`,
         why: `The agent in ${repoName(n.repo)} cannot go on without a decision from you.`,
+        whyPhrase: { code: "ranger.blocked", params: { repo: repoName(n.repo) } },
         score: 65 - ageDays * 2,
         actions: [rulingAction(n, n.url, rulingActions), LOOK, LATER],
+        ...queuedCard,
         detail,
         ...(question ? { question } : {}),
         ...(explanation ? { explanation } : {}),
@@ -184,8 +208,10 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
         ...base, kind: "agent-failed",
         title: failed ? `An agent failed on "${n.title}".` : `An agent stopped on "${n.title}".`,
         why: `It stopped ${ago(now, endedAt)} in ${repoName(n.repo)}${failed ? ", and nothing moves until it is retried or parked" : ""}.`,
+        whyPhrase: { code: "ranger.stopped", params: { repo: repoName(n.repo), endedAt: new Date(endedAt).toISOString(), failed } },
         score: (failed ? 60 : 40) - ageDays * 5,
         actions: [action("ranger.retry", "Let it retry", "primary", rangerActions && retryable(n)), LOOK, action("ranger.park", "Park it", "secondary", false)],
+        ...queuedCard,
         detail,
       });
     }
@@ -242,6 +268,9 @@ function rangerMapItems(input: RankInput, add: Add): void {
           key: rangerItemKey(ref), kind: rule.kind, source: "ranger", rangerMap: { key: map.key, label: map.repo }, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
           title: rule.title(node.title),
           why: blocked ?? rule.why(repoName(map.repo)),
+          whyPhrase: blocked
+            ? { code: map.walk !== "full" || map.servedOnly === true ? "ranger.map-read-only" : "ranger.approval-unavailable" }
+            : { code: rule.kind === "decision" ? "ranger.approval-needed" : "ranger.discussion-needed", params: { repo: repoName(map.repo) } },
           score: rule.score,
           actions: blocked ? [{ ...LOOK, role: "primary" }, LATER] : [{ ...rule.primary, wired: rule.wired(input, map, node) }, LOOK, LATER],
           detail: { summary: node.title, history: [], refs: [ref, map.key], links: issueLinks(node.url) },
@@ -258,7 +287,7 @@ function goalExtras(goals: GoalActionsInput | undefined, goalId: string): Pick<D
   return { goal: goalId, ...(goals?.checking.has(goalId) ? { checking: true } : {}) };
 }
 
-function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
+function vigilItems({ now, subjects, areas, goalActions, waitingTasks, explanations, explanationProblems, escalationRulings }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
   const goalWording = new Map<string, string | null>();
   for (const s of subjects) if (s.goalId) goalWording.set(s.goalId, s.goalWording ?? goalWording.get(s.goalId) ?? null);
   const canCheck = (goalId: string): boolean => goalActions?.check.has(goalId) ?? false;
@@ -275,6 +304,7 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInp
         key: `vigil:${s.subjectKey}`, kind: "sensor", source: "vigil", area: areaFor(areas, null, s.goalId), urgency: "today",
         title: `The ${part} check for "${goalShort(wording)}" stopped working.`,
         why: `Without it, nobody can tell whether this goal is on track. It last ran ${ago(now, s.lastEndedAt)}.`,
+        whyPhrase: { code: "goal.check-regressed", params: { lastRanAt: new Date(s.lastEndedAt).toISOString() } },
         score: 85,
         actions: [action("goal.check", "Run the check now", "primary", canCheck(s.goalId)), LOOK, LATER],
         detail: { summary: wording ?? "This goal has no description.", history: [`Last run ${ago(now, s.lastEndedAt)}`], refs: [s.goalId, ...refs], links: [] },
@@ -288,6 +318,8 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInp
         key: `vigil:${s.subjectKey}`, attention: "update", kind: "goal", source: "vigil", area: areaFor(areas, null, goalId), urgency: "this-week",
         title: `"${goalShort(s.goalWording)}" ${state}.`,
         why: `This reading is ${reading}. ${s.goalWording ?? "Its description is not available, so open it to see which goal this is."}`,
+        whyPhrase: { code: "goal.reading", params: { at: new Date(s.lastEndedAt).toISOString(), wordingAvailable: s.goalWording !== null } },
+        ...(s.goalWording !== null ? { whyContent: { goalWording: s.goalWording } } : {}),
         score: s.value === "off-track" ? 75 : s.value === "at-risk" ? 70 : 55,
         actions: [canCheck(goalId) ? CHECK_AGAIN : { ...LOOK, role: "primary" }, ...(canPause(goalId) ? [PAUSE] : []), LATER],
         detail: { summary: s.goalWording ?? "This goal has no description.", history: [`Last report ${ago(now, s.lastEndedAt)}`], refs: [goalId, ...refs], links: [] },
@@ -298,20 +330,30 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInp
       if (listed(rangerItemKey(ref)) || seenEscalations.has(ref)) continue;
       seenEscalations.add(ref);
       const task = waitingTasks?.get(ref) ?? TASK_UNAVAILABLE;
-      if (task.kind === "closed") continue;
-      const known = task.kind === "open" ? task : titles.get(ref);
+      const known = task.kind !== "unavailable" ? task : titles.get(ref);
       const question = task.kind === "unavailable" ? `${task.reason} ${QUESTION_UNAVAILABLE}` : task.question ?? QUESTION_UNAVAILABLE;
       const repo = ref.split("#")[0] ?? ref;
+      const key = `vigil:${s.subjectKey}`;
+      const explanation = explanations?.get(key);
+      const answerOnIssue = task.kind === "closed" ? "This issue is closed. Answer on the issue." : escalationRulings?.get(key) ?? (escalationRulings?.has(key) ? null : "Answer on the issue.");
+      const summary = [question, explanationProblems?.get(key), answerOnIssue ?? "Answer from this card; your ruling is recorded on the graph node."].filter(Boolean).join(" ");
       add({
-        key: `vigil:${s.subjectKey}`, kind: "escalation", source: "vigil", area: areaFor(areas, repo, null), urgency: "waiting",
-        title: known ? `"${known.title}" needs you.` : `Task details are unavailable in ${repoName(repo)}.`,
+        key, kind: "escalation", source: "vigil", area: areaFor(areas, repo, null), urgency: "waiting",
+        title: known ? `"${known.title}" ${task.kind === "closed" ? "is closed" : "needs you"}.` : `Task details are unavailable in ${repoName(repo)}.`,
         why: `${question} In ${repoName(repo)}.`,
+        ...questionPhrase(task.kind === "unavailable" ? null : task.question, repo),
+        ...(task.kind === "unavailable" ? { whyContent: { sourceStatusReason: task.reason } } : {}),
         score: s.value === "needs-principal" ? 50 : 35,
-        actions: [action("detail", "Look first", "primary", true), LATER],
-        detail: { summary: question, history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url ?? escalationUrl(s.ref)) },
+        actions: [answerOnIssue === null ? action(RULING_ACTION, "Give your ruling", "primary", true) : action("detail", "Look first", "primary", true), ...(answerOnIssue === null ? [LOOK] : []), LATER],
+        detail: { summary, history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url ?? escalationUrl(s.ref)) },
+        ...(explanation ? { explanation } : {}),
       });
     }
   }
+}
+
+function questionPhrase(reason: string | null | undefined, repo: string): Pick<DeskItem, "whyPhrase" | "whyContent"> {
+  return { whyPhrase: { code: "ranger.question", params: { repo: repoName(repo), questionAvailable: reason != null } }, ...(reason != null ? { whyContent: { reason } } : {}) };
 }
 
 export function fold(rest: DeskItem[]): DeskFoldedGroup[] {
@@ -372,6 +414,8 @@ interface MailVerdict {
   score: number;
   pressing: boolean;
   why: string | null;
+  whyPhrase?: Extract<DeskPhrase, { code: "mail.meeting-linked" | "mail.meeting-possible" | "mail.unimportant" }>;
+  whyContent?: DeskItem["whyContent"];
   sorted?: MailCategory;
 }
 
@@ -381,7 +425,7 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
   if (!c) {
     const meeting = meetingFor(m.subject, events, now);
     if (!meeting) return { score: 15, pressing: false, why: null };
-    return { score: LINKED_MEETING_SCORE, pressing: true, why: `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.` };
+    return { score: LINKED_MEETING_SCORE, pressing: true, why: `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.`, whyPhrase: { code: "mail.meeting-possible", params: { meetingStart: new Date(meeting.start).toISOString() } }, whyContent: { meetingTitle: meeting.title } };
   }
   const linked = c.meetingKey && c.category !== "bulk" ? upcomingMeetings(events, now).find((e) => eventKey(e) === c.meetingKey) : undefined;
   const reason = sentence(c.reason);
@@ -391,10 +435,12 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
       score: LINKED_MEETING_SCORE,
       pressing: true,
       why: `${reason} The meeting is ${dayName(Date.parse(linked.start), now)}.`,
+      whyPhrase: { code: "mail.meeting-linked", params: { meetingStart: new Date(linked.start).toISOString() } },
+      whyContent: { reason: c.reason, meetingTitle: linked.title },
       sorted: c.category,
     };
   }
-  return { score: CATEGORY_SCORE[c.category], pressing: c.category === "action" || c.category === "reply", why: reason, sorted: c.category };
+  return { score: CATEGORY_SCORE[c.category], pressing: c.category === "action" || c.category === "reply", why: reason, whyContent: { reason: c.reason }, sorted: c.category };
 }
 
 const SEEN = action("mail.seen", "Seen, delete", "primary", true);
@@ -405,7 +451,7 @@ const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true)
 const REPORT = action("mail.report", "Report", "secondary", true);
 const NOT_PHISHING = action("mail.trust", "Not phishing", "secondary", true);
 const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
-const toAssistant = (name: string): DeskAction => action("mail.assistant", `Hand to ${name}`, "secondary", true);
+const toAssistant = (name: string): DeskAction => ({ ...action("mail.assistant", `Hand to ${name}`, "secondary", true), labelPhrase: { code: "mail.assistant", params: { name } } });
 const SNOOZE = action("mail.snooze", "Snooze", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
 const ACCEPT = action("invite.accept", "Accept", "primary", true);
@@ -443,7 +489,60 @@ const unsubscribeLine = (offer: UnsubscribeOffer, now: number): string => {
   return offer.failed ? `${left} The last unsubscribe attempt failed: ${offer.failed}.` : `${left} It offers a one-click unsubscribe via ${offer.host}.`;
 };
 
-const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
+const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, whyPhrase: { code: "mail.unimportant", params: {} }, sorted: "bulk" };
+
+interface MailWhyInput {
+  verdict: MailVerdict;
+  vip: boolean;
+  sender: string;
+  receivedAt: number;
+  learned: string | null;
+  triage: MailClassification | undefined;
+  unsubscribe: UnsubscribeOffer | undefined;
+  invite: InvitationView | undefined;
+}
+
+function mailWhyPhrase({ verdict, vip, sender, receivedAt, learned, triage, unsubscribe, invite }: MailWhyInput): Partial<DeskItem> {
+  if (invite) return { whyPhrase: { code: "mail.invitation", params: {
+    start: new Date(invite.start).toISOString(), attendee: invite.attendee,
+    ...(invite.decision ? { reply: invite.decision.reply, status: invite.decision.status, decidedAt: new Date(invite.decision.at).toISOString() } : {}),
+  } } };
+  const modifiers: MailPhraseModifiers = {
+    ...(vip ? { vip: sender } : {}),
+    ...(unsubscribe ? { unsubscribeKind: unsubscribe.kind, unsubscribeHost: unsubscribe.host } : {}),
+    ...(unsubscribe?.kind === "rule" ? { unsubscribeAt: new Date(unsubscribe.at).toISOString() } : {}),
+    ...(unsubscribe && unsubscribe.kind !== "rule" ? { dismissed: unsubscribe.dismissed } : {}),
+    ...(unsubscribe?.kind === "one-click" ? { unsubscribeFailed: Boolean(unsubscribe.failed) } : {}),
+  };
+  const whyContent = {
+    ...(!learned && (!vip || verdict.sorted) ? verdict.whyContent : {}),
+    ...(unsubscribe?.kind === "page" ? { unsubscribeUrl: unsubscribe.url } : {}),
+    ...(unsubscribe?.kind === "one-click" && unsubscribe.failed ? { unsubscribeFailure: unsubscribe.failed } : {}),
+  };
+  if (learned && triage?.predictedAction && triage.precedents) {
+    const matching = triage.precedents.items.filter(p => p.action === triage.predictedAction);
+    return {
+      whyPhrase: { code: "mail.precedent", params: {
+        action: triage.predictedAction, basis: triage.precedents.basis, count: matching.length, ...modifiers,
+      } },
+      whyContent: {
+        ...whyContent,
+        ...(triage.precedents.note ? { precedentNote: triage.precedents.note } : {}),
+        precedentSenders: matching.map(p => p.sender),
+      },
+    };
+  }
+  const content = Object.keys(whyContent).length ? { whyContent } : {};
+  if (verdict.whyPhrase && (!vip || verdict.sorted)) return { ...content, whyPhrase: withMailModifiers(verdict.whyPhrase, modifiers) };
+  const arrived = !verdict.why || (vip && !verdict.sorted);
+  if (vip) return { ...content, whyPhrase: { code: "mail.vip", params: { target: sender, ...(arrived ? { receivedAt: new Date(receivedAt).toISOString() } : {}), ...modifiers } } };
+  if (arrived) return { ...content, whyPhrase: { code: "mail.received", params: { receivedAt: new Date(receivedAt).toISOString(), ...modifiers } } };
+  return { ...content, ...(unsubscribe ? { whyPhrase: { code: "mail.unsubscribe", params: modifiers } as const } : {}) };
+}
+
+function withMailModifiers<T extends NonNullable<MailVerdict["whyPhrase"]>>(phrase: T, modifiers: MailPhraseModifiers): T {
+  return { ...phrase, params: { ...phrase.params, ...modifiers } };
+}
 
 export function mailItems(input: MailInput): DeskItem[] {
   const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>(), report = false, studio = false, handoff = false } = input;
@@ -478,7 +577,8 @@ export function mailItems(input: MailInput): DeskItem[] {
     const replyFirst = canDraft && (predicted ? predicted === "reply" : triage?.suggestedAction === "reply" && !quiet) && showMeeting.length === 0;
     const seenFirst = quiet && !moveFirst && predicted !== "keep" && !replyFirst;
     const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", seenFirst || moveFirst || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
-    const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
+    const firstName = m.from.name?.split(" ")[0];
+    const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${firstName ?? "this sender"}`, "secondary", true), target: m.from.address, labelPhrase: { code: "vip.add", params: { ...(firstName === undefined ? {} : { name: firstName }) } } }];
     const reply = action("mail.draft", DRAFT_LABEL, replyFirst ? "primary" : "secondary", true);
     const replyLead = replyFirst ? [reply] : [];
     const replyTail = canDraft && !replyFirst ? [reply] : [];
@@ -512,6 +612,7 @@ export function mailItems(input: MailInput): DeskItem[] {
       urgency: vip || verdict.pressing || soon || dueToday ? "today" : "waiting",
       title: `${sender} wrote: "${m.subject}"`,
       why: invite ? inviteWhy(invite, now) : why,
+      ...mailWhyPhrase({ verdict, vip, sender, receivedAt, learned, triage, unsubscribe, invite }),
       score: (vip ? 80 : verdict.score) - ageDays * 5,
       actions: offered.slice(0, 3),
       more: [...always, ...offered.slice(3)],
@@ -519,7 +620,7 @@ export function mailItems(input: MailInput): DeskItem[] {
         summary: triage?.summary ?? m.firstParagraph ?? m.subject,
         history,
         refs: [m.from.address, m.id],
-        links: [...(m.url ? [{ label: "Open in Mail", url: m.url }] : []), ...(unsubscribe?.kind === "page" ? [{ label: `Unsubscribe page: ${unsubscribe.url}`, url: unsubscribe.url }] : [])],
+        links: [...(m.url ? [mailLink(m.url)] : []), ...(unsubscribe?.kind === "page" ? [{ kind: "unsubscribe-page" as const, label: `Unsubscribe page: ${unsubscribe.url}`, url: unsubscribe.url }] : [])],
         ...(evidence.length > 0 ? { evidence } : {}),
         ...(precedents.length > 0 ? { precedents } : {}),
       },
@@ -552,6 +653,7 @@ function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof
     urgency: "today",
     title: `${m.from.name ?? m.from.address} wrote: "${m.subject}"`,
     why: suspicionLine(reasons),
+    whyPhrase: { code: "mail.suspicious" },
     score: SUSPICIOUS_SCORE - ageDays * 5,
     actions: offered.slice(0, 3),
     more: offered.slice(3),
@@ -559,7 +661,7 @@ function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof
       summary: triage?.summary ?? m.firstParagraph ?? m.subject,
       history: [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""} from ${m.from.address}`],
       refs: [m.from.address, m.id],
-      links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
+      links: m.url ? [mailLink(m.url)] : [],
       suspicion: reasons.map((r) => r.text),
     },
     ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),

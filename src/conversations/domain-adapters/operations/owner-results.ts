@@ -15,7 +15,7 @@ export interface OwnerResultParts {
 
 export const requestParts = (request: DispatchRequest): OwnerResultParts => ({ operationId: request.operationId, attemptId: request.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest: request.snapshot.digest });
 
-export const resultsOf = (stored: StoredOperation) => stored.journal.events.flatMap(({ event, eventId }) => {
+export const resultsOf = (stored: StoredOperation): OwnerResult[] => stored.journal.events.flatMap(({ event, eventId }) => {
   if (stored.quarantine.some(({ raw }) => typeof raw === "object" && raw !== null && !Array.isArray(raw) && raw.eventId === eventId)) return [];
   if (event.kind === "owner-result") return [event.response];
   if (event.kind === "reconciliation" && event.lookup.result.kind === "known") return [event.lookup.result.response];
@@ -42,6 +42,7 @@ export interface ApprovedSnapshotParts {
   readonly errorSchemaRef: SchemaRef;
   readonly input: unknown;
   readonly destinations: ObjectReference[];
+  readonly target?: ObjectReference;
   readonly policy: "local" | "cloud";
 }
 

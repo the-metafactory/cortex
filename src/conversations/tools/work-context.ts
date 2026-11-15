@@ -1,6 +1,7 @@
 import type { StudioEvidence, StudioEvidenceInput, StudioEvidenceAccess } from "./studio-evidence";
 import { z } from "zod/v4";
-import { routePolicy, type Policy } from "../types";
+import { mayEnter } from "../../common/residency";
+import type { Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
 
@@ -59,7 +60,7 @@ const SearchInput = z.object({
 const ReadInput = z.object({ kind: z.enum(WORK_KINDS), id: z.string().trim().min(1).max(512) }).strict();
 const SNIPPET = 300;
 
-export const mayRelease = (session: ToolSession, policy: Policy): boolean => policy === "cloud" || session.transport === "web" && routePolicy(session.route) === "local" && session.policy === "local";
+export const mayRelease = (session: ToolSession, policy: Policy): boolean => mayEnter(policy, session);
 const readersFor = (owner: WorkOwner, session: ToolSession): WorkReaders => ({ ...owner.readers(), ...owner.queries?.(session) });
 const age = (owner: WorkOwner, object: WorkObject): "fresh" | "stale" => owner.now() - object.observedAt > STALE_AFTER_MS ? "stale" : "fresh";
 const project = (owner: WorkOwner, object: WorkObject, snippetOnly: boolean) => ({

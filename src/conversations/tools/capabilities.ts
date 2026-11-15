@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { z } from "zod/v4";
 import { PROJECT_ID, type GraphSource, type ToolOperation, type ToolProject, type ToolsConfig } from "../../common/types/desk-conversations";
 import type { ToolActivity, ToolOutcome, ToolSpec, ToolSurface } from "../model";
-import { routePolicy, TRANSPORTS, type ModelRoute, type Policy } from "../types";
+import { releaseRefusal, type ReleaseRefusal } from "../../common/residency";
+import { TRANSPORTS, type ModelRoute, type Policy } from "../types";
 import { communicationTools, type CommunicationOwner } from "./communications";
 import { conversationHistoryTools, type HistoryOwner } from "./conversation-history";
 import { proposalTools, type CreationOwner } from "./proposals";
@@ -65,13 +66,15 @@ export const graphRevision = (graph: GraphSource): string => createHash("sha256"
 export const sourceRevision = (project: ToolProject | null, graph: GraphSource | null): string | null => project ? projectRevision(project) : graph ? graphRevision(graph) : null;
 const authority = (session: ToolSession): string => JSON.stringify([session.principal, session.conversationId, session.transport, session.route, session.policy, [...session.scope].sort()]);
 export const registryRevision = (config: ToolsConfig | undefined): string => createHash("sha256").update(JSON.stringify([...(config?.projects ?? []).map(project => ["project", projectRevision(project), project.policy]), ...(config?.graphs ?? []).map(graph => ["graph", graphRevision(graph), graph.policy])].sort())).digest("hex");
+const SOURCE_REFUSALS: Record<ReleaseRefusal, string> = {
+  "not-web": "local-only sources require a web conversation",
+  "cloud-model": "this source is local-only and the conversation is using a cloud model",
+  "cloud-conversation": "this source is local-only; make the conversation local-only first",
+};
 export function sourcePolicyRefusal(session: ToolSession, project: { policy: unknown }): string | null {
-  if (project.policy === "cloud") return null;
-  if (project.policy !== "local") return "the source policy is unknown";
-  if (session.transport !== "web") return "local-only sources require a web conversation";
-  if (routePolicy(session.route) !== "local") return "this source is local-only and the conversation is using a cloud model";
-  if (session.policy !== "local") return "this source is local-only; make the conversation local-only first";
-  return null;
+  if (project.policy !== "cloud" && project.policy !== "local") return "the source policy is unknown";
+  const refusal = releaseRefusal(project.policy, session);
+  return refusal === null ? null : SOURCE_REFUSALS[refusal];
 }
 interface Grant { project: ToolProject | null; graph: GraphSource | null; session: ToolSession }
 type Source = { kind: "project"; source: ToolProject } | { kind: "graph"; source: GraphSource };

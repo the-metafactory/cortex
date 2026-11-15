@@ -10,9 +10,12 @@ import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
 import { classifierDeadline, isDeadlineForm } from "./deadline";
-import type { MailSimilarity, MailText, SimilarDecisions, SimilarityBasis, SimilarityContext } from "./mail-similar";
+import type { MailSimilarity, MailText, SimilarDecisions, SimilarityContext } from "./mail-similar";
+import { SIMILARITY_BASES, type SimilarityBasis } from "./mail-prediction-schema";
+import { PREDICTED_ACTIONS, type PredictedAction } from "./mail-action-schema";
+export { PREDICTED_ACTIONS, type PredictedAction } from "./mail-action-schema";
 
-export const SIMILARITY_BASES = ["content", "sender"] as const;
+export { SIMILARITY_BASES } from "./mail-prediction-schema";
 
 export const MAIL_COMMITMENTS = ["request", "invitation", "none", "unknown"] as const;
 export type MailCommitment = (typeof MAIL_COMMITMENTS)[number];
@@ -24,8 +27,6 @@ export type MailCategory = (typeof MAIL_CATEGORIES)[number];
 export const SUGGESTED_ACTIONS = ["reply", "archive", "link-meeting", "task", "none"] as const;
 export type SuggestedAction = (typeof SUGGESTED_ACTIONS)[number];
 export const EVIDENCE_KINDS = ["mail", "event", "note"] as const;
-export const PREDICTED_ACTIONS = ["archive", "junk", "trash", "reply", "plan", "todo", "keep"] as const;
-export type PredictedAction = (typeof PREDICTED_ACTIONS)[number];
 
 export interface MailEvidence {
   kind: (typeof EVIDENCE_KINDS)[number];
@@ -120,6 +121,7 @@ export interface ClassifierCorrection {
   source: string;
   mode: string;
   label: string;
+  labelPhrase?: import("./phrases").DeskPhrase;
 }
 
 export interface ClassifierExample {

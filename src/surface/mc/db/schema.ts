@@ -6,9 +6,12 @@ import { TRUST_SQL } from "../desk/mail-trust-schema";
 import { GRAPH_REPOSITORY_SQL } from "../desk/graph-repository-schema";
 import { GRAPH_WRITER_SQL } from "../desk/graph-writer-schema";
 import { DMARC_SQL } from "../desk/mail-dmarc-schema";
+import { MAIL_LOOP_SQL } from "../desk/mail-loop-schema";
+import { MAIL_SWEEP_ADAPTER_SQL } from "../desk/mail-sweep-adapter-schema";
 import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
 import { DIGEST_SQL } from "../desk/mail-digest-schema";
 import { UNSUBSCRIBE_SQL } from "../desk/mail-unsubscribe-schema";
+import { MAIL_JUDGEMENT_SQL } from "../desk/mail-judgement-schema";
 import { WAITING_SQL } from "../desk/mail-waiting-schema";
 import { HANDOFF_COLUMNS, HANDOFF_SQL } from "../desk/mail-handoff-schema";
 import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
@@ -150,6 +153,10 @@ export const TABLE_NAMES = [
   "desk_interrupt_feedback",
   "desk_mail_classes",
   "desk_unimportant",
+  "desk_mail_judgement_operations",
+  "desk_mail_judgement_expired",
+  "desk_mail_judgement_list_versions",
+  "desk_mail_judgement_row_versions",
   "desk_studio_sessions",
   "desk_balance",
   "desk_mail_decisions",
@@ -159,12 +166,17 @@ export const TABLE_NAMES = [
   "desk_mail_rules",
   "desk_mail_rule_answers",
   "desk_mail_rule_runs",
+  "desk_mail_loop_grants",
+  "desk_mail_loop_state",
   "desk_mail_vectors",
   "desk_mail_dmarc",
   "desk_mail_sweeps",
   "desk_mail_digest_kept",
   "desk_mail_digest_flags",
   "desk_mail_sweep_mails",
+  "desk_mail_sweep_grants",
+  "desk_mail_sweep_sets",
+  "desk_mail_sweep_set_mails",
   "desk_mail_trusted",
   "desk_graph_repositories",
   "desk_worker_handoffs",
@@ -182,6 +194,8 @@ export const SCHEMA_SQL: string[] = [
   ...GRAPH_WRITER_SQL,
   ...MAIL_VECTORS_SQL,
   ...DMARC_SQL,
+  ...MAIL_LOOP_SQL,
+  ...MAIL_SWEEP_ADAPTER_SQL,
   ...ROUTINE_DISPLAY_SQL,
   ...DIGEST_SQL,
   ...UNSUBSCRIBE_SQL,
@@ -282,6 +296,7 @@ export const SCHEMA_SQL: string[] = [
     label TEXT,
     added_at INTEGER NOT NULL
   )`,
+  ...MAIL_JUDGEMENT_SQL,
   "CREATE TABLE IF NOT EXISTS vigil_subject_stack_sources (subject_key TEXT PRIMARY KEY)",
   "CREATE TABLE IF NOT EXISTS vigil_subject_stack_moves (old_key TEXT PRIMARY KEY, new_key TEXT NOT NULL, expected_run_id TEXT NOT NULL, expected_ended_at INTEGER NOT NULL)",
   `CREATE TABLE IF NOT EXISTS vigil_result_reads (
@@ -1003,6 +1018,10 @@ export interface ColumnAddMigration {
 }
 
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
+  { table: "desk_mail_judgement_operations", column: "created_at", ddl: "ALTER TABLE desk_mail_judgement_operations ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0", post: [
+    "UPDATE desk_mail_judgement_operations SET created_at = COALESCE(CAST(strftime('%s', json_extract(result_json, '$.evidence.observedAt')) AS INTEGER) * 1000, 0) WHERE created_at = 0",
+    "CREATE INDEX IF NOT EXISTS desk_mail_judgement_created_at ON desk_mail_judgement_operations(created_at)",
+  ] },
   {
     table: "vigil_results",
     column: "source_stack",

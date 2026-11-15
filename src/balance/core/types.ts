@@ -17,6 +17,8 @@ export interface OutlineNode {
     note?: string;
     done?: boolean;
     completedAt?: string;
+    createdAt?: string;
+    touchedAt?: string;
     effort?: Effort;
     estimateMinutes?: number;
     dueDate?: string;

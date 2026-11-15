@@ -10,7 +10,7 @@ import { removeDeclined } from "./mail-invitation-remove";
 import type { Commitment } from "./mail-yes-filter";
 import { CommandTimeout } from "../common/spawn";
 import type { MailInvitation, SourceReading } from "./sources/command";
-import { clock, DAY_MS, startOfDay } from "./time";
+import { clock, DAY_MS, localDay, startOfDay } from "./time";
 import { DEFAULT_SLOTS, type InvitationSlotsConfig, type InvitationsConfig, type InviteReply, type InviteStatus } from "./mail-invitation-schema";
 
 export { DEFAULT_SLOTS, INVITATIONS_SQL, INVITE_REPLIES, type InvitationsConfig, type InviteReply } from "./mail-invitation-schema";
@@ -51,6 +51,8 @@ export interface InvitationView {
   uid: string;
   summary: string;
   when: string;
+  startIso: string;
+  endIso: string;
   start: string;
   end?: string;
   allDay?: boolean;
@@ -224,11 +226,16 @@ export function invitationDecisions(db: Database, messageIds: string[]): Map<str
 export function invitationView(mail: ListedMail, calendar: CalendarAvailability, config: InvitationsConfig | undefined, decision?: InvitationDecision): InvitationView | undefined {
   const inv = mail.invitation;
   if (!inv) return undefined;
+  const span = invitationSpan(inv);
+  if (!Number.isFinite(span.at) || !Number.isFinite(span.end)) return undefined;
   const conflicts = invitationConflicts(inv, calendar);
+  const iso = (at: number): string => inv.allDay ? localDay(at) : new Date(at).toISOString();
   return {
     uid: inv.uid,
     summary: inv.summary,
     when: whenLine(inv),
+    startIso: iso(span.at),
+    endIso: iso(span.end),
     start: inv.start,
     ...(inv.end ? { end: inv.end } : {}),
     ...(inv.allDay ? { allDay: true } : {}),

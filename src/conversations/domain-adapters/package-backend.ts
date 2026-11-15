@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { TrustedConnector } from "../authority";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskObservationBinding } from "../../desk-sdk";
-import { OwnerSupportSchema, type OwnerSupport } from "./operations/types";
+import { OwnerSupportSchema, type DispatchRequest, type OwnerSupport } from "./operations/types";
 import type { ObservationConnector } from "./reads/observation-types";
 import { QueryPageSchema } from "./reads/query-types";
 import type { AdapterDeclaration, BoundaryError } from "./types";
@@ -32,6 +32,11 @@ const NO_DISPATCH_CAPABILITY = "desk.dispatch.unavailable";
 const settled = <T>(run: () => T): Promise<Awaited<T>> => new Promise(resolve => { resolve(run() as Awaited<T>); });
 
 const admittedCalls = new AsyncLocalStorage<string>();
+const admittedDispatches = new AsyncLocalStorage<{ request: DispatchRequest; active: boolean }>();
+export const admittedDispatch = (): DispatchRequest | undefined => {
+  const scope = admittedDispatches.getStore();
+  return scope?.active ? structuredClone(scope.request) : undefined;
+};
 /** The adapter-and-connection key of a backend call. */
 export const connectionKey = (connection: DeskAdapterConnection): string => JSON.stringify([connection.adapterId, connection.connectionId]);
 /** The key of the connection whose admitted backend call is running now, if any. */
@@ -126,7 +131,8 @@ export function adaptDeskBackend(input: DeskBackendInput): DeskBackendConnector 
     },
     dispatch: (request, signal) => {
       if (!dispatchable || typeof action.dispatch !== "function") return Promise.reject(new DeskBackendUnavailableError(dispatchState.available ? { code: "dispatch_unavailable", message: "The dispatch path is unavailable." } : dispatchState.error));
-      return settled(() => call(() => action.dispatch?.(structuredClone(request), signal)));
+      const scope = { request: structuredClone(request), active: true };
+      return settled(() => call(() => admittedDispatches.run(scope, () => action.dispatch?.(structuredClone(request), signal)))).finally(() => { scope.active = false; });
     },
     ...(action && typeof action.cancel === "function" ? { cancel: (request, signal) => settled(() => call(() => action.cancel?.(structuredClone(request), signal))) } : {}),
     ...(action && typeof action.lookup === "function" ? { lookup: (request, signal) => settled(() => call(() => action.lookup?.(structuredClone(request), signal))) } : {}),

@@ -1,8 +1,8 @@
-import { rangerItemKey, type RangerMap, type RangerMapNode, type RangerNeedsYou, type RangerState } from "./sources/ranger";
+import { laneHolderName, rangerItemKey, type RangerMap, type RangerMapNode, type RangerNeedsYou, type RangerState } from "./sources/ranger";
 import { DAY_MS } from "./time";
 
 /** The Desk actions that write to Ranger. */
-export const RANGER_ACTIONS = ["ranger.approve", "ranger.retry"] as const;
+export const RANGER_ACTIONS = ["ranger.approve", "ranger.retry", "ranger.run-now"] as const;
 export type RangerActionId = (typeof RANGER_ACTIONS)[number];
 
 export const isRangerAction = (id: unknown): id is RangerActionId => RANGER_ACTIONS.includes(id as RangerActionId);
@@ -45,6 +45,7 @@ export const approvable = (map: RangerMap, node: RangerMapNode): boolean =>
 
 export const retryable = (n: RangerNeedsYou): boolean => n.actions?.resume === true;
 
+export const queueKey = (n: RangerNeedsYou): string | null => (n.endedAt ? `queue:${n.key}/${n.nodeId}@${n.endedAt}` : null);
 export const approveKey = (map: RangerMap, node: RangerMapNode): string => `approve:${map.key}/${node.id}@${node.approvalVersion ?? ""}`;
 export const retryKey = (n: RangerNeedsYou): string | null => (n.endedAt ? `retry:${n.key}/${n.nodeId}@${n.endedAt}` : null);
 
@@ -72,12 +73,51 @@ export function planRangerAction(state: RangerState, action: RangerActionId, ite
   }
   const entry = state.needsYou.find((n) => rangerItemKey(`${n.repo}#${n.nodeId}`) === itemKey);
   if (!entry) return "Ranger no longer lists this node as stopped.";
+  if (action === "ranger.run-now") {
+    if (!entry.queued || !retryable(entry) || !NODE_ID.test(entry.nodeId) || !MAP_KEY.test(entry.key)) return "Ranger does not list this node as queued.";
+    return {
+      argv: [cli.bin, "resume-node", entry.nodeId, "--map", entry.key, "--force", ...config(cli)],
+      claimKey: `retry:${entry.key}/${entry.nodeId}`,
+      handledKey: retryKey(entry),
+      done: `Ranger is running "${entry.title}" beside the node that holds its lane.`,
+    };
+  }
   if (!retryable(entry) || !NODE_ID.test(entry.nodeId) || !MAP_KEY.test(entry.key)) return "Ranger does not offer a retry for this node.";
   return {
     argv: [cli.bin, "resume-node", entry.nodeId, "--map", entry.key, ...config(cli)],
     claimKey: `retry:${entry.key}/${entry.nodeId}`,
     handledKey: retryKey(entry),
     done: `Ranger is retrying "${entry.title}".`,
+  };
+}
+
+export type ResumePlan = PlannedAction & { queuedBehind?: string };
+
+function otherHolder(state: RangerState, entry: RangerNeedsYou): string | undefined {
+  const lane = state.maps.find((m) => m.key === entry.key)?.lane;
+  const holder = lane ? state.laneHolders?.[lane] : undefined;
+  if (!lane || !holder || (holder.repo === entry.repo && holder.nodeId === entry.nodeId)) return undefined;
+  return laneHolderName(state, lane);
+}
+
+/**
+ * The resume a recorded ruling triggers: `resume-node --when-free` while another Ranger item holds the lane and Ranger
+ * offers the queue, otherwise the plain retry. Built from a fresh read, like every Ranger call.
+ */
+export function planResume(state: RangerState, itemKey: string, cli: RangerCli): ResumePlan | string {
+  const plan = planRangerAction(state, "ranger.retry", itemKey, cli);
+  if (typeof plan === "string") return plan;
+  const entry = state.needsYou.find((n) => rangerItemKey(`${n.repo}#${n.nodeId}`) === itemKey);
+  const holder = entry && entry.actions?.queueResume?.offered === true ? otherHolder(state, entry) : undefined;
+  if (entry?.queued) return `it is already queued in Ranger${otherHolder(state, entry) ? ` behind "${otherHolder(state, entry)}"` : ""}.`;
+  if (!entry || holder === undefined) return plan;
+  const queued = queueKey(entry);
+  return {
+    argv: [...plan.argv.slice(0, 5), "--when-free", ...plan.argv.slice(5)],
+    claimKey: plan.claimKey,
+    handledKey: queued,
+    done: `Ranger queued "${entry.title}" behind "${holder}".`,
+    queuedBehind: holder,
   };
 }
 
@@ -139,10 +179,10 @@ export function withoutHandled(state: RangerState, ledger: Pick<HandledLedger, "
 const ENV_KEEP = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "SHELL"];
 
 /** Runs the Ranger CLI with a minimal environment, so no token in Cortex's environment reaches it. */
-export const spawnRanger: RangerRunner = async (argv) => {
+export const spawnRanger = async (argv: string[], timeoutMs = 120_000): Promise<RangerRunResult> => {
   const env: Record<string, string> = {};
   for (const k of ENV_KEEP) if (process.env[k] !== undefined) env[k] = process.env[k];
-  const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
   const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   return { code, stdout, stderr };
 };

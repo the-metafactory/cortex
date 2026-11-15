@@ -40,13 +40,14 @@ describe("waiting-task source projection", () => {
     expect(view.agents.waiting).toBe(2);
   });
 
-  it("suppresses closed tasks and all duplicate alerts without mutating observations", async () => {
+  it("retains one link-only escalation for each closed issue without mutating observations", async () => {
     const refs = ["example/film#12", "example/game#1033", "example/game#1081"];
     for (const ref of refs) { seed(ref); seed(ref, "second"); }
     const before = db.query("SELECT * FROM vigil_subjects ORDER BY subject_key").all();
     const view = await compose({ waitingTasks: { read: async () => new Map(refs.map(ref => [ref, source("closed", "Completed task")])) } });
-    expect(view.items).toEqual([]);
-    expect(view.agents.waiting).toBe(0);
+    expect(view.items).toHaveLength(3);
+    expect(view.items.every(item => item.title.includes("is closed") && item.detail.summary.includes("Answer on the issue.") && item.actions.every(action => action.id !== "ranger.rule"))).toBe(true);
+    expect(view.agents.waiting).toBe(3);
     expect(db.query("SELECT * FROM vigil_subjects ORDER BY subject_key").all()).toEqual(before);
   });
 
@@ -67,8 +68,10 @@ describe("waiting-task source projection", () => {
     const missing = await composeDesk(db, desk, { enabled: true }, { now: NOW, fetchImpl: noReport, waitingTasks: { read: async () => new Map([["example/game#12", source("open", "Actual source title")]]) } });
     expect(missing.items[0]?.why).toContain("The question is unavailable. Open the source");
     const closed = await composeDesk(db, desk, { enabled: true }, { now: NOW, fetchImpl, waitingTasks: { read: async () => new Map([["example/game#12", source("closed", "Choose a hull")]]) } });
-    expect(closed.items).toHaveLength(0);
-    expect(closed.agents.waiting).toBe(0);
+    expect(closed.items).toHaveLength(1);
+    expect(closed.items[0]?.source).toBe("vigil");
+    expect(closed.items[0]?.detail.summary).toContain("This issue is closed. Answer on the issue.");
+    expect(closed.agents.waiting).toBe(1);
   });
 
   it("reads and suppresses Ranger-only tasks across blocked, decision and grilling sources", async () => {
@@ -90,7 +93,10 @@ describe("waiting-task source projection", () => {
     expect(cold.items[0]?.why).toContain("Source status could not be checked");
     finish(source("closed","Completed task"));
     await waitingTasks.warm(["example/game#12"]);
-    expect((await compose({waitingTasks})).items).toEqual([]);
+    const refreshed = (await compose({waitingTasks})).items;
+    expect(refreshed).toHaveLength(1);
+    expect(refreshed[0]?.title).toContain("is closed");
+    expect(refreshed[0]?.detail.summary).toContain("Answer on the issue.");
   });
 
   it("keeps open requests once and explicitly states missing questions and unavailable status", async () => {

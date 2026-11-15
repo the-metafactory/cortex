@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { UNDO_WINDOW_MS } from "./move-contract";
-import type { OperationJournalStore, StoredOperation } from "../operations/journal";
-import type { ApprovedSnapshot, Authority, OperationJournal, Provenance } from "../operations/types";
+import type { StoredOperation } from "../operations/journal";
+import type { ApprovedSnapshot, Authority, OperationJournal, OperationState, Provenance } from "../operations/types";
 import type { HostContext } from "../../authority";
-import type { BoundaryError, CapabilityDiscovery } from "../types";
-import { MAIL_ACTION_CAPABILITY, MAIL_MOVE_CAPABILITIES, MAIL_REFUSAL, MAIL_RESTORE_CAPABILITY, MailMoveOutputSchema, mailAccountRef, mailMessageRef, mailMoveSnapshot, type MailMoveAction, type MailMoveInput, type MailMoveTarget } from "./move-contract";
-import { readLegacyMove, type OperationIndex } from "./legacy-move";
+import type { BoundaryError, ObjectReference } from "../types";
+import { MAIL_ACTION_CAPABILITY, MAIL_MOVE_CAPABILITIES, MAIL_REFUSAL, MAIL_RESTORE_CAPABILITY, MailMoveOutputSchema, mailAccountRef, mailMessageRef, mailMoveSnapshot, mailTargetDone, mailTargetFolder, type MailMoveAction, type MailMoveInput, type MailMoveTarget } from "./move-contract";
+import { readLegacyMove } from "./legacy-move";
+import { dispatchMailOperation, loadOperations, mailCapabilityDeclared, ownerResults, type MailHostOptions } from "./host-operation";
 
 export type GrantChoice = "always" | "once" | "cancel";
 export const GRANT_OPTIONS: readonly { choice: GrantChoice; label: string }[] = [
@@ -25,23 +26,26 @@ export interface GrantPrompt {
 export type ApprovalDecision = { kind: "allowed"; authority: Authority } | { kind: "denied"; reason: BoundaryError };
 export interface MailApprovalInput { operationId: string; idempotencyKey: string; ownerRequestId: string; snapshot: ApprovedSnapshot; links?: OperationJournal["links"] }
 
+/** The exact objects one standing permission names, so it covers no other mail than these. */
+export interface MailGrantSelection {
+  destinations: readonly ObjectReference[];
+  target: ObjectReference;
+}
+
 /** What the Cortex runtime's authority offers one Mail connection: the standing grant for the move actions, and approval of one operation under it. */
 export interface MailMoveAuthority {
   findGrant(capabilityId: string): Promise<string | null>;
-  grant(capabilityIds: readonly string[]): Promise<string | null>;
+  grant(capabilityIds: readonly string[], selection?: MailGrantSelection): Promise<string | null>;
   approve(input: MailApprovalInput, grantId: string | null): Promise<ApprovalDecision>;
 }
 
-export interface MailMoveHostOptions {
-  adapterId: string;
-  connectionId: string;
-  account: string;
-  journal: OperationJournalStore;
-  index: OperationIndex;
-  authority: MailMoveAuthority;
-  capability(capabilityId: string): CapabilityDiscovery;
-  dispatch(operationId: string): Promise<unknown>;
-  now?: () => number;
+export interface MailInspection {
+  state: OperationState | null;
+  receipt: MailMoveReceipt | null;
+  restores: MailMoveReceipt[];
+}
+
+export interface MailMoveHostOptions extends MailHostOptions {
   newId?: () => string;
 }
 
@@ -80,8 +84,15 @@ export type UndoOutcome =
   | { kind: "denied"; reason: BoundaryError }
   | { kind: "receipt"; receipt: MailMoveReceipt; original: MailMoveReceipt };
 
-const FOLDER_LABEL: Record<string, string> = { archive: "Archive", junk: "Junk", trash: "Trash" };
-const DONE_MESSAGE: Record<string, string> = { archive: "Archived.", junk: "Moved to Junk.", trash: "Moved to Trash." };
+export type GrantMoveRequest =
+  | { action: "move"; messageId: string; target: MailMoveTarget; provenance: Provenance; grantId: string | null; operationId?: string }
+  | { action: "trash"; messageId: string; provenance: Provenance; grantId: string | null; operationId?: string };
+
+export type GrantMoveOutcome =
+  | { kind: "unavailable"; reason: BoundaryError }
+  | { kind: "denied"; reason: BoundaryError }
+  | { kind: "receipt"; receipt: MailMoveReceipt };
+
 const reason = (code: string, message: string): BoundaryError => ({ code, message });
 const UNAVAILABLE_ACTION = (action: MailMoveAction): BoundaryError => reason("mail.capability_unavailable", action === "trash" ? "Moving mail to Trash is not available on this connection, because it cannot restore the mail." : "This connection does not offer that action.");
 const QUESTION: Record<MailMoveAction, string> = { move: "Move mail with one click on this connection?", trash: "Move mail to Trash with one click on this connection?", restore: "Move mail back with one click on this connection?" };
@@ -114,8 +125,7 @@ export class MailMoveHost {
   }
 
   private declared(capabilityId: string): boolean {
-    const found = this.options.capability(capabilityId);
-    return found.support === "declared" && found.adapterId === this.options.adapterId && found.availability.state === "available";
+    return mailCapabilityDeclared(this.options, capabilityId);
   }
 
   private coveredCapabilities(): string[] {
@@ -139,22 +149,44 @@ export class MailMoveHost {
     return this.run(input, request.provenance, grantId, undefined);
   }
 
-  async undo(operationId: string, provenance: Provenance): Promise<UndoOutcome> {
+  async move(request: GrantMoveRequest): Promise<GrantMoveOutcome> {
+    const { action } = request;
+    if (!this.available(action)) return { kind: "unavailable", reason: UNAVAILABLE_ACTION(action) };
+    const input: MailMoveInput = action === "move"
+      ? { action: "move", message: this.message(request.messageId), target: request.target }
+      : { action: "trash", message: this.message(request.messageId) };
+    const outcome = await this.run(input, request.provenance, request.grantId, undefined, request.operationId);
+    if (outcome.kind === "receipt" || outcome.kind === "denied" || outcome.kind === "unavailable") return outcome;
+    return { kind: "denied", reason: reason("authority_denied", "The standing permission does not run this move without asking.") };
+  }
+
+  async undo(operationId: string, provenance: Provenance, grantId?: string | null): Promise<UndoOutcome> {
     const original = await this.receipt(operationId);
     if (!original) return { kind: "unavailable", reason: reason("mail.receipt_unknown", "The Desk has no record of that move.") };
     if (original.undo.kind !== "available") return { kind: "unavailable", reason: reason("mail.undo_unavailable", `This move cannot be undone: ${original.undo.reason}.`) };
     if (this.undoing.has(operationId)) return { kind: "unavailable", reason: reason("mail.undo_unavailable", "This move is already being undone.") };
     this.undoing.add(operationId);
     try {
-      const grantId = await this.options.authority.findGrant(MAIL_RESTORE_CAPABILITY);
-      const from = original.folder ?? FOLDER_LABEL[original.target ?? ""] ?? original.target ?? "";
-      const outcome = await this.run({ action: "restore", message: this.message(original.messageId), from }, provenance, grantId, operationId);
+      const restoreGrantId = grantId === undefined ? await this.options.authority.findGrant(MAIL_RESTORE_CAPABILITY) : grantId;
+      const from = original.folder ?? (original.target ? mailTargetFolder(original.target) : "");
+      const outcome = await this.run({ action: "restore", message: this.message(original.messageId), from }, provenance, restoreGrantId, operationId);
       if (outcome.kind !== "receipt") return outcome.kind === "denied" ? outcome : { kind: "unavailable", reason: reason("mail.undo_unavailable", "The move cannot be undone now.") };
       const refreshed = await this.receipt(operationId);
       return { kind: "receipt", receipt: outcome.receipt, original: refreshed ?? original };
     } finally {
       this.undoing.delete(operationId);
     }
+  }
+
+  async restores(operationId: string): Promise<MailMoveReceipt[]> {
+    return (await this.loadCompensations(operationId)).map(item => this.project(item, []));
+  }
+
+  async inspect(operationId: string): Promise<MailInspection> {
+    const found = await this.options.journal.read(operationId);
+    if (!found) return { state: null, receipt: null, restores: [] };
+    const compensations = this.compensated(found) ? await this.loadCompensations(operationId) : [];
+    return { state: found.journal.state, receipt: this.project(found, compensations), restores: compensations.map(item => this.project(item, [])) };
   }
 
   async receipts(limit = 100): Promise<MailMoveReceipt[]> {
@@ -170,24 +202,25 @@ export class MailMoveHost {
   private async receiptOf(operationId: string, fresh: boolean): Promise<MailMoveReceipt | null> {
     const found = await this.options.journal.read(operationId);
     if (!found) return null;
-    const needsCompensations = !fresh && found.journal.state === "succeeded" && ("kind" in found.journal.snapshot || found.journal.snapshot.capabilityId !== MAIL_RESTORE_CAPABILITY);
-    const compensations = needsCompensations ? await this.loadCompensations(operationId) : [];
+    const compensations = !fresh && this.compensated(found) ? await this.loadCompensations(operationId) : [];
     return this.project(found, compensations);
+  }
+
+  private compensated(found: StoredOperation): boolean {
+    return found.journal.state === "succeeded" && ("kind" in found.journal.snapshot || found.journal.snapshot.capabilityId !== MAIL_RESTORE_CAPABILITY);
   }
 
   private message(messageId: string) { return mailMessageRef(this.options.adapterId, this.options.connectionId, messageId); }
 
   private async loadCompensations(operationId: string): Promise<StoredOperation[]> {
-    const stored = await Promise.all((await this.options.index.compensations(operationId)).map(id => this.options.journal.read(id)));
-    return stored.filter((item): item is StoredOperation => item !== null);
+    return loadOperations(this.options, await this.options.index.compensations(operationId));
   }
 
   private async loadAll(): Promise<StoredOperation[]> {
-    const stored = await Promise.all((await this.options.index.list()).map(id => this.options.journal.read(id)));
-    return stored.filter((item): item is StoredOperation => item !== null);
+    return loadOperations(this.options, await this.options.index.list());
   }
 
-  private async run(input: MailMoveInput, provenance: Provenance, grantId: string | null, compensates: string | undefined): Promise<PressOutcome> {
+  private async run(input: MailMoveInput, provenance: Provenance, grantId: string | null, compensates: string | undefined, operationId = `mail-move:${this.newId()}`): Promise<PressOutcome> {
     const { adapterId, connectionId, account } = this.options;
     let snapshot: ApprovedSnapshot;
     try {
@@ -195,11 +228,8 @@ export class MailMoveHost {
     } catch {
       return { kind: "unavailable", reason: reason("mail.invalid_request", "That mail cannot be moved: the request does not match the Mail contract.") };
     }
-    const operationId = `mail-move:${this.newId()}`;
-    const decision = await this.options.authority.approve({ operationId, idempotencyKey: operationId, ownerRequestId: randomUUID(), snapshot, ...(compensates ? { links: { compensatesOperationId: compensates } } : {}) }, grantId);
+    const decision = await dispatchMailOperation(this.options, snapshot, operationId, grantId, compensates);
     if (decision.kind === "denied") return { kind: "denied", reason: decision.reason };
-    await this.options.index.add(operationId, compensates);
-    await this.options.dispatch(operationId);
     const receipt = await this.receiptOf(operationId, true);
     if (!receipt) return { kind: "denied", reason: reason("mail.receipt_missing", "The attempt left no journal record.") };
     return { kind: "receipt", receipt };
@@ -229,7 +259,7 @@ export class MailMoveHost {
 
   private legacyReceipt(legacy: NonNullable<ReturnType<typeof readLegacyMove>>, undone: boolean): Omit<MailMoveReceipt, "undo"> {
     const { row } = legacy;
-    return { operationId: `mail-move:${row.id}`, action: row.target === "trash" ? "trash" : "move", messageId: row.messageId, account: row.account, target: row.target, ...(row.folder ? { folder: row.folder } : {}), state: "done", message: DONE_MESSAGE[row.target] ?? "Moved.", at: new Date(row.createdAt).toISOString(), basis: "legacy", undone };
+    return { operationId: `mail-move:${row.id}`, action: row.target === "trash" ? "trash" : "move", messageId: row.messageId, account: row.account, target: row.target, ...(row.folder ? { folder: row.folder } : {}), state: "done", message: `${mailTargetDone(row.target)}.`, at: new Date(row.createdAt).toISOString(), basis: "legacy", undone };
   }
 
   private lifecycleReceipt(stored: StoredOperation, undone: boolean): Omit<MailMoveReceipt, "undo"> {
@@ -241,12 +271,12 @@ export class MailMoveHost {
     const account = snapshot.destinations[0]?.canonicalId ?? "";
     const approved = journal.events[0]?.event;
     const basis = approved?.kind === "approved" && approved.authority.basis.kind === "grant" ? "grant" as const : "confirmation" as const;
-    const results = journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response.result] : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? [entry.event.lookup.result.response.result] : []);
+    const results = ownerResults(journal);
     const success = results.findLast(item => item.kind === "succeeded");
     const output = success?.kind === "succeeded" ? MailMoveOutputSchema.safeParse(success.output) : null;
     const target = body.target ?? (action === "trash" ? "trash" : undefined);
     const common = { operationId: journal.operationId, action, messageId: body.message.canonicalId, account, ...(target ? { target } : {}), at: journal.events.at(-1)?.at ?? journal.events[0]?.at ?? "", basis, ...(journal.links?.compensatesOperationId ? { compensates: journal.links.compensatesOperationId } : {}), undone };
-    if (journal.state === "succeeded" && output?.success) return { ...common, at: journal.events[0]?.at ?? common.at, state: "done", folder: output.data.folder, message: action === "restore" ? "Moved back." : DONE_MESSAGE[target ?? ""] ?? "Moved." };
+    if (journal.state === "succeeded" && output?.success) return { ...common, at: journal.events[0]?.at ?? common.at, state: "done", folder: output.data.folder, message: action === "restore" ? "Moved back." : target ? `${mailTargetDone(target)}.` : "Moved." };
     const failure = results.findLast(item => item.kind === "failed");
     if (failure?.kind === "failed") return { ...common, at: journal.events[0]?.at ?? common.at, state: stateOfRefusal(failure.error.code), message: failure.error.message };
     const conflict = results.findLast(item => item.kind === "conflict");
@@ -260,7 +290,7 @@ export class MailMoveHost {
 
 export interface MailMoveAuthorityService {
   findConnectionGrant(context: HostContext, connectionId: string, capabilityId: string): Promise<string | null>;
-  grantConnectionActions(context: HostContext, connectionId: string, capabilityIds: readonly string[]): Promise<string | null>;
+  grantConnectionActions(context: HostContext, connectionId: string, capabilityIds: readonly string[], selection?: MailGrantSelection): Promise<string | null>;
   confirm(context: HostContext, input: MailApprovalInput): Promise<ApprovalDecision>;
   approveGrant(context: HostContext, input: MailApprovalInput, grantId: string): Promise<ApprovalDecision>;
 }
@@ -269,7 +299,7 @@ export interface MailMoveAuthorityService {
 export function mailMoveAuthority(service: MailMoveAuthorityService, context: HostContext, connectionId: string): MailMoveAuthority {
   return {
     findGrant: capabilityId => service.findConnectionGrant(context, connectionId, capabilityId),
-    grant: capabilityIds => service.grantConnectionActions(context, connectionId, capabilityIds),
+    grant: (capabilityIds, selection) => service.grantConnectionActions(context, connectionId, capabilityIds, selection),
     approve: (input, grantId) => grantId ? service.approveGrant(context, input, grantId) : service.confirm(context, input),
   };
 }

@@ -239,7 +239,7 @@ describe("Desk cards and API", () => {
     const v = await view();
     const card = v.items.find((i) => i.key === "mail:page");
     expect(card?.actions.find((a) => a.id === "mail.unsubscribe.page")).toMatchObject({ label: "Open unsubscribe page", url: "mailto:leave@lists.example" });
-    expect(card?.detail.links).toContainEqual({ label: "Unsubscribe page: mailto:leave@lists.example", url: "mailto:leave@lists.example" });
+    expect(card?.detail.links).toContainEqual({ kind: "unsubscribe-page", label: "Unsubscribe page: mailto:leave@lists.example", url: "mailto:leave@lists.example" });
     const suspicious = v.items.find((i) => i.key === "mail:phish");
     expect(suspicious?.suspicious).toBe(true);
     expect([...(suspicious?.actions ?? []), ...(suspicious?.more ?? [])].some((a) => a.id.startsWith("mail.unsubscribe"))).toBe(false);

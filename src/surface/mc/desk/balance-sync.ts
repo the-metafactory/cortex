@@ -14,11 +14,11 @@ export function loadMeta(db: Database): MyDayMeta {
 export function saveMeta(db: Database, meta: MyDayMeta): void {
   db.query("INSERT INTO desk_my_day (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(meta));
 }
-function areaNode(area: DeskOptions["areas"][number]): OutlineNode {
-  return { id: `area:${area.id}`, title: area.label, weight: 50, ordering: "parallel", children: [] };
+function areaNode(area: DeskOptions["areas"][number], date?: string): OutlineNode {
+  return { id: `area:${area.id}`, title: area.label, weight: 50, ordering: "parallel", children: [], ...(date ? { createdAt: date } : {}) };
 }
-function initial(desk: DeskOptions): AppState {
-  return { outline: { id: ROOT_ID, title: "Outline", weight: 100, ordering: "parallel", children: desk.areas.map(areaNode) }, log: [], settings: { ...DEFAULT_SETTINGS, todayCap: desk.myDay?.cap ?? 5 }, dayState: null, history: { deficits: {}, lastSurfaced: {} } };
+function initial(desk: DeskOptions, date?: string): AppState {
+  return { outline: { id: ROOT_ID, title: "Outline", weight: 100, ordering: "parallel", children: desk.areas.map(area => areaNode(area, date)) }, log: [], settings: { ...DEFAULT_SETTINGS, todayCap: desk.myDay?.cap ?? 5 }, dayState: null, history: { deficits: {}, lastSurfaced: {} } };
 }
 export function todayCap(meta: MyDayMeta, desk: DeskOptions): number {
   return meta.caps?.cap ?? desk.myDay?.cap ?? 5;
@@ -29,8 +29,8 @@ export function isPersonDraft(meta: MyDayMeta, date: string): meta is MyDayMeta 
 export function retireStaleDraft(meta: MyDayMeta, date: string): void {
   if (meta.draft && !isPersonDraft(meta, date)) meta.draft = null;
 }
-export function loadMyDayState(db: Database, desk: DeskOptions, meta: MyDayMeta): AppState {
-  const state = loadBalanceState(db) ?? initial(desk);
+export function loadMyDayState(db: Database, desk: DeskOptions, meta: MyDayMeta, date?: string): AppState {
+  const state = loadBalanceState(db) ?? initial(desk, date);
   state.settings.todayCap = todayCap(meta, desk);
   return state;
 }
@@ -43,15 +43,17 @@ export function syncBalance(db: Database, desk: DeskOptions, now: number, studio
     const date = localDay(now);
     const meta = loadMeta(db);
     const saved = loadBalanceState(db);
-    const state = saved ?? initial(desk);
+    const state = saved ?? initial(desk, date);
     const beforeState = JSON.stringify(state);
+    const recordingSince = meta.touchTrackingSince === undefined;
+    meta.touchTrackingSince ??= date;
     const beforeMeta = JSON.stringify(meta);
     for (const area of desk.areas) {
       const existing = findNode(state.outline, `area:${area.id}`);
       if (existing) existing.title = area.label;
-      else state.outline.children.push(areaNode(area));
+      else state.outline.children.push(areaNode(area, date));
     }
-    if (studio) projectStudio(state, meta, studio);
+    if (studio) projectStudio(state, meta, studio, date);
     const completedToday = new Set(state.log.filter(event => event.date === date).map(event => event.taskId));
     for (const task of collectLeaves(state.outline)) if (!completedToday.has(task.id)) applyRecurrence(task, date);
     retireStaleDraft(meta, date);
@@ -60,6 +62,6 @@ export function syncBalance(db: Database, desk: DeskOptions, now: number, studio
     const metaChanged = JSON.stringify(meta) !== beforeMeta;
     if (stateChanged || metaChanged) meta.revision += 1;
     if (!saved || stateChanged) saveBalanceState(db, state);
-    if (stateChanged || metaChanged) saveMeta(db, meta);
+    if (stateChanged || metaChanged || recordingSince) saveMeta(db, meta);
   }).immediate();
 }

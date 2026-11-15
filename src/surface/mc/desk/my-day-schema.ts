@@ -39,7 +39,7 @@ export const MyDayMetaSchema = z.object({
   planned: z.array(z.object({ filing: z.uuid(), taskId: id, parent: id.nullable(), snapshot: z.string(), sourceSnapshot: z.string(), reversed: z.boolean() })).default([]),
   studio: z.array(studioThread).default([]),
   revision: z.number().int().nonnegative().default(0),
-  inbox: z.array(z.object({ id, title: z.string(), weight: z.number(), ordering: z.literal("parallel"), children: z.tuple([]), effort: z.literal(1), note: z.string(), dueDate: z.iso.date().optional() })).default([]),
+  inbox: z.array(z.object({ id, title: z.string(), weight: z.number(), ordering: z.literal("parallel"), children: z.tuple([]), effort: z.literal(1), note: z.string(), dueDate: z.iso.date().optional(), createdAt: z.iso.date().optional(), touchedAt: z.iso.date().optional() })).default([]),
   draft: z.object({ date: z.iso.date(), ids: z.array(id), origin: z.enum(["engine", "person", "studio-unavailable"]).default("engine") }).nullable().default(null),
   sources: z.array(source).default([]),
   receipts: z.array(z.object({ id: id, payload: z.string(), undo: z.string().optional(), outlineId: id.optional(), location: z.string().optional(), notice: z.string().optional() })).default([]),
@@ -48,5 +48,6 @@ export const MyDayMetaSchema = z.object({
   dayUndos: z.array(z.object({ receipt: id, date: z.iso.date(), before: z.array(id), after: z.array(id), text: z.string(), used: z.boolean() })).default([]),
   manualToday: z.object({ date: z.iso.date(), ids: z.array(id) }).nullable().default(null),
   caps: z.object({ cap: z.number().int().min(1).max(7), topN: z.number().int().min(1).max(10) }).nullable().default(null),
+  touchTrackingSince: z.iso.date().optional(),
 });
 export type MyDayMeta = z.infer<typeof MyDayMetaSchema>;

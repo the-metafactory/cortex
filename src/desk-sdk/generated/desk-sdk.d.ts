@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.8.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.11.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -105,6 +105,65 @@ export type Result<T> = {
 	error: BoundaryError;
 };
 declare const json: z.ZodJSONSchema;
+declare const ProvenanceSchema: z.ZodObject<{
+	conversationId: z.ZodString;
+	proposalId: z.ZodString;
+	revision: z.ZodNumber;
+	entryId: z.ZodNullable<z.ZodString>;
+	link: z.ZodString;
+}, z.core.$strict>;
+declare const ApprovedSnapshotSchema: z.ZodObject<{
+	provenance: z.ZodObject<{
+		conversationId: z.ZodString;
+		proposalId: z.ZodString;
+		revision: z.ZodNumber;
+		entryId: z.ZodNullable<z.ZodString>;
+		link: z.ZodString;
+	}, z.core.$strict>;
+	adapterId: z.ZodString;
+	connectionId: z.ZodString;
+	capabilityId: z.ZodString;
+	inputSchemaRef: z.ZodObject<{
+		schemaId: z.ZodString;
+		version: z.ZodString;
+	}, z.core.$strict>;
+	outputSchemaRef: z.ZodObject<{
+		schemaId: z.ZodString;
+		version: z.ZodString;
+	}, z.core.$strict>;
+	errorSchemaRef: z.ZodObject<{
+		schemaId: z.ZodString;
+		version: z.ZodString;
+	}, z.core.$strict>;
+	input: z.ZodJSONSchema;
+	destinations: z.ZodArray<z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>>;
+	target: z.ZodOptional<z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>>;
+	expectedOwnerRevision: z.ZodOptional<z.ZodString>;
+	sources: z.ZodArray<z.ZodObject<{
+		ref: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+		restrictionRef: z.ZodString;
+	}, z.core.$strict>>;
+	policy: z.ZodEnum<{
+		local: "local";
+		cloud: "cloud";
+	}>;
+	digest: z.ZodString;
+}, z.core.$strict>;
 declare const OwnerSupportSchema: z.ZodObject<{
 	adapterId: z.ZodString;
 	connectionId: z.ZodString;
@@ -528,6 +587,8 @@ declare const CancelRequestSchema: z.ZodObject<{
 	lifecycleVersion: z.ZodLiteral<"1.0.0">;
 }, z.core.$strict>;
 export type Json = z.infer<typeof json>;
+export type Provenance = z.infer<typeof ProvenanceSchema>;
+export type ApprovedSnapshot = z.infer<typeof ApprovedSnapshotSchema>;
 export type OwnerSupport = z.infer<typeof OwnerSupportSchema>;
 export type OwnerResult = z.infer<typeof OwnerResultSchema>;
 export type DispatchRequest = z.infer<typeof DispatchRequestSchema>;
@@ -683,6 +744,206 @@ export interface ObservationRequest {
 	continuation?: string;
 	limit: number;
 }
+declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
+	z.ZodObject<{
+		action: z.ZodLiteral<"unimportant">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+	}, z.core.$strict>,
+	z.ZodObject<{
+		action: z.ZodLiteral<"block-domain">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+	}, z.core.$strict>,
+	z.ZodObject<{
+		action: z.ZodLiteral<"correct">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+		said: z.ZodEnum<{
+			archive: "archive";
+			trash: "trash";
+			todo: "todo";
+			plan: "plan";
+			reply: "reply";
+			keep: "keep";
+			junk: "junk";
+			matters: "matters";
+			"not-bulk": "not-bulk";
+		}>;
+	}, z.core.$strict>,
+	z.ZodObject<{
+		action: z.ZodLiteral<"not-phishing">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+	}, z.core.$strict>,
+	z.ZodObject<{
+		action: z.ZodLiteral<"snooze">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+		until: z.ZodDiscriminatedUnion<[
+			z.ZodObject<{
+				kind: z.ZodEnum<{
+					later: "later";
+					tomorrow: "tomorrow";
+					"next-week": "next-week";
+				}>;
+			}, z.core.$strict>,
+			z.ZodObject<{
+				kind: z.ZodLiteral<"date">;
+				date: z.ZodString;
+			}, z.core.$strict>,
+			z.ZodObject<{
+				kind: z.ZodLiteral<"meeting">;
+				event: z.ZodString;
+			}, z.core.$strict>,
+			z.ZodObject<{
+				kind: z.ZodLiteral<"person">;
+				address: z.ZodString;
+			}, z.core.$strict>
+		], "kind">;
+	}, z.core.$strict>,
+	z.ZodObject<{
+		action: z.ZodLiteral<"snooze-cancel">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+	}, z.core.$strict>,
+	z.ZodObject<{
+		action: z.ZodLiteral<"waiting">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+		op: z.ZodEnum<{
+			done: "done";
+			expect: "expect";
+			snooze: "snooze";
+			"no-answer": "no-answer";
+		}>;
+	}, z.core.$strict>,
+	z.ZodObject<{
+		action: z.ZodLiteral<"undo">;
+		message: z.ZodObject<{
+			adapterId: z.ZodString;
+			connectionId: z.ZodString;
+			objectType: z.ZodString;
+			canonicalId: z.ZodString;
+		}, z.core.$strict>;
+		operationId: z.ZodString;
+	}, z.core.$strict>
+], "action">;
+export type MailJudgementInput = z.infer<typeof MailJudgementInputSchema>;
+export type MailJudgementAction = MailJudgementInput["action"];
+export declare const judgementCapability: (action: MailJudgementAction) => string;
+declare const MailJudgementOutputSchema: z.ZodObject<{
+	ref: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	message: z.ZodString;
+	undo: z.ZodBoolean;
+}, z.core.$strict>;
+export type MailJudgementOutput = z.infer<typeof MailJudgementOutputSchema>;
+export declare function mailJudgementDeclaration(adapterId: string): AdapterDeclaration;
+export declare function mailJudgementSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: string;
+	input: MailJudgementInput;
+	provenance: Provenance;
+}): ApprovedSnapshot;
+export declare const MAIL_UNSUBSCRIBE_CAPABILITY = "mail.unsubscribe";
+declare const MailUnsubscribeInputSchema: z.ZodObject<{
+	message: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+}, z.core.$strict>;
+export type MailUnsubscribeInput = z.infer<typeof MailUnsubscribeInputSchema>;
+declare const MailUnsubscribeOutputSchema: z.ZodObject<{
+	ref: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	host: z.ZodString;
+}, z.core.$strict>;
+export type MailUnsubscribeOutput = z.infer<typeof MailUnsubscribeOutputSchema>;
+/** The declaration a Mail adapter publishes for one-click unsubscribe. The Cortex runtime registers it as the contract a fixture binding or a real adapter must meet. */
+export declare function mailUnsubscribeDeclaration(adapterId: string): AdapterDeclaration;
+export declare function mailUnsubscribeSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: string;
+	input: MailUnsubscribeInput;
+	provenance: Provenance;
+}): ApprovedSnapshot;
+export declare const MAIL_REPORT_KINDS: readonly [
+	"draft",
+	"spam",
+	"phishing"
+];
+export type MailReportKind = (typeof MAIL_REPORT_KINDS)[number];
+export declare const MAIL_REPORT_CAPABILITY: Readonly<Record<MailReportKind, string>>;
+declare const MailReportInputSchema: z.ZodObject<{
+	message: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+}, z.core.$strict>;
+export type MailReportInput = z.infer<typeof MailReportInputSchema>;
+declare const MailReportOutputSchema: z.ZodObject<{
+	ref: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	folder: z.ZodString;
+}, z.core.$strict>;
+export type MailReportOutput = z.infer<typeof MailReportOutputSchema>;
+/** The declaration a Mail adapter publishes for the report kinds. Provider reports need restore too, because Undo moves the mail back. */
+export declare function mailReportDeclaration(adapterId: string, kinds?: readonly MailReportKind[]): AdapterDeclaration;
+export declare function mailReportSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: string;
+	kind: MailReportKind;
+	input: MailReportInput;
+	provenance: Provenance;
+}): ApprovedSnapshot;
 /**
  * The call a package's module supplies for one query capability. The host passes the validated fetch request for
  * the capability and releases the result only after it parses as a `QueryPage`.
@@ -785,11 +1046,15 @@ export interface DeskMailListing {
 export interface DeskMailReadBridge {
 	listed(connection: DeskAdapterConnection): Promise<DeskMailListing | null>;
 }
+export interface DeskMailJudgementBridge {
+	changeJudgement(request: DispatchRequest): Promise<OwnerResult>;
+}
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {
 	readonly sdkVersion: string;
 	registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
 	readonly mail: DeskMailReadBridge;
+	readonly mailJudgements?: DeskMailJudgementBridge;
 }
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {

@@ -29,12 +29,14 @@ export interface SweepMailView {
   unsubscribe?: import("./mail-unsubscribe").UnsubscribeView;
 }
 
+/** `label` is deprecated in favour of `kind` and `basis`, or `labelPhrase` for a category. Served through 1.x; removed in 2.0. */
 export interface MailSweepView {
   id: string;
   kind: SweepKind;
   basis: SweepBasis;
   target: MoveTarget;
   label: string;
+  labelPhrase?: import("./phrases").DeskPhrase;
   title: string;
   why: string;
   area: string | null;
@@ -144,7 +146,7 @@ function sweeps(pool: readonly SweepMember[], input: SweepInput, bundled: readon
   for (const category of ["fyi", "bulk"] as const) {
     const members = quiet.filter((m) => input.classified.get(m.id)?.category === category && Date.parse(m.receivedAt) < old);
     if (members.length < SWEEP_LIMITS.minSweep) continue;
-    out.push(makeGroup({ id: `sweep:age:${category}`, kind: "sweep", basis: "age", target: "archive", label: category, title: `${members.length} ${category} mails older than ${SWEEP_LIMITS.ageDays} days are still unread`, about: `older than ${SWEEP_LIMITS.ageDays} days (${category})`, why: SAFE }, members));
+    out.push(makeGroup({ id: `sweep:age:${category}`, kind: "sweep", basis: "age", target: "archive", label: category, labelPhrase: { code: "mail.sweep-category", params: { category } }, title: `${members.length} ${category} mails older than ${SWEEP_LIMITS.ageDays} days are still unread`, about: `older than ${SWEEP_LIMITS.ageDays} days (${category})`, why: SAFE }, members));
   }
   const same = (a: readonly SweepMember[], b: readonly SweepMember[]): boolean => a.length === b.length && a.every((m) => b.some((x) => x.id === m.id));
   for (const { key, basis, members } of byListOrSender(quiet.filter((x) => !PERSONAL.has(input.classified.get(x.id)?.category ?? "")))) {

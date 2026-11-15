@@ -1,14 +1,15 @@
 import { contentFrom, NOTHING_LEAVES, routeOf, type LocalSources } from "./source-boundary";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
-import { MissingKey, PREDICTED_ACTIONS, readApiKey, SIMILARITY_BASES, type KeyReader, type MailPrecedent, type MailPrecedents, type PredictedAction } from "./classify";
+import { MissingKey, PREDICTED_ACTIONS, readApiKey, type KeyReader, type MailPrecedent, type MailPrecedents, type PredictedAction } from "./classify";
+import { SIMILARITY_BASES, type SimilarityBasis } from "./mail-prediction-schema";
 import { MAIL_VECTORS_SQL } from "./mail-log-schema";
 import { queryMailLog, senderDomain, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
 import { DAY_MS } from "./time";
 
 export { MAIL_VECTORS_SQL, PREDICTED_ACTIONS, SIMILARITY_BASES, type PredictedAction };
 
-export type SimilarityBasis = (typeof SIMILARITY_BASES)[number];
+export type { SimilarityBasis } from "./mail-prediction-schema";
 
 export interface EmbedderAccess {
   baseUrl: string;

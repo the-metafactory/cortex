@@ -37,7 +37,7 @@ function seed(): AppState {
   ] }] }, settings: { ...DEFAULT_SETTINGS }, log: [], history: { deficits: {}, lastSurfaced: {} }, dayState: null };
 }
 function source(kind: "mail" | "agent-blocked"): DeskItem {
-  return { key: `${kind}:source`, kind, source: kind === "mail" ? "inbox" : "ranger", title: "Choose a next step", why: "A decision is waiting.", dueAt: "2026-11-04T12:00:00Z", area: "work", urgency: "today", score: 50, actions: [], detail: { summary: "A synthetic item", history: [], refs: [], links: [{ label: "Source", url: "https://example.test/item" }] } };
+  return { key: `${kind}:source`, kind, source: kind === "mail" ? "inbox" : "ranger", title: "Choose a next step", why: "A decision is waiting.", dueAt: "2026-11-04T12:00:00Z", area: "work", urgency: "today", score: 50, actions: [], detail: { summary: "A synthetic item", history: [], refs: [], links: [{ kind: "source", label: "Source", url: "https://example.test/item" }] } };
 }
 describe("My day lane and day contract", () => {
   let db: Database;
@@ -570,7 +570,7 @@ describe("outline-add creates a task or project with its note and due date", () 
     const outlineId = change({ op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: "area:work", title: "Plain" }).outlineId;
     if (!outlineId) throw new Error("Missing outline id");
     const node = work().find(n => n.id === outlineId);
-    expect(node).toEqual({ id: outlineId, title: "Plain", weight: 50, ordering: "parallel", children: [], effort: 1 });
+    expect(node).toEqual({ id: outlineId, title: "Plain", weight: 50, ordering: "parallel", children: [], effort: 1, createdAt: DATE, touchedAt: DATE });
   });
 });
 describe("outline-remove deletes an Inbox task with no completion history", () => {

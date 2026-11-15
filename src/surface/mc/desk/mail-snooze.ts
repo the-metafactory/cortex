@@ -7,12 +7,14 @@ import type { SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
 import { sightEvent, type EventFacts, type FollowedEvent } from "./event-follow";
 import type { DeskItem } from "./types";
+import type { DeskPhrase } from "./phrases";
 
 export { SNOOZE_MORNING_HOUR, SNOOZE_SQL, SNOOZE_TIMES, snoozeAt, snoozeWhen, type SnoozeChoice, type SnoozeTime } from "./mail-snooze-schema";
 
 export type SnoozeKind = "time" | "meeting" | "person" | "hidden";
 export type SnoozeState = "snoozed" | "back";
 
+/** `label` is deprecated in favour of `labelPhrase`, or `kind` for hidden mail. Served through 1.x; removed in 2.0. */
 export interface SnoozeRow {
   messageId: string;
   sourceId: string | null;
@@ -26,6 +28,7 @@ export interface SnoozeRow {
   person: string | null;
   personName: string | null;
   label: string;
+  labelPhrase?: DeskPhrase;
   state: SnoozeState;
   backAt: number | null;
   reason: string | null;
@@ -141,7 +144,15 @@ const rowOf = (r: Raw): SnoozeRow => ({
   messageId: r.message_id, sourceId: r.source_id, sender: r.sender, subject: r.subject, kind: r.kind, untilAt: r.until_at,
   eventKey: r.event_key, eventTitle: r.event_title, eventStart: r.event_start, person: r.person, personName: r.person_name,
   label: r.label, state: r.state, backAt: r.back_at, reason: r.reason, createdAt: r.created_at,
+  labelPhrase: putAwayPhrase({ kind: r.kind, untilAt: r.until_at, eventTitle: r.event_title, person: r.person, personName: r.person_name }),
 });
+
+function putAwayPhrase(row: Pick<SnoozeRow, "kind" | "untilAt" | "eventTitle" | "person" | "personName">): DeskPhrase | undefined {
+  if (row.kind === "time" && row.untilAt !== null) return { code: "mail.put-away-time", params: { until: new Date(row.untilAt).toISOString() } };
+  if (row.kind === "meeting" && row.eventTitle !== null) return { code: "mail.put-away-meeting", params: { title: row.eventTitle } };
+  if (row.kind === "person" && row.person !== null) return { code: "mail.put-away-person", params: { person: row.personName ?? row.person } };
+  return undefined;
+}
 
 export function readSnoozes(db: Database, state?: SnoozeState): SnoozeRow[] {
   const rows = state
@@ -204,7 +215,7 @@ export function withSnoozeBack(item: DeskItem, back: SnoozeBack | undefined): De
 }
 
 interface SnoozeFailure { ok: false; status: number; error: string }
-type SnoozeResult = { ok: true; message: string; until: string } | SnoozeFailure;
+type SnoozeResult = { ok: true; message: string; until: string; untilIso: string | null; labelPhrase?: DeskPhrase } | SnoozeFailure;
 
 const refuse = (status: number, error: string): SnoozeFailure => ({ ok: false, status, error });
 const ADDRESS_RE = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
@@ -248,7 +259,7 @@ export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice,
   const features = mailFeatures(db, mail);
   insertSnooze(db, mail, resolved, ctx.now);
   logMailDecision(db, features, "snooze", "desk", ctx.now);
-  return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. Its read status in your mail stays unchanged.`, until: resolved.label };
+  return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. Its read status in your mail stays unchanged.`, until: resolved.label, untilIso: resolved.untilAt === null ? null : new Date(resolved.untilAt).toISOString(), labelPhrase: putAwayPhrase(resolved) };
 }
 
 /** Ends a snooze now: the mail is back on the Desk as it was, without a reason line. */

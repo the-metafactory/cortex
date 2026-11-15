@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { residencyOf } from "../../../../common/residency";
 import type { StudioEvidenceInput, StudioEvidenceAccess } from "../../../../conversations/tools/studio-evidence";
 import type { DeskOptions } from "../compose";
 import { RoutineSchema, reflexCommand, type RoutineRunner } from "../routine-command";
@@ -67,7 +68,7 @@ export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenc
         const provenance = await originatingRun(dir, thread.slug, job.runUuid);
         return { job: job.runUuid, jobId: job.id ?? null, run: provenance.run, provenance: provenance.status, status: job.status, failure: job.reason, queuedAt: job.queuedAt ?? null, startedAt: job.startedAt, endedAt: job.finishedAt ?? null, substrate: job.substrate ?? null, notes: thread.notes.filter(note => note.run === job.runUuid).slice(0, 2).map(note => ({ at: note.at, url: `${url}#note-${note.at}` })), notesNext: thread.notes.filter(note => note.run === job.runUuid).length > 2 ? { scope: "notes", thread: thread.slug, job: job.runUuid, offset: 2 } : null, output: thread.notes.some(note => note.run === job.runUuid) ? "note-recorded" : job.status === "succeeded" ? "missing-note" : "not-completed", url };
       }));
-      return { ...base, policy: selected.items.some(job => job.policy !== "cloud") ? "local" : thread.policy, status: filtered.length ? "ok" : "empty", items: rows, next: selected.next };
+      return { ...base, policy: selected.items.some(job => residencyOf(job.policy) === "local") ? "local" : thread.policy, status: filtered.length ? "ok" : "empty", items: rows, next: selected.next };
     }
     if (input.scope === "notes") {
       const notes = thread.notes.filter(note => (!input.job || note.run === input.job) && (!audit || note.run !== undefined && receipts.has(note.run)));
@@ -77,7 +78,7 @@ export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenc
         const provenance = await originatingRun(dir, thread.slug, note.run);
         return { at: note.at, status: note.status, kind: note.kind, sample: note.sample, model: note.model, author: null, substrate: job?.substrate ?? null, substrateEvidence: job ? "Ranger records execution substrate, not an authenticated assistant identity" : "Job evidence is unavailable", authorEvidence: "The note format records a model but no authenticated author", job: note.run ?? null, run: provenance.run, provenance: !note.run ? "missing-job-provenance" : provenance.status, thread: thread.slug, url: `${url}#note-${note.at}`, threadUrl: url, ...chunk(note.text, input.contentOffset) };
       }));
-      return { ...base, policy: selected.items.some(note => !jobs.some(job => job.runUuid === note.run && job.policy === "cloud")) ? "local" : thread.policy, status: notes.length ? "ok" : "empty", queueEvidence: thinking.kind, items: rows, next: selected.next, coverage: "Unattributed notes remain unattributed; read without a run filter to inspect missing provenance" };
+      return { ...base, policy: selected.items.some(note => !jobs.some(job => job.runUuid === note.run && residencyOf(job.policy) === "cloud")) ? "local" : thread.policy, status: notes.length ? "ok" : "empty", queueEvidence: thinking.kind, items: rows, next: selected.next, coverage: "Unattributed notes remain unattributed; read without a run filter to inspect missing provenance" };
     }
     const revision = (await gitEvidence(dir, ["rev-parse", "--verify", input.revision ?? "HEAD"])).trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision)) return unavailable("Committed thread history is unavailable");
