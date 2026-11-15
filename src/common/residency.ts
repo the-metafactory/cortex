@@ -46,3 +46,16 @@ export function releasedTo<T extends { readonly policy: unknown }>(to: Destinati
   const outcome = release(value, to);
   return "released" in outcome ? outcome.released : null;
 }
+
+/** An agent over the bus keeps content where its own policy says: cloud content may go to any agent, local content only to a `"local"` one. */
+export const mayReachAgent = (content: unknown, agentPolicy: unknown): boolean =>
+  residencyOf(content) === "cloud" || destinationResidency(agentPolicy) === "local";
+
+declare const releasedToAgent: unique symbol;
+/** Content the residency gate cleared for one agent over the bus, judged by its own `policy`. Only `releaseToAgent` makes one; a conversation sink does not accept it. */
+export type ReleasedToAgent<T extends { readonly policy: unknown }> = T & { readonly [releasedToAgent]: true };
+
+/** The value cleared for one agent over the bus, or null when the agent's policy keeps it out. */
+export function releaseToAgent<T extends { readonly policy: unknown }>(value: T, agentPolicy: unknown): ReleasedToAgent<T> | null {
+  return mayReachAgent(value.policy, agentPolicy) ? (value as ReleasedToAgent<T>) : null;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type Destination, mayEnter, release, releaseRefusal, residencyOf } from "../residency";
+import { type Destination, mayEnter, release, releaseRefusal, releaseToAgent, residencyOf } from "../residency";
 
 const localConversation: Destination = { transport: "web", route: "local", policy: "local" };
 
@@ -31,5 +31,12 @@ describe("residency gate", () => {
     expect(release({ text: "a", policy: "cloud" }, discord)).toEqual({ released: { text: "a", policy: "cloud" } as never });
     expect(release({ text: "a", policy: "local" }, discord)).toEqual({ refusal: "not-web" });
     expect(release({ text: "a", policy: undefined }, discord)).toEqual({ refusal: "not-web" });
+  });
+
+  test("an agent over the bus takes local content only when its own policy is the literal local (#3595)", () => {
+    expect(releaseToAgent({ text: "a", policy: "local" }, "local")).toEqual({ text: "a", policy: "local" } as never);
+    expect(releaseToAgent({ text: "a", policy: "cloud" }, "cloud")).toEqual({ text: "a", policy: "cloud" } as never);
+    for (const agentPolicy of ["cloud", undefined, null, "", "Local", ["local"]]) expect(releaseToAgent({ text: "a", policy: "local" }, agentPolicy)).toBeNull();
+    expect(releaseToAgent({ text: "a", policy: undefined }, "cloud")).toBeNull();
   });
 });
