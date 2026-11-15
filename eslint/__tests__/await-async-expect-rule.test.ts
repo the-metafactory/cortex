@@ -23,9 +23,12 @@ describe("cortex/await-async-expect", () => {
       "  const pending = expect(link()).rejects.toThrow();",
       "  Promise.all([expect(link()).rejects.toThrow()]);",
       "  await run([expect(link()).resolves.toBe(1)]);",
+      "  await [expect(link()).rejects.toThrow()];",
+      "  await Promise.all(expect(link()).rejects.toThrow());",
       "});",
+      "test('b', () => [expect(link()).rejects.toThrow()]);",
     ].join("\n");
-    expect(flagged(code)).toEqual([2, 3, 4, 5, 6, 7]);
+    expect(flagged(code)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 11]);
   });
 
   test("accepts awaited, returned and arrow-bodied assertions and plain expectations", () => {

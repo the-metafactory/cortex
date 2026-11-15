@@ -4,7 +4,7 @@ import { gitShow, resolveBaseRef } from "./git";
 /** Per-file counts a ratchet gate records: a file may not go up, and the baseline may not grow past base's. */
 export type Baseline = Record<string, number>;
 
-export interface Comparison {
+interface Comparison {
   grown: string[];
   shrunk: string[];
 }
@@ -42,11 +42,11 @@ export function grownFiles(grown: string[]): Set<string> {
   return new Set(grown.map((line) => line.slice(0, line.lastIndexOf(":"))));
 }
 
-export function readBaseline(path: string): Baseline {
+function readBaseline(path: string): Baseline {
   return JSON.parse(readFileSync(path, "utf8")) as Baseline;
 }
 
-export function baseRefBaseline(baseRef: string, path: string): Baseline | undefined {
+function baseRefBaseline(baseRef: string, path: string): Baseline | undefined {
   const text = gitShow(baseRef, path);
   return text === undefined ? undefined : (JSON.parse(text) as Baseline);
 }

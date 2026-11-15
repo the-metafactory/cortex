@@ -34,10 +34,9 @@ function isAwaited(node: Node & Rule.NodeParentExtension): boolean {
     case "ArrowFunctionExpression":
       return parent.body === node;
     case "ChainExpression":
-    case "ArrayExpression":
       return isAwaited(parent);
-    case "CallExpression":
-      return parent.callee !== node && combinesPromises(parent) && isAwaited(parent);
+    case "ArrayExpression":
+      return parent.parent.type === "CallExpression" && combinesPromises(parent.parent) && isAwaited(parent.parent);
     default:
       return false;
   }
