@@ -4,7 +4,7 @@ import type { WriterRunner } from "./create";
 import type { ListedMail, MailActionsConfig, TrashLedger } from "./mail-actions";
 import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailFeatures, type MailLogAction, type MailLogWhere } from "./mail-log";
 import { CommandTimeout } from "../common/spawn";
-import { DAY_MS } from "./time";
+import { UNDO_WINDOW_MS } from "../../../conversations/domain-adapters/mail/move-contract";
 import { addSender, isVip, listVips, normalizeVip } from "./vips";
 import { failed, refuse as refuseWith, wording, type ActRefusal, type ActWording } from "./act-result";
 import type { DeskPhrase } from "./phrases";
@@ -13,7 +13,7 @@ import { junkIdentity } from "./sources/mail-identity";
 export const MOVE_TARGETS = ["archive", "junk", "trash"] as const;
 export type MoveTarget = (typeof MOVE_TARGETS)[number];
 
-export const UNDO_WINDOW_MS = 7 * DAY_MS;
+export { UNDO_WINDOW_MS };
 
 const FOLDER: Record<MoveTarget, string> = { archive: "Archive", junk: "Junk", trash: "Trash" };
 const DONE: Record<MoveTarget, string> = { archive: "Archived", junk: "Moved to Junk", trash: "Deleted" };
@@ -43,7 +43,7 @@ export type MoveResult = ({ ok: true; message: string; undo?: string; block?: st
 
 export const refuse = (status: number, error: string, messagePhrase?: DeskPhrase, detail?: string): ActRefusal => refuseWith(status, error, messagePhrase, detail);
 
-export const moved = (message: string, messagePhrase?: DeskPhrase, extra: { undo?: string; block?: string; restored?: string } = {}): MoveResult => ({ ok: true, message, ...wording(messagePhrase ?? { code: "act.done" }), ...extra });
+const moved = (message: string, messagePhrase?: DeskPhrase, extra: { undo?: string; block?: string; restored?: string } = {}): MoveResult => ({ ok: true, message, ...wording(messagePhrase ?? { code: "act.done" }), ...extra });
 
 interface Printed {
   message: string;

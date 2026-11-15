@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { UNDO_WINDOW_MS } from "../../../surface/mc/desk/mail-move";
+import { UNDO_WINDOW_MS } from "./move-contract";
 import type { StoredOperation } from "../operations/journal";
 import type { ApprovedSnapshot, Authority, OperationJournal, OperationState, Provenance } from "../operations/types";
 import type { HostContext } from "../../authority";

@@ -256,7 +256,7 @@
   "src/conversations/domain-adapters/mail/loop-contract.ts": 3,
   "src/conversations/domain-adapters/mail/loop-host.ts": 6,
   "src/conversations/domain-adapters/mail/move-contract.ts": 8,
-  "src/conversations/domain-adapters/mail/move-host.ts": 7,
+  "src/conversations/domain-adapters/mail/move-host.ts": 6,
   "src/conversations/domain-adapters/mail/reply-draft-fixtures.ts": 1,
   "src/conversations/domain-adapters/mail/reply-draft-host.ts": 1,
   "src/conversations/domain-adapters/mail/report-contract.ts": 2,
