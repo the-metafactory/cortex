@@ -1,6 +1,6 @@
 import type { DeskPhrase } from "./phrases";
 
-export const noStore = { "Cache-Control": "no-store" };
+const noStore = { "Cache-Control": "no-store" };
 
 export interface ActWording {
   messagePhrase?: DeskPhrase;
@@ -25,7 +25,7 @@ const PHRASE_FOR_STATUS: Record<number, DeskPhrase> = {
   504: { code: "act.failed" },
 };
 
-export const phraseForStatus = (status: number): DeskPhrase => PHRASE_FOR_STATUS[status] ?? { code: "act.failed" };
+const phraseForStatus = (status: number): DeskPhrase => PHRASE_FOR_STATUS[status] ?? { code: "act.failed" };
 
 export const wording = (messagePhrase: DeskPhrase, detail?: string): ActWording =>
   detail === undefined ? { messagePhrase } : { messagePhrase, detail };
@@ -33,16 +33,10 @@ export const wording = (messagePhrase: DeskPhrase, detail?: string): ActWording 
 export const refuse = (status: number, error: string, messagePhrase: DeskPhrase = phraseForStatus(status), detail?: string): ActRefusal =>
   ({ ok: false, status, error, ...wording(messagePhrase, detail) });
 
-export const done = (message: string, messagePhrase: DeskPhrase = { code: "act.done" }, detail?: string): ActOk =>
-  ({ ok: true, message, ...wording(messagePhrase, detail) });
-
 export const failed = (status: number, error: string, detail: string, kind?: string): ActRefusal =>
   refuse(status, error, kind === undefined ? { code: "act.failed" } : { code: "act.failed", params: { kind } }, detail);
 
-export const refused = (status: number, error: string, detail: string, kind?: string): ActRefusal =>
-  refuse(status, error, kind === undefined ? { code: "act.refused" } : { code: "act.refused", params: { kind } }, detail);
-
-export const fillWording = <T extends ActWording>(result: T): T & { messagePhrase: DeskPhrase } =>
+const fillWording = <T extends ActWording>(result: T): T & { messagePhrase: DeskPhrase } =>
   result.messagePhrase === undefined
     ? { ...result, messagePhrase: "status" in result && typeof result.status === "number" ? phraseForStatus(result.status) : { code: "act.done" } }
     : (result as T & { messagePhrase: DeskPhrase });

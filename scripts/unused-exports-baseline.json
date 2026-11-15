@@ -625,7 +625,6 @@
   "src/surface/mc/desk/mail-invitation.ts": 8,
   "src/surface/mc/desk/mail-log.ts": 3,
   "src/surface/mc/desk/mail-mirror.ts": 5,
-  "src/surface/mc/desk/mail-move.ts": 1,
   "src/surface/mc/desk/mail-rules-schema.ts": 3,
   "src/surface/mc/desk/mail-rules.ts": 11,
   "src/surface/mc/desk/mail-similar.ts": 8,

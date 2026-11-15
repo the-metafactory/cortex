@@ -43,7 +43,7 @@ export type MoveResult = ({ ok: true; message: string; undo?: string; block?: st
 
 export const refuse = (status: number, error: string, messagePhrase?: DeskPhrase, detail?: string): ActRefusal => refuseWith(status, error, messagePhrase, detail);
 
-export const moved = (message: string, messagePhrase?: DeskPhrase, extra: { undo?: string; block?: string; restored?: string } = {}): MoveResult => ({ ok: true, message, ...wording(messagePhrase ?? { code: "act.done" }), ...extra });
+const moved = (message: string, messagePhrase?: DeskPhrase, extra: { undo?: string; block?: string; restored?: string } = {}): MoveResult => ({ ok: true, message, ...wording(messagePhrase ?? { code: "act.done" }), ...extra });
 
 interface Printed {
   message: string;
@@ -97,13 +97,7 @@ async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, do
   }
 }
 
-/**
- * Moves one listed mail to its account's folder for the target. With `mc.desk.mail.actions.move` the command reads
- * `{ action: "move", account, messageId, target }`, and the move is logged with an Undo in Done for you. Without it, a
- * move to Trash falls back to the legacy trash command (`{ action: "trash", account, messageId }`, no Undo). The
- * contract asks the command to move only, never to delete or expunge; its last stderr line is the refusal shown.
- */
-export interface MoveBy {
+interface MoveBy {
   where: MailLogWhere;
   doneAction: string;
   title: string;
@@ -120,6 +114,12 @@ function recordMove(mail: ListedMail, target: MoveRow["target"], deps: MoveDeps,
     .run(`mail-move:${id}`, by?.doneAction ?? "mail.move", id, `${by?.title ?? (target === "inbox" ? "Not spam" : DONE[target])}: “${mail.subject}”`, message, deps.now, deps.now);
 }
 
+/**
+ * Moves one listed mail to its account's folder for the target. With `mc.desk.mail.actions.move` the command reads
+ * `{ action: "move", account, messageId, target }`, and the move is logged with an Undo in Done for you. Without it, a
+ * move to Trash falls back to the legacy trash command (`{ action: "trash", account, messageId }`, no Undo). The
+ * contract asks the command to move only, never to delete or expunge; its last stderr line is the refusal shown.
+ */
 export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps, logAs: MailLogAction = target, features: MailFeatures = mailFeatures(deps.db, mail), by?: MoveBy): Promise<MoveResult> {
   const config = deps.config;
   const move = config?.move;
