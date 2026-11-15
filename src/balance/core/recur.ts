@@ -96,13 +96,16 @@ export function completeCalendarOccurrence(state: AppState, taskId: string, repe
     if (!planned)
         throw new Error("A calendar repeat needs an explicit anchor date.");
     const outcomes = (state.outcomes ??= []);
+    const recordedPlanned = new Set(outcomes.filter(o => o.taskId === taskId).map(o => o.planned));
     const record = (outcome: RecurrenceOutcome) => {
-        if (!outcomes.some(o => o.taskId === outcome.taskId && o.planned === outcome.planned))
-            outcomes.push(outcome);
+        if (recordedPlanned.has(outcome.planned))
+            return;
+        recordedPlanned.add(outcome.planned);
+        outcomes.push(outcome);
     };
     record({ taskId, planned, status: "completed", completedOn: date, recordedOn: date });
     let next = scheduledAfter(repeat, planned);
-    while (next <= date) {
+    while (next <= date && (repeat.until === undefined || next <= repeat.until)) {
         record({ taskId, planned: next, status: "missed", recordedOn: date });
         next = scheduledAfter(repeat, next);
     }
