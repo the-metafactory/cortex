@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { authority, attemptFixture, eventFixture } from "../operations/fixtures";
 import type { OperationJournalStore } from "../operations/journal";
-import type { DispatchRequest, OwnerResult, OwnerSupport } from "../operations/types";
-import type { MailMoveAuthority } from "./move-host";
+import type { ApprovedSnapshot, DispatchRequest, OwnerResult, OwnerSupport } from "../operations/types";
+import { canonicalWire } from "../operations/validation";
+import type { MailGrantSelection, MailMoveAuthority } from "./move-host";
 
 export interface FixtureGrant {
   id: string;
   capabilities: readonly string[];
+  selection?: MailGrantSelection;
 }
 
 export interface FixtureAuthority {
@@ -15,15 +17,20 @@ export interface FixtureAuthority {
   port: MailMoveAuthority;
 }
 
-/** A synthetic authority port: grants and approvals are recorded, and `denied` revokes every later approval. */
+const binds = (grant: FixtureGrant, snapshot: ApprovedSnapshot): boolean =>
+  grant.selection === undefined || (canonicalWire(grant.selection.destinations) === canonicalWire(snapshot.destinations) && canonicalWire(grant.selection.target) === canonicalWire(snapshot.target ?? null));
+
+/** A synthetic authority port: grants and approvals are recorded, `denied` revokes every later approval, and only a selection-free grant answers a standing lookup. */
 export function fixtureAuthority(journal: () => OperationJournalStore, now: () => number, denied: () => boolean = () => false): FixtureAuthority {
   const grants: FixtureGrant[] = [];
   const approvals: (string | null)[] = [];
   const port: MailMoveAuthority = {
-    findGrant(capability) { return Promise.resolve(grants.find(grant => grant.capabilities.includes(capability))?.id ?? null); },
-    grant(capabilities) { const id = randomUUID(); grants.push({ id, capabilities }); return Promise.resolve(id); },
+    findGrant(capability) { return Promise.resolve(grants.find(grant => grant.selection === undefined && grant.capabilities.includes(capability))?.id ?? null); },
+    grant(capabilities, selection) { const id = randomUUID(); grants.push({ id, capabilities, ...(selection ? { selection } : {}) }); return Promise.resolve(id); },
     async approve(input, grantId) {
       if (denied()) return { kind: "denied", reason: { code: "authority_denied", message: "Permission revoked." } };
+      const grant = grantId === null ? undefined : grants.find(item => item.id === grantId);
+      if (grantId !== null && (!grant || !binds(grant, input.snapshot))) return { kind: "denied", reason: { code: "authority_denied", message: "The permission does not bind this operation." } };
       approvals.push(grantId);
       const approved = { ...authority, basis: grantId ? { kind: "grant" as const, grantId, grantRevision: "1" } : authority.basis };
       await journal().approve({ ...input, authority: approved, at: new Date(now()).toISOString() });
