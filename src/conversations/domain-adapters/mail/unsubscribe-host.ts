@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { StoredOperation } from "../operations/journal";
 import type { ApprovedSnapshot, Provenance } from "../operations/types";
 import type { BoundaryError } from "../types";
-import { dispatchMailOperation, type MailHostOptions } from "./host-operation";
+import { loadOperations, ownerResults, ownsMailOperation, settleMailOperation, type MailHostOptions } from "./host-operation";
 import { GRANT_OPTIONS, type GrantChoice, type ReceiptState } from "./move-host";
 import { receiptMessage, receiptState, type ReceiptWording } from "./receipt";
 import { MAIL_UNSUBSCRIBE_CAPABILITY, MailUnsubscribeInputSchema, MailUnsubscribeOutputSchema, mailUnsubscribeSnapshot, type MailUnsubscribeInput } from "./unsubscribe-contract";
@@ -84,9 +84,8 @@ export class MailUnsubscribeHost {
   }
 
   async receipts(limit = 100): Promise<MailUnsubscribeReceipt[]> {
-    const stored = await Promise.all((await this.options.index.list()).map(id => this.options.journal.read(id)));
+    const stored = await loadOperations(this.options, await this.options.index.list());
     return stored
-      .filter((item): item is StoredOperation => item !== null)
       .map(item => this.project(item))
       .filter((receipt): receipt is MailUnsubscribeReceipt => receipt !== null)
       .sort((a, b) => b.at.localeCompare(a.at) || b.operationId.localeCompare(a.operationId))
@@ -95,22 +94,17 @@ export class MailUnsubscribeHost {
 
   private async run(snapshot: ApprovedSnapshot, grantId: string | null): Promise<UnsubscribeOutcome> {
     const operationId = `mail-unsubscribe:${this.newId()}`;
-    const decision = await dispatchMailOperation(this.options, snapshot, operationId, grantId);
-    if (decision.kind === "denied") return { kind: "denied", reason: decision.reason };
-    const receipt = await this.receipt(operationId);
-    return receipt ? { kind: "receipt", receipt } : { kind: "denied", reason: reason("mail.receipt_missing", "The attempt left no journal record.") };
+    return settleMailOperation(this.options, snapshot, operationId, grantId, id => this.receipt(id));
   }
 
   private project(stored: StoredOperation): MailUnsubscribeReceipt | null {
     const { journal } = stored;
     const snapshot = journal.snapshot;
-    if ("kind" in snapshot) return null;
-    if (snapshot.adapterId !== this.options.adapterId || snapshot.connectionId !== this.options.connectionId || snapshot.destinations[0]?.canonicalId !== this.options.account) return null;
+    if (!ownsMailOperation(this.options, snapshot)) return null;
     if (snapshot.capabilityId !== MAIL_UNSUBSCRIBE_CAPABILITY) return null;
     const parsed = MailUnsubscribeInputSchema.safeParse(snapshot.input);
     if (!parsed.success) return null;
-    const responses = journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response.result] : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? [entry.event.lookup.result.response.result] : []);
-    const result = responses.at(-1);
+    const result = ownerResults(journal).at(-1);
     const output = result?.kind === "succeeded" ? MailUnsubscribeOutputSchema.safeParse(result.output) : null;
     const success = output?.success ? output.data : null;
     const approved = journal.events[0]?.event;

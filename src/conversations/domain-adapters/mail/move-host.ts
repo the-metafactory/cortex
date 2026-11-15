@@ -6,7 +6,7 @@ import type { HostContext } from "../../authority";
 import type { BoundaryError, ObjectReference } from "../types";
 import { MAIL_ACTION_CAPABILITY, MAIL_MOVE_CAPABILITIES, MAIL_REFUSAL, MAIL_RESTORE_CAPABILITY, MailMoveOutputSchema, mailAccountRef, mailMessageRef, mailMoveSnapshot, mailTargetDone, mailTargetFolder, type MailMoveAction, type MailMoveInput, type MailMoveTarget } from "./move-contract";
 import { readLegacyMove } from "./legacy-move";
-import { dispatchMailOperation, type MailHostOptions } from "./host-operation";
+import { dispatchMailOperation, loadOperations, mailCapabilityDeclared, ownerResults, type MailHostOptions } from "./host-operation";
 
 export type GrantChoice = "always" | "once" | "cancel";
 export const GRANT_OPTIONS: readonly { choice: GrantChoice; label: string }[] = [
@@ -125,8 +125,7 @@ export class MailMoveHost {
   }
 
   private declared(capabilityId: string): boolean {
-    const found = this.options.capability(capabilityId);
-    return found.support === "declared" && found.adapterId === this.options.adapterId && found.availability.state === "available";
+    return mailCapabilityDeclared(this.options, capabilityId);
   }
 
   private coveredCapabilities(): string[] {
@@ -214,13 +213,11 @@ export class MailMoveHost {
   private message(messageId: string) { return mailMessageRef(this.options.adapterId, this.options.connectionId, messageId); }
 
   private async loadCompensations(operationId: string): Promise<StoredOperation[]> {
-    const stored = await Promise.all((await this.options.index.compensations(operationId)).map(id => this.options.journal.read(id)));
-    return stored.filter((item): item is StoredOperation => item !== null);
+    return loadOperations(this.options, await this.options.index.compensations(operationId));
   }
 
   private async loadAll(): Promise<StoredOperation[]> {
-    const stored = await Promise.all((await this.options.index.list()).map(id => this.options.journal.read(id)));
-    return stored.filter((item): item is StoredOperation => item !== null);
+    return loadOperations(this.options, await this.options.index.list());
   }
 
   private async run(input: MailMoveInput, provenance: Provenance, grantId: string | null, compensates: string | undefined, operationId = `mail-move:${this.newId()}`): Promise<PressOutcome> {
@@ -274,7 +271,7 @@ export class MailMoveHost {
     const account = snapshot.destinations[0]?.canonicalId ?? "";
     const approved = journal.events[0]?.event;
     const basis = approved?.kind === "approved" && approved.authority.basis.kind === "grant" ? "grant" as const : "confirmation" as const;
-    const results = journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response.result] : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? [entry.event.lookup.result.response.result] : []);
+    const results = ownerResults(journal);
     const success = results.findLast(item => item.kind === "succeeded");
     const output = success?.kind === "succeeded" ? MailMoveOutputSchema.safeParse(success.output) : null;
     const target = body.target ?? (action === "trash" ? "trash" : undefined);

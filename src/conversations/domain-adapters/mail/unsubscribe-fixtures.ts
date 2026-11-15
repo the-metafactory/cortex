@@ -1,13 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DomainAdapterRegistry } from "../registry";
-import { fixtureBindings } from "../fixtures";
 import { AT, openJournalFixture } from "../operations/fixtures";
 import type { DispatchRequest, OwnerResult } from "../operations/types";
 import type { OperationIndex } from "./legacy-move";
 import { mailMoveDeclaration } from "./move-contract";
-import { deliver, fixtureAuthority, prepareDispatch } from "./host-fixtures";
+import { deliver, fixtureAuthority, prepareDispatch, registerFixtureDeclaration } from "./host-fixtures";
 import { mailUnsubscribeDeclaration } from "./unsubscribe-contract";
 import { MailUnsubscribeHost, type UnsubscribeOutcome } from "./unsubscribe-host";
 
@@ -23,10 +21,7 @@ const noEffect = (request: DispatchRequest, code: string, message: string): Owne
 
 export async function openMailUnsubscribeRig(options: { declaresUnsubscribe?: boolean } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "mail-unsubscribe-"));
-  const registry = new DomainAdapterRegistry();
-  const declaration = options.declaresUnsubscribe === false ? mailMoveDeclaration("mail", []) : mailUnsubscribeDeclaration("mail");
-  const registered = registry.register(declaration, fixtureBindings(declaration));
-  if (!registered.ok) throw new Error(registered.error.code);
+  const registry = registerFixtureDeclaration(options.declaresUnsubscribe === false ? mailMoveDeclaration("mail", []) : mailUnsubscribeDeclaration("mail"));
   let fixture = await openJournalFixture(join(directory, "journal.sqlite"), registry);
   const now = Date.parse(AT);
   const lists = new Map([["message-example", "list.example.org"]]);
