@@ -173,6 +173,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       case "outline-move":
       case "outline-file":
       case "outline-complete":
+      case "outline-skip":
       case "outline-reopen":
       case "outline-remove": {
         outlineBefore = viewOf(state, meta, desk, date, studio).items;

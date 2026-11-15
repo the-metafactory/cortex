@@ -91,7 +91,7 @@ export function scheduledAfter(repeat: Recurrence, after: string): string {
 export function currentOccurrence(repeat: Recurrence): string | undefined {
     return repeat.occurrence ?? repeat.anchor;
 }
-export function completeCalendarOccurrence(state: AppState, taskId: string, repeat: Recurrence, date: string): void {
+function closeCalendarOccurrence(state: AppState, taskId: string, repeat: Recurrence, date: string, first: Omit<RecurrenceOutcome, "taskId" | "planned">): void {
     const planned = currentOccurrence(repeat);
     if (!planned)
         throw new Error("A calendar repeat needs an explicit anchor date.");
@@ -103,13 +103,22 @@ export function completeCalendarOccurrence(state: AppState, taskId: string, repe
         recordedPlanned.add(outcome.planned);
         outcomes.push(outcome);
     };
-    record({ taskId, planned, status: "completed", completedOn: date, recordedOn: date });
+    record({ taskId, planned, ...first });
     let next = scheduledAfter(repeat, planned);
     while (next <= date && (repeat.until === undefined || next <= repeat.until)) {
         record({ taskId, planned: next, status: "missed", recordedOn: date });
         next = scheduledAfter(repeat, next);
     }
     repeat.occurrence = next;
+}
+export function completeCalendarOccurrence(state: AppState, taskId: string, repeat: Recurrence, date: string): void {
+    closeCalendarOccurrence(state, taskId, repeat, date, { status: "completed", completedOn: date, recordedOn: date });
+}
+export function skipCalendarOccurrence(state: AppState, taskId: string, repeat: Recurrence, date: string): void {
+    closeCalendarOccurrence(state, taskId, repeat, date, { status: "skipped", skippedOn: date, recordedOn: date });
+}
+export function skipCompletionOccurrence(state: AppState, taskId: string, planned: string, date: string): void {
+    (state.outcomes ??= []).push({ taskId, planned, status: "skipped", skippedOn: date, recordedOn: date });
 }
 export function reopenCalendarOccurrence(state: AppState, taskId: string, repeat: Recurrence, completedOn: string): void {
     const outcomes = state.outcomes ?? [];
