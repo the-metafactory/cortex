@@ -18,6 +18,7 @@ import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoIsCloud, repoName, type AreaRule, type GoalActionsInput } from "./rank";
+import { readDecisions, type DecisionStore } from "./decisions";
 import { DAY_MS, deskTimeZone, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
@@ -99,6 +100,7 @@ export interface DeskRuntime {
   rulingExplain?: RulingExplainLoop;
   escalationRulings?: EscalationRulings;
   rulings?: RulingLedger;
+  decisions?: DecisionStore;
   mailRules?: MailRuleLoop;
   dmarc?: DmarcLoop;
   digestFlagger?: DigestFlagger;
@@ -441,6 +443,7 @@ export async function composeDesk(
     voice: voiceView(desk.voice, assistantName),
     chime: rules.chime,
     notifications: rules.notifications,
+    decisions: readDecisions(db, now),
     autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier) }),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),

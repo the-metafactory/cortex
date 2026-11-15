@@ -1,3 +1,4 @@
+import type { DeskDecision } from "./decisions";
 import type { MyDayView } from "./my-day";
 import type { DeskCalendar } from "./calendars";
 import type { ClassifierConfig } from "./classify";
@@ -271,6 +272,7 @@ export interface DeskView {
   notifications: boolean;
   voice: DeskVoice;
   autonomy: DeskAutonomy;
+  decisions: DeskDecision[];
   corrections: DeskCorrection[];
   interruptions: InterruptReasonView[];
   studioBriefing?: string | null;
