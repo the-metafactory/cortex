@@ -1,9 +1,12 @@
 # Studio overseer
 
 The overseer scans committed Studio files and enqueues the native Ranger
-`ivy-think` job. It never invokes a model or sends an interruption. Ranger owns
+`assistant-think` job. It never invokes a model or sends an interruption. Ranger owns
 the area policy, daily thread limit and model budgets. Automatic enqueues omit
 `mode`.
+
+The stack's Ranger config must define a job named `assistant-think`; a config
+that still defines it as `ivy-think` renames the job there.
 
 The Studio repository may use Git's SHA-1 or SHA-256 object format.
 
