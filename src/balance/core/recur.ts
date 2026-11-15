@@ -123,7 +123,7 @@ export function skipCompletionOccurrence(state: AppState, taskId: string, planne
 export function reopenCalendarOccurrence(state: AppState, taskId: string, repeat: Recurrence, completedOn: string): void {
     const outcomes = state.outcomes ?? [];
     const planned = outcomes
-        .filter(o => o.taskId === taskId && o.status === "completed" && o.completedOn === completedOn)
+        .filter(o => o.taskId === taskId && (o.status === "completed" ? o.completedOn === completedOn : o.status === "skipped" && o.skippedOn === completedOn))
         .map(o => o.planned)
         .sort()
         .at(-1);

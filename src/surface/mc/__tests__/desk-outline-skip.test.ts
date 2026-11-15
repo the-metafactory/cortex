@@ -114,6 +114,17 @@ describe("outline-skip over the Desk My day route", () => {
       expect(JSON.stringify(reopenStore())).toBe(before);
     }
   });
+  it("restores the skipped occurrence on reopen so a later completion consumes only that one", async () => {
+    await skip("2026-11-02", "calendar");
+    expect((await post("2026-11-02", { op: "outline-reopen", id: "calendar", revision: (await get("2026-11-02")).revision, confirm: true } as unknown as MyDayCommand)).status).toBe(200);
+    const reopened = row(reopenStore(), "calendar");
+    expect(reopened.repeat?.occurrence).toBe("2026-11-02");
+    expect(reopenStore().outcomes?.filter(o => o.taskId === "calendar") ?? []).toHaveLength(0);
+    expect((await post("2026-11-02", { op: "outline-complete", id: "calendar", revision: (await get("2026-11-02")).revision, confirm: true } as unknown as MyDayCommand)).status).toBe(200);
+    const done = reopenStore();
+    expect(row(done, "calendar").repeat?.occurrence).toBe("2026-11-05");
+    expect(done.outcomes?.filter(o => o.taskId === "calendar").map(o => `${o.planned}:${o.status}`)).toEqual(["2026-11-02:completed"]);
+  });
   it("rejects a skip without confirmation", async () => {
     const response = await post("2026-11-12", { op: "outline-skip", id: "calendar", revision: 0, confirm: false } as unknown as MyDayCommand);
     expect(response.status).toBe(400);
