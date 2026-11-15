@@ -208,8 +208,13 @@ export interface MailActionScenarioContext {
 	readonly account: string;
 	readonly provenance: Provenance;
 }
+declare const MAIL_ACTION_STEPS: readonly [
+	"repeat",
+	"reopen",
+	"reconcile"
+];
 /** Bounded lifecycle steps over the same approved operation, never another provider attempt. */
-export type MailActionScenarioStep = "repeat" | "reopen" | "reconcile";
+export type MailActionScenarioStep = (typeof MAIL_ACTION_STEPS)[number];
 /** The snapshot callback supplies data only; the runner computes its digest and invokes normal authority. */
 export interface MailActionScenarioOptions {
 	capabilityId: string;

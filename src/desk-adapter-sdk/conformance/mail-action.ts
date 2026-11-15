@@ -24,8 +24,9 @@ export interface MailActionScenarioContext {
   readonly provenance: Provenance;
 }
 
+const MAIL_ACTION_STEPS = ["repeat", "reopen", "reconcile"] as const;
 /** Bounded lifecycle steps over the same approved operation, never another provider attempt. */
-export type MailActionScenarioStep = "repeat" | "reopen" | "reconcile";
+export type MailActionScenarioStep = (typeof MAIL_ACTION_STEPS)[number];
 
 /** The snapshot callback supplies data only; the runner computes its digest and invokes normal authority. */
 export interface MailActionScenarioOptions {
@@ -65,7 +66,8 @@ export interface MailActionScenarioReport {
 export async function runMailActionScenario(packageDir: string, options: MailActionScenarioOptions): Promise<MailActionScenarioReport> {
   const steps = [...options.steps ?? []];
   const waitMs = options.dispatchWaitMs ?? 100;
-  if (steps.length > 16 || steps.some(step => !["repeat", "reopen", "reconcile"].includes(step))) throw new Error("A Mail action scenario permits at most sixteen lifecycle steps.");
+  if (steps.length > 16) throw new Error("A Mail action scenario permits at most sixteen lifecycle steps.");
+  for (const step of steps) if (!MAIL_ACTION_STEPS.includes(step)) throw new Error(`Unknown Mail action scenario step: ${step}`);
   if (!Number.isFinite(waitMs) || waitMs < 1 || waitMs > 10_000) throw new Error("A Mail action scenario dispatch wait must be between one and ten thousand milliseconds.");
   const temp = await mkdtemp(join(tmpdir(), "desk-mail-action-"));
   const guard = guardNetwork();

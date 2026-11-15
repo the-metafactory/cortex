@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mailAccountRef, mailMessageRef, mailMoveSnapshot, mailReplyDraftSnapshot, type ApprovedSnapshot } from "../../../desk-sdk";
-import { runMailActionScenario, type MailActionScenarioContext, type MailActionScenarioReport } from "../../../desk-adapter-sdk/conformance";
+import { runMailActionScenario, type MailActionScenarioContext, type MailActionScenarioReport, type MailActionScenarioStep } from "../../../desk-adapter-sdk/conformance";
 import { mailActionState, scenarioMail, SCENARIO_ACCOUNT, SCENARIO_MESSAGE, writeMailActionPackage } from "./fixtures/mail-action-package";
 
 let root = "";
@@ -13,6 +13,10 @@ afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 const snapshot = (context: MailActionScenarioContext): ApprovedSnapshot => mailMoveSnapshot({ ...context,
   account: mailAccountRef(context.adapterId, context.connectionId, context.account),
   input: { action: "move", message: mailMessageRef(context.adapterId, context.connectionId, SCENARIO_MESSAGE), target: "archive" } });
+
+const replySnapshot = (context: MailActionScenarioContext, body = "Reply", policy?: "local" | "cloud"): ApprovedSnapshot => mailReplyDraftSnapshot({ ...context,
+  account: mailAccountRef(context.adapterId, context.connectionId, context.account),
+  message: mailMessageRef(context.adapterId, context.connectionId, SCENARIO_MESSAGE), body, ...(policy ? { policy } : {}) });
 
 function unsignedWrongScope(context: MailActionScenarioContext, variant: "empty" | "foreign" | "target") {
   const approved = snapshot(context);
@@ -69,7 +73,7 @@ describe("public Mail action lifecycle scenario", () => {
     const dir = writeMailActionPackage(join(root, "reply"), { action: "reply" });
     const body = "  First line\nSecond line  ";
     const report = await runMailActionScenario(dir, { capabilityId: "mail.reply-draft.create", mail: scenarioMail(),
-      snapshot: context => mailReplyDraftSnapshot({ ...context, account: mailAccountRef(context.adapterId, context.connectionId, SCENARIO_ACCOUNT), message: mailMessageRef(context.adapterId, context.connectionId, SCENARIO_MESSAGE), body }) });
+      snapshot: context => replySnapshot(context, body) });
     expect(report.stages[0]?.state).toBe("succeeded");
     expect(mailActionState(dir)?.effects[0]?.body).toBe(body);
     expect(report.snapshot.target?.canonicalId).toBe(SCENARIO_MESSAGE);
@@ -77,17 +81,18 @@ describe("public Mail action lifecycle scenario", () => {
     expect(report.ownerCalls.dispatch).toBe(1);
   });
 
-  for (const variant of ["empty", "foreign", "target"] as const) test(`${variant} scope causes no provider mutation`, async () => {
+  for (const variant of ["empty", "foreign", "target"] as const) test(`${variant} move scope is refused at its owning boundary`, async () => {
     const dir = writeMailActionPackage(join(root, variant));
     const report = await runMailActionScenario(dir, { capabilityId: "mail.move", mail: scenarioMail(), snapshot: context => unsignedWrongScope(context, variant) });
-    expect(report.stages[0]?.state).not.toBe("succeeded");
+    expect(report.stages[0]?.state).toBe(variant === "foreign" ? null : "failed");
+    expect(report.ownerCalls.dispatch).toBe(variant === "foreign" ? 0 : 1);
     expectNoProviderMutation(dir);
   });
 
   test("rejects invalid reply account scope before dispatch", async () => {
     const dir = writeMailActionPackage(join(root, "reply-denied"), { action: "reply" });
     const report = await runMailActionScenario(dir, { capabilityId: "mail.reply-draft.create", mail: scenarioMail(), snapshot: context => {
-      const approved = mailReplyDraftSnapshot({ ...context, account: mailAccountRef(context.adapterId, context.connectionId, context.account), message: mailMessageRef(context.adapterId, context.connectionId, SCENARIO_MESSAGE), body: "Reply" });
+      const approved = replySnapshot(context);
       return { ...approved, destinations: [] };
     } });
     expectNotAdmitted(dir, report);
@@ -96,7 +101,7 @@ describe("public Mail action lifecycle scenario", () => {
   test("a cloud-policy snapshot is refused in the local Mail scenario", async () => {
     const dir = writeMailActionPackage(join(root, "cloud-snapshot"), { action: "reply" });
     const report = await runMailActionScenario(dir, { capabilityId: "mail.reply-draft.create", mail: scenarioMail(), snapshot: context =>
-      mailReplyDraftSnapshot({ ...context, account: mailAccountRef(context.adapterId, context.connectionId, context.account), message: mailMessageRef(context.adapterId, context.connectionId, SCENARIO_MESSAGE), body: "Reply", policy: "cloud" }) });
+      replySnapshot(context, "Reply", "cloud") });
     expect(report.snapshot.policy).toBe("cloud");
     expectNotAdmitted(dir, report);
   });
@@ -109,6 +114,7 @@ describe("public Mail action lifecycle scenario", () => {
 
   test("refuses invalid step and wait bounds before loading any package", async () => {
     await expect(runMailActionScenario("unused", { capabilityId: "mail.move", mail: scenarioMail(), snapshot, steps: Array.from({ length: 17 }, () => "repeat" as const) })).rejects.toThrow("sixteen");
+    await expect(runMailActionScenario("unused", { capabilityId: "mail.move", mail: scenarioMail(), snapshot, steps: ["invalid" as MailActionScenarioStep] })).rejects.toThrow("Unknown Mail action scenario step: invalid");
     await expect(runMailActionScenario("unused", { capabilityId: "mail.move", mail: scenarioMail(), snapshot, dispatchWaitMs: 0 })).rejects.toThrow("one and ten thousand");
   });
 });
