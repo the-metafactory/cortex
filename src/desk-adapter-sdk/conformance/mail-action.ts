@@ -5,17 +5,16 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import type { MailReadSource } from "../../conversations/domain-adapters/mail-read-source";
 import { mailAccountRef } from "../../conversations/domain-adapters/mail/move-contract";
-import { buildApprovedSnapshot } from "../../conversations/domain-adapters/operations/owner-results";
+import { snapshotDigest } from "../../conversations/domain-adapters/operations/validation";
 import type { ApprovedSnapshot, Json, Provenance } from "../../conversations/domain-adapters/operations/types";
 import { DeskPackageLoader } from "../../conversations/domain-adapters/package";
 import { actionProvenance, confirmAndDispatch } from "./actions";
 import { CONFORMANCE_CONNECTION_ID } from "./connection";
-import { recordConnector } from "./connectors";
 import { guardNetwork } from "./network";
 import { schemaIndex, type ProbeEnv } from "./probes";
 import type { OwnerCalls } from "./report";
-import { ConformanceRefusal, openConformanceRig } from "./rig";
-import { authorizeConnection, conformanceMailBinding, openConformanceStore } from "./run";
+import { ConformanceRefusal, STACK } from "./rig";
+import { authorizeConnection, conformanceMailBinding, openConformanceConnection, openConformanceStore } from "./run";
 
 /** Data for constructing a Mail approval inside a synthetic local conversation. */
 export interface MailActionScenarioContext {
@@ -87,16 +86,13 @@ export async function runMailActionScenario(packageDir: string, options: MailAct
       const built = loader.trustedConnector(candidate.adapterId, { adapterId: candidate.adapterId, connectionId }, { authorizeConnection, actionCapabilityId: options.capabilityId });
       if (!built.ok) throw new ConformanceRefusal(built.error.code, built.error.message);
       const plain = built.value.connector;
-      const { connector, recorded } = recordConnector(plain);
       const destinations = [mailAccountRef(candidate.adapterId, connectionId, mailBinding.account)];
-      const rig = await openConformanceRig({ dir: temp, registry: loader.registry(), connector, adapterId: candidate.adapterId, connectionId,
-        readBindings: candidate.manifest.readBindings, readCapabilityIds: [...candidate.manifest.declaration.capabilities.filter(capability => capability.kind !== "action").map(capability => capability.capabilityId), options.capabilityId],
-        writeCapabilityIds: [options.capabilityId], writerCapabilityId: options.capabilityId, destinations, mailBinding });
+      const { rig, recorded } = await openConformanceConnection(loader, candidate, temp, { connectionId, plain, actionId: options.capabilityId, destinations, mailBinding, historicalLookup: true });
       try {
         const env: ProbeEnv = { rig, manifest: candidate.manifest, sample: { schemas: schemaIndex(candidate.manifest), destinations, adapterId: candidate.adapterId, connectionId }, recorded, plain, adapterId: candidate.adapterId, connectionId };
         const supplied = options.snapshot({ adapterId: candidate.adapterId, connectionId, account: mailBinding.account, provenance: actionProvenance(rig.conversationId) });
         const { digest: _suppliedDigest, ...parts } = { ...supplied, digest: "" };
-        const snapshot = buildApprovedSnapshot(parts);
+        const snapshot: ApprovedSnapshot = { ...parts, digest: snapshotDigest(parts) };
         const dispatched = await confirmAndDispatch(env, options.capabilityId, snapshot, waitMs);
         let bridge = dispatched.run.bridge;
         const operationId = dispatched.run.operationId;
@@ -113,7 +109,7 @@ export async function runMailActionScenario(packageDir: string, options: MailAct
           if (step === "reopen") {
             await rig.reopen();
             bridge = rig.host.lifecycleBridge(rig.registry, rig.bindings, () => plain.support, waitMs);
-            if (!await bridge.activate({ stack: "conformance", owner: plain.writerOwner, adapterId: candidate.adapterId, connectionId, capabilityId: options.capabilityId }, rig.lease)) throw new ConformanceRefusal("writer_inactive", "The reopened writer could not activate.");
+            if (!await bridge.activate({ stack: STACK, owner: plain.writerOwner, adapterId: candidate.adapterId, connectionId, capabilityId: options.capabilityId }, rig.lease)) throw new ConformanceRefusal("writer_inactive", "The reopened writer could not activate.");
             await observe(step, "reopened");
           } else if (step === "reconcile") {
             const outcome = await rig.host.lifecycleReconciler(rig.registry, rig.bindings, bridge, () => plain.support).check(rig.context, operationId, rig.sink);

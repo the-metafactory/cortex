@@ -158,6 +158,6 @@ export interface DeskAdapterModule {
 
 export { MAIL_MOVE_CAPABILITY, MAIL_TRASH_CAPABILITY, MAIL_RESTORE_CAPABILITY, MAIL_MOVE_CAPABILITIES, mailMoveDeclaration, mailMoveSnapshot, mailAccountRef, mailMessageRef } from "../conversations/domain-adapters/mail/move-contract";
 export type { MailMoveAction, MailMoveInput, MailMoveTarget } from "../conversations/domain-adapters/mail/move-contract";
-export { MAIL_REPLY_DRAFT_CAPABILITY } from "../conversations/domain-adapters/mail/reply-draft-policy";
+export { MAIL_REPLY_DRAFT_CAPABILITY } from "../conversations/domain-adapters/mail/reply-draft-contract";
 export { mailReplyDraftDeclaration, mailReplyDraftSnapshot } from "../conversations/domain-adapters/mail/reply-draft-contract";
 export type { ApprovedSnapshot, Provenance } from "../conversations/domain-adapters/operations/types";

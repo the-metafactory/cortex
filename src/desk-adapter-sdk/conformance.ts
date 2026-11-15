@@ -44,3 +44,5 @@ export async function runConformance(packageDir: string, options: string | Confo
 }
 
 export { runMailActionScenario, type MailActionScenarioContext, type MailActionScenarioOptions, type MailActionScenarioReport, type MailActionScenarioStage, type MailActionScenarioStep } from "./conformance/mail-action";
+
+export type { ApprovedSnapshot, Json, Provenance } from "../conversations/domain-adapters/operations/types";

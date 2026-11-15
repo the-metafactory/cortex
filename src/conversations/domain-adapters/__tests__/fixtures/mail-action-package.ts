@@ -15,7 +15,7 @@ export const scenarioMail = (): MailReadSource => ({
   listings: () => [{ id: "source-example", readAt: Date.now(), error: null, mail: [{ id: SCENARIO_MESSAGE, account: SCENARIO_ACCOUNT, from: { address: "sender@example.test" }, subject: "Synthetic mail", receivedAt: "2026-11-15T00:00:00.000Z", unread: true }] }],
 });
 
-export interface MailActionFixtureState {
+interface MailActionFixtureState {
   effects: { messageId: string; body?: string; folder?: string }[];
   providerCalls: number;
   lookups: number;
@@ -23,16 +23,17 @@ export interface MailActionFixtureState {
 
 export const mailActionState = (dir: string): MailActionFixtureState | undefined => Reflect.get(globalThis, Symbol.for(dir)) as MailActionFixtureState | undefined;
 
-export function writeMailActionPackage(dir: string, options: { action?: MailMoveAction | "reply"; timeout?: boolean; corruptLookup?: boolean; network?: boolean } = {}): string {
+export function writeMailActionPackage(dir: string, options: { action?: MailMoveAction | "reply"; timeout?: boolean; corruptLookup?: boolean; network?: boolean; stateKey?: string; omitAccount?: boolean } = {}): string {
   const action = options.action ?? "move";
   const declared = action === "reply" ? mailReplyDraftDeclaration() : mailMoveDeclaration("mail", [action]);
+  if (options.omitAccount) declared.objectTypes = declared.objectTypes.filter(type => type.objectType !== "account");
   const capabilityId = declared.capabilities[0]?.capabilityId;
   if (!capabilityId) throw new Error("The fixture requires an action.");
   const built = writeConformancePackage(dir, { ...conformanceDomain("greenhouse"), adapterId: "mail" });
   const source = `const declaration = ${JSON.stringify(declared)};
 export function createDeskAdapter(host) {
   const state = { effects: [], providerCalls: 0, lookups: 0, saved: null };
-  globalThis[Symbol.for(${JSON.stringify(dir)})] = state;
+  globalThis[Symbol.for(${JSON.stringify(options.stateKey ?? dir)})] = state;
   host.registerConnector(${JSON.stringify(capabilityId)}, connection => ({
     kind: "action", ...connection, capabilityId: ${JSON.stringify(capabilityId)}, writerOwner: "mail-fixture",
     support: { lifecycleVersion: "1.0.0", ...connection, capabilityId: ${JSON.stringify(capabilityId)}, declarationId: "mail-scenario-fixture", dedup: { kind: "guaranteed", scope: "connection-capability", retentionMs: 60000, bindsSnapshot: true, concurrent: true }, operationLookup: "historical", conditionalUpdate: "none", cancellation: "none" },
