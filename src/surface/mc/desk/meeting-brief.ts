@@ -4,7 +4,7 @@ import type { DeskRuntime } from "./compose";
 import { linksToMeeting, readTaskNode, type LinkRow } from "./links";
 import { readingEvents } from "./mail-snooze";
 import { readMyDay } from "./my-day";
-import { listOpenNotes } from "./notes";
+import { listOpenNotes, type DeskNote } from "./notes";
 import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import { oneLine } from "./studio/edit";
 import type { StudioView } from "./studio/view";
@@ -92,7 +92,7 @@ function readTask(row: LinkRow, loaded: { day: Day } | null): BriefRead {
   const note = node.note ? clip(node.note) : "";
   return {
     ok: true, identity, text: `Task${node.done ? " (done)" : ""}: ${clip(node.title)}`, excerpt: note || clip(node.title),
-    ...(node.external?.url ? { link: node.external.url } : {}), fingerprint: digest([node.title, node.note ?? null, node.done ?? false, node.dueDate ?? null]),
+    ...(node.external?.url ? { link: node.external.url } : {}), fingerprint: digest([node.title, node.note ?? null, node.done ?? false, node.dueDate ?? null, node.external?.url ?? null]),
   };
 }
 
@@ -108,9 +108,9 @@ function readThread(row: LinkRow, loaded: { studio: Studio } | null, studioConfi
   };
 }
 
-function readNote(db: Database, row: LinkRow): BriefRead {
+function readNote(openNotes: Map<string, DeskNote>, row: LinkRow): BriefRead {
   const identity = noteIdentity(row.fromKey);
-  const note = listOpenNotes(db).find((n) => `note:${n.id}` === row.fromKey);
+  const note = openNotes.get(row.fromKey);
   if (!note) return unreadable("read-failed", identity);
   return { ok: true, identity, text: `Note: ${clip(note.text)}`, excerpt: clip(note.text), fingerprint: digest([note.text, note.kind, note.dueAt]) };
 }
@@ -119,11 +119,12 @@ async function defaultReaders(db: Database, runtime: DeskRuntime, now: number): 
   const desk = runtime.options;
   const readings = runtime.sourceCache?.cached() ?? [];
   const loaded = await loadDay(db, runtime, now);
+  const openNotes = new Map(listOpenNotes(db).map((n) => [`note:${n.id}`, n]));
   return {
     mail: (row) => readMail(row, readings, desk?.sources.length ?? 0),
     task: (row) => readTask(row, loaded),
     thread: (row) => readThread(row, loaded, desk?.studio !== undefined),
-    note: (row) => readNote(db, row),
+    note: (row) => readNote(openNotes, row),
   };
 }
 
