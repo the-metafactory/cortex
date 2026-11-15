@@ -62,9 +62,14 @@ describe("Mission Control mc.ui.dir", () => {
   });
 
   test("serves configured files and gives both shell paths the Desk CSP", async () => {
-    const bundled = serve();
+    const dashboardDist = join(dir, "dashboard");
+    mkdirSync(dashboardDist);
+    writeFileSync(join(dashboardDist, "index.html"), "<!doctype html><title>Bundled console</title>\n");
+    const bundled = rig.serve({}, { dashboardDist });
     const base = serve({ ui: { dir: ui } });
-    const expectedCsp = (await fetch(`${bundled}/index.html`)).headers.get("content-security-policy")?.replaceAll(bundled, base);
+    const bundledResponse = await fetch(`${bundled}/index.html`);
+    expect(bundledResponse.status).toBe(200);
+    const expectedCsp = bundledResponse.headers.get("content-security-policy")?.replaceAll(bundled, base);
     for (const path of ["/", "/index.html"]) {
       const response = await fetch(base + path);
       expect(response.status).toBe(200);
