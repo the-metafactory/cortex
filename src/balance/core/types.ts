@@ -15,8 +15,9 @@ export type RecurrenceMode = "calendar" | "completion";
 export interface RecurrenceOutcome {
     taskId: NodeId;
     planned: string;
-    status: "completed" | "missed";
+    status: "completed" | "missed" | "skipped";
     completedOn?: string;
+    skippedOn?: string;
     recordedOn: string;
 }
 export interface OutlineNode {

@@ -23,8 +23,9 @@ const recurrence = z.object({
 const outcome = z.object({
   taskId: z.string().min(1),
   planned: date,
-  status: z.enum(["completed", "missed"]),
+  status: z.enum(["completed", "missed", "skipped"]),
   completedOn: date.optional(),
+  skippedOn: date.optional(),
   recordedOn: date,
 });
 const outline: z.ZodType<OutlineNode> = z.object({
