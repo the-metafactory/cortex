@@ -3,9 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { mailAccountRef, mailMessageRef, mailMoveSnapshot, mailReplyDraftSnapshot, mailUnsubscribeSnapshot } from "../../../desk-sdk";
+import { mailAccountRef, mailMessageRef, mailMoveSnapshot, mailReplyDraftDeclaration, mailReplyDraftSnapshot, mailUnsubscribeSnapshot } from "../../../desk-sdk";
 import { runMailActionScenario, type MailActionScenarioContext, type MailExecutionProvider } from "../../../desk-adapter-sdk/conformance";
 import { mailExecutionBridge } from "../mail-execution";
+import { adaptDeskBackend } from "../package-backend";
+import { authority, support } from "../operations/fixtures";
+import type { DispatchRequest } from "../operations/types";
 import { scenarioMail, SCENARIO_MESSAGE } from "./fixtures/mail-action-package";
 import { writeMailExecutionPackage } from "./fixtures/mail-execution-package";
 
@@ -173,6 +176,27 @@ describe("packaged host-selected Mail execution", () => {
     state.release?.();
     await expect(state.late).rejects.toThrow("admitted");
     expect(native.calls).toBe(1);
+  });
+
+  for (const path of ["dispatch", "lookup"] as const) test(`an aborted ${path} cannot begin a delayed native call`, async () => {
+    const native = provider();
+    const connection = { adapterId: "mail", connectionId: "conformance-connection" };
+    const snapshot = reply({ ...connection, account: "account-example", provenance: { conversationId: "conversation-example", proposalId: "proposal-example", revision: 1, entryId: null, link: "?desk=conversation" } });
+    const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId: "operation-example", attemptId: "attempt-example", idempotencyKey: "operation-example", ownerRequestId: "request-example", snapshot, authority, supportDeclarationId: "support-example", deadlineAt: "2030-01-01T00:00:00.000Z" };
+    const bridge = mailExecutionBridge(scenarioMail(), { ...native, journal() { throw new Error("An aborted call must not read the journal."); } }, "mail", () => true);
+    const wait = Promise.withResolvers<undefined>();
+    const action = { kind: "action" as const, ...connection, capabilityId: "mail.reply-draft.create", writerOwner: "mail-example", support: { ...support, ...connection, capabilityId: "mail.reply-draft.create", operationLookup: "historical" as const },
+      async dispatch() { await wait.promise; return bridge.invoke(connection, "draft", { version: 1, requestId: "mail.reply-draft.create:request-example", account: "account-example", messageId: SCENARIO_MESSAGE, recipient: "sender@example.test", subject: "Re: Synthetic mail", body: snapshot.input && recordSchema.parse(snapshot.input).body }); },
+      async lookup() { await wait.promise; return bridge.lookupContext(connection, { lifecycleVersion: "1.0.0", operationId: request.operationId, ownerRequestId: request.ownerRequestId }); },
+    };
+    const adapted = adaptDeskBackend({ adapterId: "mail", connection, declaration: mailReplyDraftDeclaration(), bindings: { handlers: {}, observations: {} }, action, authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "1" }), gate: () => null });
+    const controller = new AbortController();
+    const pending = path === "dispatch" ? adapted.connector.dispatch(request, controller.signal) : adapted.connector.lookup?.({ lifecycleVersion: "1.0.0", operationId: request.operationId, ownerRequestId: request.ownerRequestId }, controller.signal);
+    controller.abort();
+    wait.resolve(undefined);
+    await expect(pending).rejects.toThrow("admitted");
+    expect(native.calls).toBe(0);
+    expect(native.lookups).toBe(0);
   });
 
   for (const variant of ["unsupported", "missing"] as const) test(`${variant} provider versions remain unavailable before dispatch`, async () => {
