@@ -66,8 +66,7 @@ export class EscalationRulings {
   constructor(private readonly somaBin: string, private readonly run?: RangerRunner, private readonly clock = Date.now) {}
 
   read(refs: string[]): ReadonlyMap<string, string | null> {
-    const active = new Set(refs);
-    for (const ref of this.cache.keys()) if (!active.has(ref)) this.cache.delete(ref);
+    for (const [ref, cached] of this.cache) if (this.clock() - cached.at >= statusLifetime(cached.refusal)) this.cache.delete(ref);
     void this.warm(refs);
     return new Map(refs.map(ref => [ref, this.cache.get(ref)?.refusal ?? (this.cache.has(ref) ? null : "The graph node status is being checked. Answer on the issue.")]));
   }

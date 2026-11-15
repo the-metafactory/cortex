@@ -259,6 +259,23 @@ describe("escalation graph status refresh", () => {
     expect(calls).toBe(284);
   });
 
+  it("keeps a node's status when one compose leaves it out of the ref list", async () => {
+    let calls = 0;
+    const reader = new EscalationRulings(DESK.somaBin!, async argv => {
+      calls++;
+      return node(true, "open", argv[3]);
+    }, () => NOW);
+    const all = Array.from({ length: 6 }, (_, index) => `example/app#${index + 1}`);
+    await reader.warm(all);
+    expect(calls).toBe(6);
+    reader.read(all.slice(0, 3));
+    await reader.warm(all.slice(0, 3));
+    reader.read(all);
+    await reader.warm(all);
+    expect(calls).toBe(6);
+    expect([...reader.read(all).values()]).toEqual(Array(6).fill(null));
+  });
+
   it("waits before re-reading a node whose read failed", async () => {
     let now = NOW;
     let calls = 0;
