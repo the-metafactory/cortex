@@ -8,10 +8,9 @@ const DEFAULT_NOTE_LABELS: NoteLabels = { objects: "notes", noun: "notes", fallb
 const noteLabels = (desk: DeskOptions | undefined): NoteLabels => ({ ...DEFAULT_NOTE_LABELS, ...desk?.ask?.writerLabels?.note });
 const MAYBE_CREATED = /may have been created/i;
 
-export const noteWriterKey = (desk: DeskOptions | undefined): OwnerType | undefined => {
-  const owner = deskWriterOwner(desk, "note");
-  return owner ? (`${owner}-note` as OwnerType) : undefined;
-};
+const NOTE_CATALOG_SLOT: OwnerType = "tana-note";
+
+export const noteWriterKey = (desk: DeskOptions | undefined): OwnerType | undefined => (deskWriterOwner(desk, "note") ? NOTE_CATALOG_SLOT : undefined);
 
 const noteFields = (request: CreateRequest): { text: string } => ({ text: request.fields.text ?? "" });
 const afterRefusal = (_: CreateRequest, error: string): Promise<ReadbackResult> => Promise.resolve(MAYBE_CREATED.test(error) ? null : { found: false });

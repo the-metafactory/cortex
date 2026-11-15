@@ -25,7 +25,7 @@ describe("Note writer for conversation proposals", () => {
     expect(JSON.stringify(empty.error?.issues)).toContain("writerLabels.note.noun");
   });
 
-  test("the note writer registers under its owner's key, and under none without an owner", () => {
+  test("the note writer registers under the catalog's note slot for any owner, and under none without an owner", () => {
     const keys = (owner?: string): string[] => {
       const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ask: { parser: [], timeoutSeconds: 5, writers: { note: WRITER }, ...(owner ? { writerOwners: { note: owner } } : {}), taskMaps: [] } };
       const db = new Database(":memory:");
@@ -35,9 +35,9 @@ describe("Note writer for conversation proposals", () => {
       return registered;
     };
     expect(keys("tana")).toContain("tana-note");
-    expect(keys("obsidian")).toContain("obsidian-note");
-    expect(keys("obsidian")).not.toContain("tana-note");
-    expect(keys().filter(key => key.endsWith("-note") && key !== "studio-note")).toEqual([]);
+    expect(keys("obsidian")).toContain("tana-note");
+    expect(keys("obsidian")).not.toContain("obsidian-note");
+    expect(keys().filter(key => key === "tana-note")).toEqual([]);
   });
 
   test("the stack config declares a writer's owner on the writer, and a plain argument array declares none", () => {
@@ -49,7 +49,7 @@ describe("Note writer for conversation proposals", () => {
     expect(DeskSchema.safeParse({ ask: { writers: { note: { command: [] } } } }).success).toBe(false);
   });
 
-  test("the type is ready only when the note writer declares owner tana on an enabled Desk", async () => {
+  test("the type is ready only when the note writer declares an owner on an enabled Desk", async () => {
     const ready = await rig();
     expect(await ready.capability()).toBe("ready");
     ready.options.enabled = false;
@@ -57,7 +57,7 @@ describe("Note writer for conversation proposals", () => {
     ready.options.enabled = true;
     const ask = ready.options.ask ?? { parser: [], timeoutSeconds: 5, writers: {}, taskMaps: [] };
     ask.writerOwners = { note: "keep" };
-    expect(await ready.capability()).toBe("blocked:3039");
+    expect(await ready.capability()).toBe("ready");
     delete ask.writerOwners;
     expect(await ready.capability()).toBe("blocked:3039");
     expect(await (await rig(null)).capability()).toBe("blocked:3039");
