@@ -136,6 +136,7 @@ import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { DESK_OUTLINE_ASK_PATH, handleDeskOutlineAsk } from "./api/desk-outline-ask";
+import { DESK_OUTLINE_HISTORY_PATH, handleDeskOutlineHistory } from "./api/desk-outline-history";
 import { handleConversations, importedSessions, type ConversationAccess } from "./api/conversations";
 import { conversationWebPrincipal } from "../../conversations/discord-dm";
 import { conversationSources } from "./desk/conversation-sources";
@@ -712,6 +713,7 @@ async function handleApi(
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
   if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk, { imported: importedSessions(conversations) });
   if (pathname === DESK_OUTLINE_ASK_PATH) return handleDeskOutlineAsk(req, db, desk);
+  if (pathname === DESK_OUTLINE_HISTORY_PATH) return handleDeskOutlineHistory(req, db, desk);
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
