@@ -20,6 +20,11 @@ function asyncModifier(call: CallExpression): string | undefined {
   return fromExpect ? modifier : undefined;
 }
 
+const PROMISE_COMBINATORS = new Set(["all", "allSettled", "race", "any"]);
+
+const combinesPromises = (call: CallExpression): boolean =>
+  call.callee.type === "MemberExpression" && call.callee.object.type === "Identifier" && call.callee.object.name === "Promise" && PROMISE_COMBINATORS.has(propertyName(call.callee) ?? "");
+
 function isAwaited(node: Node & Rule.NodeParentExtension): boolean {
   const { parent } = node;
   switch (parent.type) {
@@ -29,7 +34,10 @@ function isAwaited(node: Node & Rule.NodeParentExtension): boolean {
     case "ArrowFunctionExpression":
       return parent.body === node;
     case "ChainExpression":
+    case "ArrayExpression":
       return isAwaited(parent);
+    case "CallExpression":
+      return parent.callee !== node && combinesPromises(parent) && isAwaited(parent);
     default:
       return false;
   }

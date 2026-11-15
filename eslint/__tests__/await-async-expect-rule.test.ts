@@ -21,9 +21,11 @@ describe("cortex/await-async-expect", () => {
       "  expect(link()).resolves.not.toThrow();",
       "  void expect(link()).rejects.toThrow();",
       "  const pending = expect(link()).rejects.toThrow();",
+      "  Promise.all([expect(link()).rejects.toThrow()]);",
+      "  await run([expect(link()).resolves.toBe(1)]);",
       "});",
     ].join("\n");
-    expect(flagged(code)).toEqual([2, 3, 4, 5]);
+    expect(flagged(code)).toEqual([2, 3, 4, 5, 6, 7]);
   });
 
   test("accepts awaited, returned and arrow-bodied assertions and plain expectations", () => {
@@ -33,6 +35,8 @@ describe("cortex/await-async-expect", () => {
       "  await expect(link()).resolves.not.toThrow();",
       "  expect(value).toBe(1);",
       "  expect(() => run()).toThrow();",
+      "  await Promise.all([expect(a()).rejects.toThrow(), expect(b()).resolves.toBe(1)]);",
+      "  await Promise.allSettled([expect(a()).rejects.toThrow()]);",
       "});",
       "test('b', () => { return expect(link()).rejects.toThrow(); });",
       "test('c', () => expect(link()).resolves.toBe(1));",
