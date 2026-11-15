@@ -1,5 +1,7 @@
 export const DAY_MS = 86_400_000;
 
+export const deskTimeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
 export function clock(at: number): string {
   return new Date(at).toTimeString().slice(0, 5);
 }
