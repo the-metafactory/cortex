@@ -11,11 +11,21 @@ function historyRecord<T>(value: z.ZodType<T>): z.ZodType<Record<string, T>> {
 }
 const recurrence = z.object({
   unit: z.enum(["day", "week", "month"]),
-  interval: z.number(),
+  interval: z.number().int().min(1),
   weekdays: z.array(z.number().int().min(0).max(6)).optional(),
+  mode: z.enum(["calendar", "completion"]).optional(),
+  anchor: date.optional(),
+  occurrence: date.optional(),
   count: z.number().int().nonnegative().optional(),
   until: date.optional(),
   timesDone: z.number().int().nonnegative().optional(),
+}).refine(repeat => repeat.mode !== "calendar" || repeat.anchor !== undefined, { message: "A calendar repeat needs an explicit anchor date." });
+const outcome = z.object({
+  taskId: z.string().min(1),
+  planned: date,
+  status: z.enum(["completed", "missed"]),
+  completedOn: date.optional(),
+  recordedOn: date,
 });
 const outline: z.ZodType<OutlineNode> = z.object({
   id: z.string().min(1),
@@ -79,6 +89,7 @@ export const BalanceStateSchema: z.ZodType<AppState> = z.object({
       to: z.iso.time({ precision: -1 }),
     })).optional(),
   })).optional(),
+  outcomes: z.array(outcome).optional(),
 }).superRefine((state, ctx) => {
   const ids = new Set<string>();
   const walk = (node: OutlineNode) => {

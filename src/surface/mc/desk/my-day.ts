@@ -6,7 +6,7 @@ import { balanceParents } from "./balance-parent";
 import { planSource, unplanSource } from "./source-plan";
 import { studioLinks, studioOwned, studioProjectLinks, type StudioProjectLink, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
-import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
+import { applyBalanceCommand, completeOutlineLeaf, reopenOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
 import { stampCreated, stampTouched } from "./balance-touch";
 import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-day";
 import type { Database } from "bun:sqlite";
@@ -235,8 +235,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
           if (reopen.used) break;
           if (reopen.date !== date) throw new Error("This Undo belongs to a previous day.");
           const node = requiredNode(state, reopen.taskId);
-          delete node.done;
-          delete node.completedAt;
+          reopenOutlineLeaf(state, node);
           reopen.used = true;
           todayNotice = `Reopened ${node.title}.`;
           break;
