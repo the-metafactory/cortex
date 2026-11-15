@@ -622,7 +622,7 @@
   "src/surface/mc/desk/mail-handoff-schema.ts": 3,
   "src/surface/mc/desk/mail-handoff.ts": 16,
   "src/surface/mc/desk/mail-invitation-remove.ts": 1,
-  "src/surface/mc/desk/mail-invitation.ts": 9,
+  "src/surface/mc/desk/mail-invitation.ts": 8,
   "src/surface/mc/desk/mail-log.ts": 3,
   "src/surface/mc/desk/mail-mirror.ts": 5,
   "src/surface/mc/desk/mail-move.ts": 1,
