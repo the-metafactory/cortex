@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { DeskAdapterConnection, DeskMailExecutionBridge, DeskMailExecutionMethod, DeskMailOperationContext } from "../../desk-sdk";
 import { replySubject } from "./mail/reply-subject";
-import { unsubscribeMethod } from "../../surface/mc/desk/mail-unsubscribe";
+import { unsubscribeMethod } from "./mail/unsubscribe-method";
 import { admittedCallKey, admittedDispatch, admittedLookup, connectionKey, DeskBackendUnavailableError } from "./package-backend";
 import { mailBindingFor } from "./mail-read";
 import type { MailExecutionConnections } from "./mail-execution-source";
@@ -40,6 +40,8 @@ const NATIVE_INPUT: Record<string, z.ZodType> = {
 };
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const fail = (code: string, message: string): never => { throw new DeskBackendUnavailableError({ code, message }); };
+const attemptContext = (context: DeskMailOperationContext) => ({ operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest });
+const listedItem = (source: MailReadSource | undefined, binding: MailConnectionBinding, messageId: unknown) => source?.listings().find(listing => listing.id === binding.sourceId)?.mail.find(item => item.id === messageId && item.account === binding.account);
 
 export function mailExecutionBridge(source: MailReadSource | undefined, execution: MailExecutionSource | undefined, adapterId: string, published: () => boolean): DeskMailExecutionBridge {
   const bindingOf = (connection: DeskAdapterConnection): MailConnectionBinding => {
@@ -48,13 +50,13 @@ export function mailExecutionBridge(source: MailReadSource | undefined, executio
     if (!binding) return fail("mail_execution_unavailable", "This connection has no host-selected Mail binding.");
     return binding;
   };
-  const admitted = (connection: DeskAdapterConnection): void => {
-    bindingOf(connection);
+  const admitted = (connection: DeskAdapterConnection): MailConnectionBinding => {
+    const binding = bindingOf(connection);
     if (admittedCallKey() !== connectionKey(connection) || (!admittedDispatch() && !admittedLookup())) fail("mail_execution_unadmitted", "Mail execution requires the current admitted dispatch or historical lookup.");
+    return binding;
   };
   const scoped = (context: DeskMailOperationContext, connection: DeskAdapterConnection): MailConnectionBinding => {
-    admitted(connection);
-    const binding = bindingOf(connection);
+    const binding = admitted(connection);
     const snapshot = context.snapshot;
     const target = snapshot.target;
     if (snapshot.adapterId !== connection.adapterId || snapshot.connectionId !== connection.connectionId || !METHODS[snapshot.capabilityId] || snapshotDigest(snapshot) !== snapshot.digest) return fail("mail_execution_scope", "The approved operation does not belong to this Mail connection.");
@@ -112,25 +114,25 @@ export function mailExecutionBridge(source: MailReadSource | undefined, executio
         const original = snapshot.input;
         if (!record(original)) return fail("mail_execution_scope", "The approved Mail input is invalid.");
         if (method === "draft") {
-          const mail = source?.listings().find(listing => listing.id === binding.sourceId)?.mail.find(item => item.id === input.messageId && item.account === binding.account);
+          const mail = listedItem(source, binding, input.messageId);
           if (!mail || input.recipient !== mail.from.address || input.subject !== replySubject(mail.subject) || input.body !== original.body) return fail("mail_execution_scope", "The draft must keep the approved body and the listed recipient and subject.");
         } else {
-          const expected = { operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest };
+          const expected = attemptContext(context);
           if (canonicalWire(input.context) !== canonicalWire(expected)) return fail("mail_execution_scope", "The provider call does not match the approved attempt.");
           if (method === "move" && (input.action !== (snapshot.capabilityId === "mail.trash" ? "trash" : "move") || input.target !== (snapshot.capabilityId === "mail.trash" ? "trash" : original.target))) return fail("mail_execution_scope", "The move destination differs from the approved action.");
           if (method === "restore" && (input.action !== "restore" || input.from !== original.from)) return fail("mail_execution_scope", "The restore precondition differs from the approved location.");
           if (method === "unsubscribe") {
-            const mail = source?.listings().find(listing => listing.id === binding.sourceId)?.mail.find(item => item.id === input.messageId && item.account === binding.account);
+            const mail = listedItem(source, binding, input.messageId);
             if (unsubscribeMethod(mail?.headers)?.kind !== "one-click") return fail("mail_execution_unavailable", "This listed message does not offer one-click unsubscribe.");
           }
         }
       }
-      admitted(connection);
+      scoped(context, connection);
       const value = z.json().parse(await invoke.call(provider, structuredClone(input)));
       if (record(value) && typeof value.account === "string" && value.account !== binding.account) return fail("mail_execution_scope", "The provider result belongs to another account.");
       if (method === "lookupMove" && record(value) && value.status === "found") {
         const original = value.request;
-        const expected = { operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest };
+        const expected = attemptContext(context);
         if (!record(original) || typeof original.action !== "string" || original.requestId !== requestId || original.account !== binding.account || original.messageId !== snapshot.target?.canonicalId || `mail.${original.action}` !== snapshot.capabilityId || canonicalWire(original.context) !== canonicalWire(expected)) return fail("mail_execution_scope", "The historical move result belongs to another approved attempt.");
       }
       return value;

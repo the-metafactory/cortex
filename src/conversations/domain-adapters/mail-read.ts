@@ -6,7 +6,7 @@ import { canonicalWire } from "./operations/validation";
 import type { MailJudgementStore } from "./mail/judgement-store";
 import type { ObjectReference } from "./types";
 import type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceListing } from "./mail-read-source";
-import { unsubscribeMethod } from "../../surface/mc/desk/mail-unsubscribe";
+import { unsubscribeMethod } from "./mail/unsubscribe-method";
 
 export type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceListing } from "./mail-read-source";
 
