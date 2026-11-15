@@ -8,6 +8,7 @@ export interface MailSourceItem {
   readonly receivedAt: string;
   readonly unread: boolean;
   readonly firstParagraph?: string;
+  readonly headers?: { readonly listUnsubscribe?: string; readonly listUnsubscribePost?: string };
 }
 
 /** One Mail source's last listing, as the host's source cache holds it; `error` is set when that run failed. */

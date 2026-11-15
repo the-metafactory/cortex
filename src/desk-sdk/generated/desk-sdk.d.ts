@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.12.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.13.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -744,6 +744,24 @@ export interface ObservationRequest {
 	continuation?: string;
 	limit: number;
 }
+export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe";
+export interface DeskMailExecutionConnection {
+	readonly version: number;
+	readonly methods: readonly DeskMailExecutionMethod[];
+}
+export interface DeskMailOperationContext {
+	readonly operationId: string;
+	readonly attemptId: string;
+	readonly ownerRequestId: string;
+	readonly snapshotDigest: string;
+	readonly snapshot: ApprovedSnapshot;
+}
+export interface DeskMailExecutionBridge {
+	connection(connection: DeskAdapterConnection): DeskMailExecutionConnection | null;
+	invoke(connection: DeskAdapterConnection, method: DeskMailExecutionMethod, input: unknown): Promise<unknown>;
+	lookupContext(connection: DeskAdapterConnection, request: LookupRequest): Promise<DeskMailOperationContext>;
+}
+declare const replySubject: (subject: string) => string;
 declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 	z.ZodObject<{
 		action: z.ZodLiteral<"unimportant">;
@@ -1069,6 +1087,10 @@ export interface DeskListedMail {
 	readonly receivedAt: string;
 	readonly unread: boolean;
 	readonly firstParagraph?: string;
+	readonly unsubscribe?: {
+		readonly oneClick: true;
+		readonly host: string;
+	};
 }
 /**
  * A connection's provider health. `fresh` means the source's last listing succeeded. `stale` means it failed
@@ -1107,6 +1129,7 @@ export interface DeskAdapterHost {
 	registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
 	readonly mail: DeskMailReadBridge;
 	readonly mailJudgements?: DeskMailJudgementBridge;
+	readonly mailExecution?: DeskMailExecutionBridge;
 }
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {
@@ -1119,5 +1142,9 @@ export type CreateDeskAdapter = (host: DeskAdapterHost) => DeskAdapterDefinition
 export interface DeskAdapterModule {
 	readonly createDeskAdapter: CreateDeskAdapter;
 }
+
+export {
+	replySubject as mailReplySubject,
+};
 
 export {};

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import type { MailReadSource } from "../../conversations/domain-adapters/mail-read-source";
+import type { MailExecutionConnections } from "../../conversations/domain-adapters/mail-execution-source";
+import type { MailExecutionSource } from "../../conversations/domain-adapters/mail-execution";
 import { mailAccountRef } from "../../conversations/domain-adapters/mail/move-contract";
 import { snapshotDigest } from "../../conversations/domain-adapters/operations/validation";
 import type { ApprovedSnapshot, Json, Provenance } from "../../conversations/domain-adapters/operations/types";
@@ -13,7 +15,9 @@ import { CONFORMANCE_CONNECTION_ID } from "./connection";
 import { guardNetwork } from "./network";
 import { schemaIndex, type ProbeEnv } from "./probes";
 import type { OwnerCalls } from "./report";
-import { ConformanceRefusal, STACK } from "./rig";
+import { ConformanceRefusal, STACK, type ConformanceRig } from "./rig";
+import { recordConnector } from "./connectors";
+import { canonicalWire } from "../../conversations/domain-adapters/operations/validation";
 import { authorizeConnection, conformanceMailBinding, openConformanceConnection, openConformanceStore } from "./run";
 
 /** Data for constructing a Mail approval inside a synthetic local conversation. */
@@ -24,7 +28,7 @@ export interface MailActionScenarioContext {
   readonly provenance: Provenance;
 }
 
-const MAIL_ACTION_STEPS = ["repeat", "reopen", "reconcile"] as const;
+const MAIL_ACTION_STEPS = ["repeat", "reopen", "restart", "reconcile"] as const;
 /** Bounded lifecycle steps over the same approved operation, never another provider attempt. */
 export type MailActionScenarioStep = (typeof MAIL_ACTION_STEPS)[number];
 
@@ -35,6 +39,7 @@ export interface MailActionScenarioOptions {
   snapshot(context: MailActionScenarioContext): Omit<ApprovedSnapshot, "digest">;
   steps?: readonly MailActionScenarioStep[];
   dispatchWaitMs?: number;
+  execution?: MailExecutionConnections;
 }
 
 /** A stage observed from the production journal, including its actual receipt entries. */
@@ -60,6 +65,7 @@ export interface MailActionScenarioReport {
   ownerCalls: OwnerCalls;
   networkRequests: number;
   credentialRequests: number;
+  reconstructions: number;
 }
 
 /** Drives an external Mail fixture through real approval, dispatch, durable reopening and lookup reconciliation. */
@@ -74,7 +80,13 @@ export async function runMailActionScenario(packageDir: string, options: MailAct
   try {
     const { engine, store } = await openConformanceStore(temp);
     try {
-      const loader = new DeskPackageLoader({ bundledPackages: [resolve(packageDir)], store, mail: options.mail });
+      const activeRig: { current?: ConformanceRig } = {};
+      const mailExecution: MailExecutionSource | undefined = options.execution ? { connection: binding => options.execution?.connection(binding), journal: () => {
+        if (!activeRig.current) throw new Error("The Mail scenario has no active journal.");
+        return activeRig.current.host.lifecycleJournal(activeRig.current.registry);
+      } } : undefined;
+      const makeLoader = () => new DeskPackageLoader({ bundledPackages: [resolve(packageDir)], store, mail: options.mail, ...(mailExecution ? { mailExecution } : {}) });
+      let loader = makeLoader();
       const discovery = await loader.discover();
       const candidate = discovery.candidates[0];
       if (!candidate) throw new ConformanceRefusal(discovery.issues[0]?.code ?? "no_package", discovery.issues[0]?.message ?? "No Desk adapter package was found.");
@@ -87,9 +99,14 @@ export async function runMailActionScenario(packageDir: string, options: MailAct
       const connectionId = CONFORMANCE_CONNECTION_ID;
       const built = loader.trustedConnector(candidate.adapterId, { adapterId: candidate.adapterId, connectionId }, { authorizeConnection, actionCapabilityId: options.capabilityId });
       if (!built.ok) throw new ConformanceRefusal(built.error.code, built.error.message);
-      const plain = built.value.connector;
+      let plain = built.value.connector;
       const destinations = [mailAccountRef(candidate.adapterId, connectionId, mailBinding.account)];
-      const { rig, recorded } = await openConformanceConnection(loader, candidate, temp, { connectionId, plain, actionId: options.capabilityId, destinations, mailBinding, historicalLookup: true });
+      const opened = await openConformanceConnection(loader, candidate, temp, { connectionId, plain, actionId: options.capabilityId, destinations, mailBinding, historicalLookup: true });
+      const rig = opened.rig;
+      activeRig.current = rig;
+      let recorded = opened.recorded;
+      let reconstructions = 0;
+      const previousCalls = { dispatch: 0, cancel: 0, lookup: 0, readback: 0 };
       try {
         const env: ProbeEnv = { rig, manifest: candidate.manifest, sample: { schemas: schemaIndex(candidate.manifest), destinations, adapterId: candidate.adapterId, connectionId }, recorded, plain, adapterId: candidate.adapterId, connectionId };
         const supplied = options.snapshot({ adapterId: candidate.adapterId, connectionId, account: mailBinding.account, provenance: actionProvenance(rig.conversationId) });
@@ -108,8 +125,26 @@ export async function runMailActionScenario(packageDir: string, options: MailAct
         await observe("dispatch", dispatched.run.outcome?.kind ?? dispatched.report.code ?? "refused");
         for (const step of steps) {
           if (!await rig.host.lifecycleJournal(rig.registry).read(operationId)) break;
-          if (step === "reopen") {
-            await rig.reopen();
+          if (step === "reopen" || step === "restart") {
+            let rebuilt;
+            if (step === "restart") {
+              const next = makeLoader();
+              const found = await next.discover();
+              const current = found.candidates.find(item => item.packageId === candidate.packageId && item.releaseDigest === candidate.releaseDigest);
+              if (!current) throw new ConformanceRefusal("package_changed", "The package changed before reconstruction.");
+              const activated = await next.activate(current.packageId);
+              if (!activated.ok) throw new ConformanceRefusal(activated.error.code, activated.error.message);
+              const replacement = next.trustedConnector(candidate.adapterId, { adapterId: candidate.adapterId, connectionId }, { authorizeConnection, actionCapabilityId: options.capabilityId });
+              if (!replacement.ok) throw new ConformanceRefusal(replacement.error.code, replacement.error.message);
+              if (plain.writerOwner !== replacement.value.connector.writerOwner || canonicalWire(plain.support) !== canonicalWire(replacement.value.connector.support)) throw new ConformanceRefusal("connection_changed", "The reconstructed connector changed its writer contract.");
+              for (const key of ["dispatch", "cancel", "lookup", "readback"] as const) previousCalls[key] += recorded.ownerCalls[key];
+              plain = replacement.value.connector;
+              rebuilt = recordConnector(plain);
+              recorded = rebuilt.recorded;
+              loader = next;
+              reconstructions++;
+            }
+            await rig.reopen(rebuilt?.connector);
             bridge = rig.host.lifecycleBridge(rig.registry, rig.bindings, () => plain.support, waitMs);
             if (!await bridge.activate({ stack: STACK, owner: plain.writerOwner, adapterId: candidate.adapterId, connectionId, capabilityId: options.capabilityId }, rig.lease)) throw new ConformanceRefusal("writer_inactive", "The reopened writer could not activate.");
             await observe(step, "reopened");
@@ -124,7 +159,7 @@ export async function runMailActionScenario(packageDir: string, options: MailAct
         }
         const stored = await rig.host.lifecycleJournal(rig.registry).read(operationId);
         return { packageDir: resolve(packageDir), packageId: candidate.packageId, adapterId: candidate.adapterId, capabilityId: options.capabilityId, operationId, snapshot,
-          stages, events: stored?.journal.events.map(entry => z.json().parse(entry)) ?? [], ownerCalls: { ...recorded.ownerCalls }, networkRequests: guard.count(), credentialRequests: 0 };
+          stages, events: stored?.journal.events.map(entry => z.json().parse(entry)) ?? [], ownerCalls: { dispatch: previousCalls.dispatch + recorded.ownerCalls.dispatch, cancel: previousCalls.cancel + recorded.ownerCalls.cancel, lookup: previousCalls.lookup + recorded.ownerCalls.lookup, readback: previousCalls.readback + recorded.ownerCalls.readback }, networkRequests: guard.count(), credentialRequests: 0, reconstructions };
       } finally { await rig.close(); }
     } finally { await engine.close(BACKGROUND_CONTEXT); }
   } finally { guard.release(); await rm(temp, { recursive: true, force: true }); }

@@ -6,6 +6,7 @@ import { canonicalWire } from "./operations/validation";
 import type { MailJudgementStore } from "./mail/judgement-store";
 import type { ObjectReference } from "./types";
 import type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceListing } from "./mail-read-source";
+import { unsubscribeMethod } from "../../surface/mc/desk/mail-unsubscribe";
 
 export type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceListing } from "./mail-read-source";
 
@@ -19,7 +20,7 @@ const PROVIDER_FAILURE: DeskMailHealth = { state: "stale", code: "provider_failu
 
 const firstParagraph = (text: string): string => (text.trim().split(PARAGRAPH_BREAK)[0] ?? "").trim().slice(0, MAIL_FIRST_PARAGRAPH_MAX);
 
-function bindingFor(source: MailReadSource, adapterId: string, connection: DeskAdapterConnection): MailConnectionBinding | null {
+export function mailBindingFor(source: MailReadSource, adapterId: string, connection: DeskAdapterConnection): MailConnectionBinding | null {
   if (connection.adapterId !== adapterId) return null;
   const matches = source.connections().filter(binding => binding.adapterId === adapterId && binding.connectionId === connection.connectionId);
   const [binding] = matches;
@@ -28,6 +29,7 @@ function bindingFor(source: MailReadSource, adapterId: string, connection: DeskA
 
 function listedMail(binding: MailConnectionBinding, item: MailSourceItem): DeskListedMail {
   const paragraph = item.firstParagraph === undefined ? undefined : firstParagraph(item.firstParagraph);
+  const unsubscribe = unsubscribeMethod(item.headers);
   return {
     ref: { connection: binding.connectionId, messageId: item.id },
     account: binding.account,
@@ -36,6 +38,7 @@ function listedMail(binding: MailConnectionBinding, item: MailSourceItem): DeskL
     receivedAt: item.receivedAt,
     unread: item.unread,
     ...(paragraph ? { firstParagraph: paragraph } : {}),
+    ...(unsubscribe?.kind === "one-click" ? { unsubscribe: { oneClick: true as const, host: new URL(unsubscribe.url).hostname } } : {}),
   };
 }
 
@@ -62,7 +65,7 @@ export function mailReadBridge(source: MailReadSource | undefined, adapterId: st
     listed(connection) {
       if (!published()) return Promise.reject(new DeskBackendUnavailableError(ADAPTER_UNAVAILABLE));
       if (admittedCallKey() !== connectionKey(connection)) return Promise.reject(new DeskBackendUnavailableError(OUTSIDE_ADMITTED_CALL));
-      const binding = source ? bindingFor(source, adapterId, connection) : null;
+      const binding = source ? mailBindingFor(source, adapterId, connection) : null;
       if (!source || !binding) return Promise.resolve(null);
       return Promise.resolve(listingOf(binding, source.listings().find(listing => listing.id === binding.sourceId)));
     },
@@ -76,7 +79,7 @@ export function mailJudgementBridge(source: MailReadSource | undefined, adapterI
       const admitted = admittedDispatch();
       const connection = { adapterId, connectionId: request.snapshot.connectionId };
       if (!admitted || admittedCallKey() !== connectionKey(connection) || canonicalWire(admitted) !== canonicalWire(request)) return Promise.reject(new DeskBackendUnavailableError({ code: "mail_judgement_unadmitted", message: "A Mail judgement requires the exact dispatch the Cortex runtime admitted." }));
-      const binding = source ? bindingFor(source, adapterId, connection) : null;
+      const binding = source ? mailBindingFor(source, adapterId, connection) : null;
       if (!judgements || !binding) return Promise.reject(new DeskBackendUnavailableError({ code: "mail_judgement_unavailable", message: "This connection has no Mail judgement store binding." }));
       return judgements.dispatch(binding, structuredClone(request), published);
     },

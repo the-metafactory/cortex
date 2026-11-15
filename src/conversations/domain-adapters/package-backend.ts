@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { TrustedConnector } from "../authority";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskObservationBinding } from "../../desk-sdk";
-import { OwnerSupportSchema, type DispatchRequest, type OwnerSupport } from "./operations/types";
+import { OwnerSupportSchema, type DispatchRequest, type LookupRequest, type OwnerSupport } from "./operations/types";
 import type { ObservationConnector } from "./reads/observation-types";
 import { QueryPageSchema } from "./reads/query-types";
 import type { AdapterDeclaration, BoundaryError } from "./types";
@@ -33,8 +33,13 @@ const settled = <T>(run: () => T): Promise<Awaited<T>> => new Promise(resolve =>
 
 const admittedCalls = new AsyncLocalStorage<string>();
 const admittedDispatches = new AsyncLocalStorage<{ request: DispatchRequest; active: boolean }>();
+const admittedLookups = new AsyncLocalStorage<{ request: LookupRequest; active: boolean }>();
 export const admittedDispatch = (): DispatchRequest | undefined => {
   const scope = admittedDispatches.getStore();
+  return scope?.active ? structuredClone(scope.request) : undefined;
+};
+export const admittedLookup = (): LookupRequest | undefined => {
+  const scope = admittedLookups.getStore();
   return scope?.active ? structuredClone(scope.request) : undefined;
 };
 /** The adapter-and-connection key of a backend call. */
@@ -135,7 +140,10 @@ export function adaptDeskBackend(input: DeskBackendInput): DeskBackendConnector 
       return settled(() => call(() => admittedDispatches.run(scope, () => action.dispatch?.(structuredClone(request), signal)))).finally(() => { scope.active = false; });
     },
     ...(action && typeof action.cancel === "function" ? { cancel: (request, signal) => settled(() => call(() => action.cancel?.(structuredClone(request), signal))) } : {}),
-    ...(action && typeof action.lookup === "function" ? { lookup: (request, signal) => settled(() => call(() => action.lookup?.(structuredClone(request), signal))) } : {}),
+    ...(action && typeof action.lookup === "function" ? { lookup: (request, signal) => {
+      const scope = { request: structuredClone(request), active: true };
+      return settled(() => call(() => admittedLookups.run(scope, () => action.lookup?.(structuredClone(request), signal)))).finally(() => { scope.active = false; });
+    } } : {}),
     ...(readbackReady ? { readbackCapabilityId: readbackTarget, readback: (request, signal) => settled(() => call(() => action.readback?.(structuredClone(request), signal))) } : {}),
     ...(hasQuery ? {
       query: async (request, signal) => {
