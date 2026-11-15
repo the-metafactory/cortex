@@ -32,7 +32,7 @@ const blocked: DeskItem = {
   why: "The agent in app cannot go on without a decision from you.",
   score: 65,
   actions: [{ id: "ranger.rule", label: "Give your ruling", role: "primary", wired: true }],
-  detail: { summary: "blocked: …", history: [], refs: ["example/app#12"], links: [{ label: "Issue", url: "https://github.com/example/app/issues/12" }] },
+  detail: { summary: "blocked: …", history: [], refs: ["example/app#12"], links: [{ kind: "issue", label: "Issue", url: "https://github.com/example/app/issues/12" }] },
   question: { condition: "the principal picks CSV or JSON", reason: "Blocked: the spec names both formats." },
   explanation,
 };

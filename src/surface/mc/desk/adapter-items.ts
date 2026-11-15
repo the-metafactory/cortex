@@ -92,7 +92,7 @@ function mappedItem(row: ObservationView, binding: ReadBinding, now: number, own
       detail: {
         summary: why.data,
         history: [`${freshnessLabel(status) ?? "Observed"}: last success ${new Date(row.lastSuccessAt).toISOString()}; last attempt ${row.lastAttemptAt === null ? "unavailable" : new Date(row.lastAttemptAt).toISOString()}.`],
-        refs: [key], links: url.data === null ? [] : [{ label: "Open source", url: url.data }],
+        refs: [key], links: url.data === null ? [] : [{ kind: "source" as const, label: "Open source", url: url.data }],
       },
     },
   };

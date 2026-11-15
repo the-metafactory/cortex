@@ -93,7 +93,7 @@ export function meetingItems(events: DeskEvent[], now: number, minutes: number):
           summary: e.title,
           history: [`Starts ${clock(e.at)}${e.end ? `, ends ${clock(e.end)}` : ""}${e.note ? `, ${e.note}` : ""}`],
           refs: [e.key],
-          links: e.url ? [{ label: e.online ? "Join" : "Open", url: e.url }] : [],
+          links: e.url ? [{ kind: e.online ? "meeting-join" : "meeting", label: e.online ? "Join" : "Open", url: e.url }] : [],
         },
         eventKey: e.key,
         since: e.at,
