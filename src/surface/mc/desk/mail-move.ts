@@ -6,7 +6,7 @@ import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailF
 import { CommandTimeout } from "../common/spawn";
 import { DAY_MS } from "./time";
 import { addSender, isVip, listVips, normalizeVip } from "./vips";
-import { refuse as refuseWith, wording, type ActRefusal, type ActWording } from "./act-result";
+import { failed, refuse as refuseWith, wording, type ActRefusal, type ActWording } from "./act-result";
 import type { DeskPhrase } from "./phrases";
 import { junkIdentity } from "./sources/mail-identity";
 
@@ -79,13 +79,13 @@ async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, do
     const result = await deps.run(c.argv, JSON.stringify(c.request), timeoutSeconds * 1000);
     if (result.code !== 0) {
       const line = oneLine(result.stderr || result.stdout, `The ${c.command} command exited with code ${result.code}.`);
-      return refuse(502, c.failed(line), { code: "act.failed", params: { kind: c.command } }, line);
+      return failed(502, c.failed(line), line, c.command);
     }
     stdout = result.stdout;
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    if (err instanceof CommandTimeout) return refuse(504, `The ${c.command} command ${err.message}. ${c.timedOut}`, { code: "act.failed", params: { kind: c.command } }, why);
-    return refuse(502, `The ${c.command} command did not run: ${why}`, { code: "act.failed", params: { kind: c.command } }, why);
+    if (err instanceof CommandTimeout) return failed(504, `The ${c.command} command ${err.message}. ${c.timedOut}`, why, c.command);
+    return failed(502, `The ${c.command} command did not run: ${why}`, why, c.command);
   } finally {
     deps.ledger.release(c.key);
   }
@@ -93,7 +93,7 @@ async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, do
     return done(stdout);
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    return refuse(500, `The mail moved, but the Desk could not record it: ${why}`, { code: "act.failed", params: { kind: "move" } }, why);
+    return failed(500, `The mail moved, but the Desk could not record it: ${why}`, why, "move");
   }
 }
 

@@ -7,7 +7,7 @@ import { logMailDecision, mailFeatures, type MailLogAction, type MailFeatures } 
 import { loggedAction } from "./mail-similar";
 import { CORRECTION_MOVES } from "./mail-correction-schema";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult, type MoveTarget } from "./mail-move";
-import type { ActRefusal, ActWording } from "./act-result";
+import { failed, type ActRefusal, type ActWording } from "./act-result";
 import { CommandTimeout } from "../common/spawn";
 import { replySubject } from "./mail-triage";
 import type { SourceMail, SourceReading } from "./sources/command";
@@ -83,7 +83,7 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Move
     return { ok: true, message: `${marked}.`, messagePhrase: { code: "mail.unimportant-hidden", params: { sender: who } } };
   }
   const moved = await moveMail(mail, "trash", deps, "unimportant", features);
-  if (!moved.ok) return refuse(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`, { code: "act.failed", params: { kind: "move" } }, moved.error);
+  if (!moved.ok) return failed(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`, moved.error, "move");
   return { ...moved, message: `${moved.message} ${marked}.`, messagePhrase: { code: "mail.unimportant-moved", params: { target: "trash", sender: who } } };
 }
 
@@ -117,13 +117,13 @@ export async function draftReply(mail: ListedMail, body: string, deps: Omit<Move
     const result = await deps.run(argv, stdin, config.timeoutSeconds * 1000);
     if (result.code !== 0) {
       const line = oneLine(result.stderr || result.stdout, `the draft command exited with code ${result.code}.`);
-      return refuse(502, `The draft was not saved: ${line}`, { code: "act.failed", params: { kind: "draft" } }, line);
+      return failed(502, `The draft was not saved: ${line}`, line, "draft");
     }
     return { ok: true, message: `Reply saved in your ${mail.account} Drafts.`, id: draftId(result.stdout), messagePhrase: { code: "mail.reply-drafted", params: { account: mail.account } } };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    if (err instanceof CommandTimeout) return refuse(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`, { code: "act.failed", params: { kind: "draft" } }, why);
-    return refuse(502, `The draft command did not run: ${why}`, { code: "act.failed", params: { kind: "draft" } }, why);
+    if (err instanceof CommandTimeout) return failed(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`, why, "draft");
+    return failed(502, `The draft command did not run: ${why}`, why, "draft");
   } finally {
     deps.ledger.release(key);
   }
@@ -162,13 +162,13 @@ export async function reportMail(mail: ListedMail, report: MailReportConfig | un
     const result = await deps.run(report.command, stdin, report.timeoutSeconds * 1000);
     if (result.code !== 0) {
       const line = oneLine(result.stderr || result.stdout, `the report command exited with code ${result.code}.`);
-      return refuse(502, `The mail was not reported: ${line}`, { code: "act.failed", params: { kind: "report" } }, line);
+      return failed(502, `The mail was not reported: ${line}`, line, "report");
     }
     return { ok: true, message: reportMessage(result.stdout, report.to ? `A report draft to ${report.to} is in your ${mail.account} Drafts. Send it from there.` : "The mail was reported."), messagePhrase: { code: "mail.reported", params: report.to ? { to: report.to } : {} } };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
-    if (err instanceof CommandTimeout) return refuse(504, `The report command ${err.message}. A draft may exist; check Drafts.`, { code: "act.failed", params: { kind: "report" } }, why);
-    return refuse(502, `The report command did not run: ${why}`, { code: "act.failed", params: { kind: "report" } }, why);
+    if (err instanceof CommandTimeout) return failed(504, `The report command ${err.message}. A draft may exist; check Drafts.`, why, "report");
+    return failed(502, `The report command did not run: ${why}`, why, "report");
   } finally {
     deps.ledger.release(key);
   }
