@@ -12,11 +12,12 @@ import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { correctMail, draftReply, MAIL_CORRECTIONS, markUnimportant, reportMail, resolveListedMail, type ListedMail } from "../desk/mail-actions";
 import { logMailDecision, mailFeatures, recordMailOpened } from "../desk/mail-log";
-import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
+import { blockSenderDomain, MOVE_TARGETS, moveMail, restoreJunkMail, undoMove, type MoveDeps } from "../desk/mail-move";
+import { listedJunk } from "../desk/mail-junk";
 import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
 import { suspicionContext, suspicionOf, type SuspicionReason } from "../desk/mail-suspicion";
-import { dismissSuspicion, removeTrustedSender, undoDismissal } from "../desk/mail-trust";
+import { dismissSuspicion, recordNotSpamCorrection, removeTrustedSender, undoDismissal } from "../desk/mail-trust";
 import { archiveWhatArrives, offerContext, unsubscribeMail, type OneClickPost } from "../desk/mail-unsubscribe";
 import { addMailToStudio, mailForStudio, MAX_MAIL_REASON, proposeMailThread } from "../desk/mail-studio";
 import type { CaptureModel } from "../desk/studio/capture";
@@ -59,6 +60,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
   z.object({ action: z.enum(["trash", "unimportant", "report", "digest.keep", "unsubscribe", "unsubscribe.rule"]), key: z.string() }).strict(),
   z.object({ action: z.literal("move"), key: z.string(), target: z.enum(MOVE_TARGETS) }).strict(),
+  z.object({ action: z.enum(["mail.spam", "mail.notspam"]), key: z.string().min(1).max(2000) }).strict(),
   z.object({ action: z.literal("correct"), key: z.string(), said: z.enum(MAIL_CORRECTIONS), correction: z.number().int().positive().optional() }).strict(),
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
   z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails), target: z.enum(MOVE_TARGETS).optional() }).strict(),
@@ -137,9 +139,14 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if ((body.action === "hide" || body.action === "hide.undo") && !body.key.startsWith("mail:")) return fail(400, "A hide key starts with mail:.");
   if (body.action === "hide.undo") return answer(undoHide(db, body.key.slice("mail:".length)));
   if (body.action === "attach.undo") return answer(await undoAttach(db, body.link, undoAttachDeps(db, runtime, now)));
+  if (body.action === "mail.notspam") {
+    const mail = listedJunk(runtime.sourceCache?.cached() ?? [], now).find(m => m.key === body.key);
+    return mail ? answer(await restoreJunkMail(mail, moveDeps, id => recordNotSpamCorrection(db, mail, id, now))) : fail(409, "The Desk no longer lists this junk mail.");
+  }
   const listed = resolveListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!listed.ok) return fail(409, listed.error);
   const mail = listed.mail;
+  if (body.action === "mail.spam") return answer(await moveMail(mail, "junk", moveDeps));
   if (body.action === "opened") {
     const recorded = recordMailOpened(db, mail, now);
     return Response.json({ ok: true, recorded, messagePhrase: { code: "mail.opened", params: { recorded } } }, { headers: noStore });

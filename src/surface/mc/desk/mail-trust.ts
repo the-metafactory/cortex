@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { ListedMail } from "./mail-actions";
 import { logMailDecision, mailFeatures } from "./mail-log";
 import { refuse } from "./mail-move";
+import { junkIdentity } from "./sources/mail-identity";
 import { SENDER_WIDE_CODES, senderKey, type SuspicionCode, type SuspicionReason } from "./mail-suspicion";
 
 export const TRUST_DONE = "mail.trust";
@@ -27,6 +28,7 @@ export interface TrustedOneMail {
 }
 
 export interface TrustedView {
+  notSpam?: boolean;
   sender: string;
   codes: SuspicionCode[];
   mails: TrustedOneMail[];
@@ -39,8 +41,15 @@ export type TrustResult = { ok: true; message: string; undo?: string; restored?:
 const sentenceOf = (v: Omit<TrustedView, "sentence">): string => {
   const one = v.mails[0];
   const mails = v.mails.length > 1 ? `${v.mails.length} single mails are not flagged for their own reasons.` : one ? `One mail (“${one.subject ?? "no subject"}”) is not flagged for ${words(one.codes)}.` : "";
-  return [...(v.codes.length > 0 ? [`Not flagged for ${words(v.codes)}.`] : []), ...(mails ? [mails] : [])].join(" ");
+  return [...(v.notSpam ? ["Marked as a trusted sender after Not spam."] : []), ...(v.codes.length > 0 ? [`Not flagged for ${words(v.codes)}.`] : []), ...(mails ? [mails] : [])].join(" ");
 };
+
+export function recordNotSpamCorrection(db: Database, mail: ListedMail, moveId: string, now: number): number {
+  const logId = logMailDecision(db, mailFeatures(db, mail), "kept", "correction", now, "INBOX");
+  db.query("INSERT INTO desk_mail_trusted (dismissal, sender, code, message_id, subject, log_id, created_at) VALUES (?, ?, 'notspam', ?, ?, ?, ?)")
+    .run(`mail-move:${moveId}`, senderKey(mail.from.address), junkIdentity(mail.account, mail.id), mail.subject.slice(0, 300), logId, now);
+  return logId;
+}
 
 /**
  * "Not phishing" on a flagged mail. Reply-To, display-name and link reasons are remembered for that exact sender address;
@@ -86,12 +95,13 @@ export function undoDismissal(db: Database, id: string, now: number): TrustResul
 
 /** Every remembered "Not phishing", one entry per sender address, for Settings. */
 export function trustedViews(db: Database): TrustedView[] {
-  const rows = db.query<{ sender: string; code: SuspicionCode; message_id: string; subject: string | null; created_at: number }, []>("SELECT sender, code, message_id, subject, created_at FROM desk_mail_trusted ORDER BY sender, created_at, id").all();
+  const rows = db.query<{ sender: string; code: SuspicionCode | "notspam"; message_id: string; subject: string | null; created_at: number }, []>("SELECT sender, code, message_id, subject, created_at FROM desk_mail_trusted ORDER BY sender, created_at, id").all();
   const bySender = new Map<string, Omit<TrustedView, "sentence"> & { byMail: Map<string, TrustedOneMail> }>();
   for (const r of rows) {
-    const v = bySender.get(r.sender) ?? { sender: r.sender, codes: [], mails: [], at: r.created_at, byMail: new Map<string, TrustedOneMail>() };
+    const v: Omit<TrustedView, "sentence"> & { byMail: Map<string, TrustedOneMail> } = bySender.get(r.sender) ?? { sender: r.sender, codes: [], mails: [], at: r.created_at, byMail: new Map<string, TrustedOneMail>() };
     v.at = Math.max(v.at, r.created_at);
-    if (r.message_id === "") v.codes.push(r.code);
+    if (r.code === "notspam") v.notSpam = true;
+    else if (r.message_id === "") v.codes.push(r.code);
     else {
       const one = v.byMail.get(r.message_id) ?? { codes: [], subject: r.subject };
       one.codes.push(r.code);
