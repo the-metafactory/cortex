@@ -85,13 +85,13 @@ describe("POST /api/desk/outline/ask", () => {
     expect((await both.ask({ requestId: id(), row: "taxes", kind: "answer", question: "Where are the receipts?" })).status).toBe(200);
     expect(both.calls.map(c => [c.model, c.content.local])).toEqual([["local-model", true]]);
     const cloudOnly = rig(endpoint("cloud-model"));
-    expect(await cloudOnly.ask({ requestId: id(), row: "taxes", kind: "answer", question: "Where are the receipts?" })).toEqual({ status: 503, body: { ok: false, error: "No local model is configured. Nothing was sent; no cloud fallback is used." } });
+    expect(await cloudOnly.ask({ requestId: id(), row: "taxes", kind: "answer", question: "Where are the receipts?" })).toEqual({ status: 503, body: { ok: false, messagePhrase: expect.anything(), error: "No local model is configured. Nothing was sent; no cloud fallback is used." } });
     expect(cloudOnly.calls).toEqual([]);
   });
 
   test("refuses with 503 when no model serves the policy or the row's area has no policy, and calls nothing", async () => {
     const none = rig(null);
-    expect(await none.ask({ requestId: id(), row: "wing", kind: "answer", question: "How many folds?" })).toEqual({ status: 503, body: { ok: false, error: "No conversation model is configured. Nothing was sent." } });
+    expect(await none.ask({ requestId: id(), row: "wing", kind: "answer", question: "How many folds?" })).toEqual({ status: 503, body: { ok: false, messagePhrase: expect.anything(), error: "No conversation model is configured. Nothing was sent." } });
     const localOnly = rig();
     localOnly.options.studio = { dir: "/nonexistent/studio", maxActive: 5 };
     expect((await localOnly.ask({ requestId: id(), row: "wing", kind: "answer", question: "How many folds?" })).status).toBe(503);
@@ -134,7 +134,7 @@ describe("POST /api/desk/outline/ask", () => {
       expect(failed.status).toBe(502);
       expect(failed.body.error).toContain("could not answer");
     }
-    expect((await r.ask(body)).body).toEqual({ ok: true, reply: "Fold it twice." });
+    expect((await r.ask(body)).body).toMatchObject({ ok: true, reply: "Fold it twice." });
     expect(r.calls).toHaveLength(4);
     const longer = rig(BOTH, () => ({ reply: "I made it longer.", replacement: `${NOTE} And more.` }));
     expect((await longer.ask({ requestId: id(), row: "wing", kind: "shorten", passage: NOTE })).status).toBe(502);
@@ -179,7 +179,7 @@ describe("POST /api/desk/outline/ask behind the Desk write gates", () => {
       expect(await (await post(ctx.port, { Host: "evil.example" })).json()).toMatchObject({ error: "forbidden_host" });
       expect(await (await post(ctx.port, { Origin: "https://evil.example" })).json()).toMatchObject({ error: "forbidden_origin" });
       const served = await post(ctx.port);
-      expect({ status: served.status, body: await served.json() }).toEqual({ status: 503, body: { ok: false, error: "No conversation model is configured. Nothing was sent." } });
+      expect({ status: served.status, body: await served.json() }).toEqual({ status: 503, body: { ok: false, messagePhrase: expect.anything(), error: "No conversation model is configured. Nothing was sent." } });
     } finally { ctx.stop(true); }
     const denied = serve(false);
     try {

@@ -7,7 +7,7 @@ import { startServer } from "../server";
 import { HandledLedger } from "../desk/actions";
 import { MailClassifier, saveClassification, type MailClassification } from "../desk/classify";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { DESK_PHRASE_CODES, type DeskPhrase } from "../desk/phrases";
+import { DESK_ACT_PHRASE_CODES, DESK_ITEM_PHRASE_CODES, DESK_PHRASE_CODES, type DeskPhrase } from "../desk/phrases";
 import { mailItems } from "../desk/rank";
 import { addNote } from "../desk/notes";
 import { logMailDecision, mailFeatures } from "../desk/mail-log";
@@ -114,7 +114,9 @@ function noteRetry(status: "failed" | "done", message: string | null): void {
 }
 
 test("pins the exact Desk phrase vocabulary and its union coverage", () => {
-  expect<readonly string[]>(DESK_PHRASE_CODES).toEqual("ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious".split(" "));
+  expect<readonly string[]>(DESK_ITEM_PHRASE_CODES).toEqual("ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious".split(" "));
+  expect<readonly string[]>(DESK_ACT_PHRASE_CODES).toEqual("act.done act.invalid act.forbidden act.unknown-target act.closed-item act.busy act.not-set-up act.unavailable act.duplicate act.method act.failed act.refused mail.moved mail.restored mail.domain-blocked mail.unimportant-moved mail.unimportant-hidden mail.reply-drafted mail.reported mail.correction-recorded mail.corrected mail.swept mail.sweep-undone mail.snoozed mail.snooze-cancelled mail.hidden mail.hide-undone mail.kept mail.unsubscribed mail.unsubscribe-rule-archived mail.dismissed mail.dismissal-undone mail.sender-trusted mail.opened mail.attached mail.attach-undone mail.linked mail.link-undone mail.handed mail.handoff-approved mail.handoff-discarded mail.handoff-retried mail.invite-proposed mail.invite-replied mail.studio-added mail.studio-proposed create.done create.kept autonomy.set handoff.done routine.saved routine.paused routine.resumed routine.removed routine.installed routine.denied routine.approved routine.auto routine.approval routine.discarded studio.done studio.spar-queued ranger.action-done ranger.action-queued".split(" "));
+  expect<readonly string[]>(DESK_PHRASE_CODES).toEqual([...DESK_ITEM_PHRASE_CODES, ...DESK_ACT_PHRASE_CODES]);
   const coversUnion: Exclude<DeskPhrase["code"], typeof DESK_PHRASE_CODES[number]> extends never ? true : never = true;
   expect(coversUnion).toBe(true);
   expect(new Set(DESK_PHRASE_CODES).size).toBe(DESK_PHRASE_CODES.length);
@@ -211,7 +213,7 @@ test("GET /api/desk serves every phrase code beside its original sentence or fla
     expect<object>(phrase).toEqual(Object.keys(params).length ? { code, params } : { code });
     seen.add(code);
   }
-  expect([...seen].sort()).toEqual([...DESK_PHRASE_CODES].sort());
+  expect([...seen].sort()).toEqual([...DESK_ITEM_PHRASE_CODES].sort());
 });
 
 test("mixed mail wording separates prose, titles and URLs from named VIP and ISO parameters", () => {

@@ -6,6 +6,8 @@ import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailF
 import { CommandTimeout } from "../common/spawn";
 import { DAY_MS } from "./time";
 import { addSender, isVip, listVips, normalizeVip } from "./vips";
+import { refuse as refuseWith, wording, type ActRefusal, type ActWording } from "./act-result";
+import type { DeskPhrase } from "./phrases";
 
 export const MOVE_TARGETS = ["archive", "junk", "trash"] as const;
 export type MoveTarget = (typeof MOVE_TARGETS)[number];
@@ -36,9 +38,11 @@ export interface MoveDeps {
   newId?: () => string;
 }
 
-export type MoveResult = { ok: true; message: string; undo?: string; block?: string; restored?: string } | { ok: false; status: number; error: string };
+export type MoveResult = ({ ok: true; message: string; undo?: string; block?: string; restored?: string } & ActWording) | ActRefusal;
 
-export const refuse = (status: number, error: string): { ok: false; status: number; error: string } => ({ ok: false, status, error });
+export const refuse = (status: number, error: string, messagePhrase?: DeskPhrase, detail?: string): ActRefusal => refuseWith(status, error, messagePhrase, detail);
+
+export const moved = (message: string, messagePhrase?: DeskPhrase, extra: { undo?: string; block?: string; restored?: string } = {}): MoveResult => ({ ok: true, message, ...wording(messagePhrase ?? { code: "act.done" }), ...extra });
 
 interface Printed {
   message: string;
@@ -68,22 +72,27 @@ interface Claimed {
 }
 
 async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, done: (stdout: string) => MoveResult): Promise<MoveResult> {
-  if (!deps.ledger.claim(c.key)) return refuse(409, "This mail is already being moved.");
+  if (!deps.ledger.claim(c.key)) return refuse(409, "This mail is already being moved.", { code: "act.busy", params: { kind: "move" } });
   let stdout: string;
   try {
     const result = await deps.run(c.argv, JSON.stringify(c.request), timeoutSeconds * 1000);
-    if (result.code !== 0) return refuse(502, c.failed(oneLine(result.stderr || result.stdout, `The ${c.command} command exited with code ${result.code}.`)));
+    if (result.code !== 0) {
+      const line = oneLine(result.stderr || result.stdout, `The ${c.command} command exited with code ${result.code}.`);
+      return refuse(502, c.failed(line), { code: "act.failed", params: { kind: c.command } }, line);
+    }
     stdout = result.stdout;
   } catch (err) {
-    if (err instanceof CommandTimeout) return refuse(504, `The ${c.command} command ${err.message}. ${c.timedOut}`);
-    return refuse(502, `The ${c.command} command did not run: ${err instanceof Error ? err.message : String(err)}`);
+    const why = err instanceof Error ? err.message : String(err);
+    if (err instanceof CommandTimeout) return refuse(504, `The ${c.command} command ${err.message}. ${c.timedOut}`, { code: "act.failed", params: { kind: c.command } }, why);
+    return refuse(502, `The ${c.command} command did not run: ${why}`, { code: "act.failed", params: { kind: c.command } }, why);
   } finally {
     deps.ledger.release(c.key);
   }
   try {
     return done(stdout);
   } catch (err) {
-    return refuse(500, `The mail moved, but the Desk could not record it: ${err instanceof Error ? err.message : String(err)}`);
+    const why = err instanceof Error ? err.message : String(err);
+    return refuse(500, `The mail moved, but the Desk could not record it: ${why}`, { code: "act.failed", params: { kind: "move" } }, why);
   }
 }
 
@@ -106,11 +115,11 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
   const config = deps.config;
   const move = config?.move;
   const argv = move?.length ? move : target === "trash" ? config?.trash : undefined;
-  if (!config || !argv?.length) return refuse(409, NOT_SET[target]);
+  if (!config || !argv?.length) return refuse(409, NOT_SET[target], { code: "act.not-set-up", params: { feature: "move" } });
   const account = mail.account;
-  if (!account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot move it.");
+  if (!account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot move it.", { code: "act.invalid", params: { field: "account" } });
   const already = movedTarget(deps.ledger, mail.id);
-  if (already) return refuse(409, `This mail is already in ${FOLDER[already]}.`);
+  if (already) return refuse(409, `This mail is already in ${FOLDER[already]}.`, { code: "act.duplicate", params: { kind: "move" } });
   const command = move?.length ? "move" : "trash";
   const request: Record<string, string> = command === "move" ? { action: "move", account, messageId: mail.id, target } : { action: "trash", account, messageId: mail.id };
   return runClaimed(deps, config.timeoutSeconds, { key: claimKey(mail.id), argv, request, command, failed: (line) => line, timedOut: `The mail may have moved; check ${FOLDER[target]}.` }, (stdout) => {
@@ -119,7 +128,7 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
     const correction = by?.correction;
     if (command !== "move") {
       if (correction === undefined) logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
-      return { ok: true, message };
+      return moved(message, { code: "mail.moved", params: { target } });
     }
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
     deps.db.transaction(() => {
@@ -130,7 +139,7 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
       by?.recorded?.(id);
       if (correction === undefined) logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
     })();
-    return { ok: true, message, undo: id, ...(target === "junk" ? { block: `@${senderDomain(mail.from.address)}` } : {}) };
+    return moved(message, { code: "mail.moved", params: { target } }, { undo: id, ...(target === "junk" ? { block: `@${senderDomain(mail.from.address)}` } : {}) });
   });
 }
 
@@ -167,11 +176,11 @@ const readMove = (db: Database, id: string): MoveRow | null =>
 export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> {
   const config = deps.config;
   const argv = config?.move;
-  if (!config || !argv?.length) return refuse(409, "Undo needs the move command, and it is not set up on this stack.");
+  if (!config || !argv?.length) return refuse(409, "Undo needs the move command, and it is not set up on this stack.", { code: "act.not-set-up", params: { feature: "move" } });
   const row = readMove(deps.db, id);
-  if (!row) return refuse(404, "The Desk has no record of that move.");
-  if (row.undone_at !== null) return refuse(409, "That move is already undone.");
-  if (deps.now - row.created_at > UNDO_WINDOW_MS) return refuse(409, "That move is too old to undo from the Desk. Move the mail back in your mail client.");
+  if (!row) return refuse(404, "The Desk has no record of that move.", { code: "act.unknown-target", params: { kind: "move" } });
+  if (row.undone_at !== null) return refuse(409, "That move is already undone.", { code: "act.duplicate", params: { kind: "move" } });
+  if (deps.now - row.created_at > UNDO_WINDOW_MS) return refuse(409, "That move is too old to undo from the Desk. Move the mail back in your mail client.", { code: "act.closed-item", params: { kind: "move" } });
   const request = { action: "restore", account: row.account, messageId: row.message_id, from: row.target };
   const claimed: Claimed = { key: claimKey(row.message_id), argv, request, command: "move", failed: (line) => `The mail was not moved back: ${line}`, timedOut: "The mail may be back; check INBOX." };
   return runClaimed(deps, config.timeoutSeconds, claimed, (stdout) => {
@@ -185,7 +194,7 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
       logMailDecision(deps.db, features, "restore", "desk", deps.now, "INBOX");
       return deleted > 0;
     })();
-    return { ok: true, message: withdrawn ? `${message} Your correction is withdrawn.` : message, restored: `mail:${row.message_id}` };
+    return moved(withdrawn ? `${message} Your correction is withdrawn.` : message, { code: "mail.restored", params: { target: row.target, ...(withdrawn ? { correctionWithdrawn: true } : {}) } }, { restored: `mail:${row.message_id}` });
   });
 }
 
@@ -195,14 +204,14 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
  */
 export function blockSenderDomain(db: Database, id: string, now: number): MoveResult {
   const row = readMove(db, id);
-  if (!row) return refuse(404, "The Desk has no record of that move.");
-  if (row.target !== "junk") return refuse(409, "Only mail moved to Junk can block its sender's domain.");
+  if (!row) return refuse(404, "The Desk has no record of that move.", { code: "act.unknown-target", params: { kind: "move" } });
+  if (row.target !== "junk") return refuse(409, "Only mail moved to Junk can block its sender's domain.", { code: "act.invalid", params: { field: "target" } });
   const domain = normalizeVip(`@${senderDomain(row.sender)}`);
-  if (!domain?.startsWith("@")) return refuse(409, "The sender's address has no domain the Desk can block.");
+  if (!domain?.startsWith("@")) return refuse(409, "The sender's address has no domain the Desk can block.", { code: "act.invalid", params: { field: "sender" } });
   const vips = listVips(db).map((v) => v.address);
   if (isVip(new Set(vips), row.sender) || vips.some((v) => v.endsWith(domain))) {
-    return refuse(409, `${domain} has a sender on your VIP list, and VIPs always show. Nothing was blocked.`);
+    return refuse(409, `${domain} has a sender on your VIP list, and VIPs always show. Nothing was blocked.`, { code: "act.forbidden", params: { reason: "vip" } });
   }
   addSender(db, "unimportant", domain, "Blocked after Spam", now);
-  return { ok: true, message: `Blocked ${domain}: its mail now counts as unimportant. You can change this in Settings.` };
+  return moved(`Blocked ${domain}: its mail now counts as unimportant. You can change this in Settings.`, { code: "mail.domain-blocked", params: { domain } });
 }

@@ -73,7 +73,7 @@ describe("Delete on a mail item", () => {
     const r = recorder();
     const res = await handleDeskMail(post({ action: "trash", key: "mail:g1@gitlab.example" }), db, rt, { run: r.run, now: () => NOW });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, message: "Moved to Trash." });
+    expect(await res.json()).toMatchObject({ ok: true, message: "Moved to Trash." });
     expect(r.calls).toEqual(TRASHED_G1);
     expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
   });
@@ -83,7 +83,7 @@ describe("Delete on a mail item", () => {
     const r = recorder({ code: 3, stdout: "", stderr: "warning: slow server\nThe message is no longer in the work INBOX.\n" });
     const res = await handleDeskMail(post({ action: "trash", key: "mail:g1@gitlab.example" }), db, rt, { run: r.run, now: () => NOW });
     expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ ok: false, error: "The message is no longer in the work INBOX." });
+    expect(await res.json()).toMatchObject({ ok: false, error: "The message is no longer in the work INBOX." });
     expect(await itemKeys(rt)).toEqual(["mail:g1@gitlab.example"]);
   });
 
@@ -169,7 +169,7 @@ describe("Draft a reply on a mail item", () => {
     const r = recorder({ code: 0, stdout: "{\"id\":\"d1@example.org\"}", stderr: "" });
     const res = await press(rt, r.run);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, message: "Reply saved in your work Drafts." });
+    expect(await res.json()).toMatchObject({ ok: true, message: "Reply saved in your work Drafts." });
     expect(r.calls).toEqual([{
       argv: DRAFT,
       stdin: JSON.stringify({ action: "draft", account: "work", messageId: "b1@example.org", to: "boss@example.org", subject: "Re: Budget", body: "Thanks, Friday works." }),
@@ -183,7 +183,7 @@ describe("Draft a reply on a mail item", () => {
     const r = recorder({ code: 1, stdout: "", stderr: "The work account has no Drafts mailbox.\n" });
     const res = await press(rt, r.run);
     expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ ok: false, error: "The draft was not saved: The work account has no Drafts mailbox." });
+    expect(await res.json()).toMatchObject({ ok: false, error: "The draft was not saved: The work account has no Drafts mailbox." });
     expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
   });
 
@@ -227,7 +227,7 @@ describe("Unimportant on a mail item", () => {
     const r = recorder();
     const res = await press(rt, r.run);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, message: "Moved to Trash. Mail from GitLab will be treated as unimportant." });
+    expect(await res.json()).toMatchObject({ ok: true, message: "Moved to Trash. Mail from GitLab will be treated as unimportant." });
     expect(listSenders(db, "unimportant").map((s) => [s.address, s.label])).toEqual([["gitlab@gitlab.example", "GitLab"]]);
     expect(storedClass("g1@gitlab.example")).toEqual({ category: "bulk", model: UNIMPORTANT_MODEL });
     expect(r.calls).toEqual(TRASHED_G1);
@@ -238,7 +238,7 @@ describe("Unimportant on a mail item", () => {
     const rt = await deskWith([GITLAB]);
     const res = await press(rt, recorder({ code: 3, stdout: "", stderr: "The message is no longer in the work INBOX.\n" }).run);
     expect(res.status).toBe(502);
-    expect(await res.json()).toEqual({ ok: false, error: "Mail from GitLab will be treated as unimportant, but moving it to Trash failed: The message is no longer in the work INBOX." });
+    expect(await res.json()).toMatchObject({ ok: false, error: "Mail from GitLab will be treated as unimportant, but moving it to Trash failed: The message is no longer in the work INBOX." });
     expect(listSenders(db, "unimportant").map((s) => s.address)).toEqual(["gitlab@gitlab.example"]);
     const after = (await view(rt)).items.find((i) => i.key === "mail:g1@gitlab.example");
     expect(after?.why).toBe("You marked mail from this sender unimportant.");
@@ -250,7 +250,7 @@ describe("Unimportant on a mail item", () => {
     const rt = await deskWith([GITLAB, BOSS], plain);
     const r = recorder();
     const res = await press(rt, r.run);
-    expect(await res.json()).toEqual({ ok: true, message: "Mail from GitLab will be treated as unimportant." });
+    expect(await res.json()).toMatchObject({ ok: true, message: "Mail from GitLab will be treated as unimportant." });
     expect(r.calls).toHaveLength(0);
     expect(storedClass("g1@gitlab.example")).toEqual({ category: "bulk", model: UNIMPORTANT_MODEL });
     expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
@@ -390,12 +390,13 @@ describe("Archive, Spam and Delete through one move command", () => {
     const res = await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run);
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ ok: true, message: "Moved to Archiv.", undo: expect.stringMatching(/^move-\d+$/) });
+    const undo: string = body.undo;
+    expect(body).toMatchObject({ ok: true, message: "Moved to Archiv.", undo: expect.stringMatching(/^move-\d+$/) });
     expect(r.calls).toEqual([{ argv: MOVE, stdin: { action: "move", account: "work", messageId: "g1@gitlab.example", target: "archive" } }]);
     expect(db.query("SELECT folder FROM desk_mail_moves").get()).toEqual({ folder: "Archiv" });
     expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
     const done = (await view(rt)).autonomy.done;
-    expect(done).toEqual([{ key: `mail-move:${body.undo}`, action: "mail.move", undo: body.undo, title: "Archived: “Pipeline g1@gitlab.example”", message: "Moved to Archiv.", at: NOW, ok: true }]);
+    expect(done).toEqual([{ key: `mail-move:${undo}`, action: "mail.move", undo, title: "Archived: “Pipeline g1@gitlab.example”", message: "Moved to Archiv.", at: NOW, ok: true }]);
   });
 
   it("sends Delete and the legacy trash request through the move command once it is set", async () => {
@@ -414,7 +415,7 @@ describe("Archive, Spam and Delete through one move command", () => {
     expect((await archive.json()).error).toBe("Archiving mail is not set up on this stack.");
     expect((await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "junk" }, r.run)).json()).error).toBe("Moving mail to Junk is not set up on this stack.");
     expect(r.calls).toEqual([]);
-    expect(await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "trash" }, r.run)).json()).toEqual({ ok: true, message: "Moved to Trash." });
+    expect(await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "trash" }, r.run)).json()).toMatchObject({ ok: true, message: "Moved to Trash." });
     expect(r.calls).toEqual([{ argv: TRASH, stdin: { action: "trash", account: "work", messageId: "g1@gitlab.example" } }]);
     expect((await view(rt)).autonomy.done).toEqual([]);
   });
@@ -457,7 +458,7 @@ describe("Undo of a move", () => {
     const { undo } = await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "junk" }, r.run)).json();
     expect(await itemKeys(rt)).toEqual([]);
     const res = await send(rt, { action: "undo", move: undo }, r.run);
-    expect(await res.json()).toEqual({ ok: true, message: "Moved back to INBOX from Junk.", restored: "mail:g1@gitlab.example" });
+    expect(await res.json()).toMatchObject({ ok: true, message: "Moved back to INBOX from Junk.", restored: "mail:g1@gitlab.example" });
     expect(r.calls[1]).toEqual({ argv: MOVE, stdin: { action: "restore", account: "work", messageId: "g1@gitlab.example", from: "junk" } });
     expect(await itemKeys(rt)).toEqual(["mail:g1@gitlab.example"]);
     const [line] = (await view(rt)).autonomy.done;
@@ -495,7 +496,7 @@ describe("Spam, and blocking the sender's domain as a second step", () => {
     expect(moved.block).toBe("@gitlab.example");
     expect(listSenders(db, "unimportant")).toEqual([]);
     const res = await send(rt, { action: "block", move: moved.undo }, r.run);
-    expect(await res.json()).toEqual({ ok: true, message: "Blocked @gitlab.example: its mail now counts as unimportant. You can change this in Settings." });
+    expect(await res.json()).toMatchObject({ ok: true, message: "Blocked @gitlab.example: its mail now counts as unimportant. You can change this in Settings." });
     expect(listSenders(db, "unimportant").map((s) => s.address)).toEqual(["@gitlab.example"]);
     expect(r.calls).toHaveLength(1);
   });

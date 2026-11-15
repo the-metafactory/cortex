@@ -114,7 +114,7 @@ describe("Preview a task hand-off", () => {
 describe("Hand a task to an agent", () => {
   it("publishes one signed direct task with the attempt id as correlation id, and a repeat answers the first receipt", async () => {
     const first = await hand("t1");
-    expect(first).toEqual({ status: 200, json: { ok: true, id: uuid(1), message: "Handed to Luna. The result comes back here as a card." } });
+    expect(first).toEqual({ status: 200, json: { ok: true, messagePhrase: expect.anything(), id: uuid(1), message: "Handed to Luna. The result comes back here as a card." } });
     expect(published).toHaveLength(1);
     const sent = published[0];
     expect(sent?.subject).toBe("local.ada.home.tasks.@did-mf-luna.desk-task");
@@ -138,7 +138,7 @@ describe("Hand a task to an agent", () => {
     if (!state || !node) throw new Error("seed missing");
     node.note = "Use the Monday numbers.";
     saveBalanceState(db, state);
-    expect(await act({ action: "hand", requestId: uuid(1), taskId: "t1", agent: "luna", briefHash: seen.briefHash })).toEqual({ status: 409, json: { ok: false, error: STALE_PREVIEW } });
+    expect(await act({ action: "hand", requestId: uuid(1), taskId: "t1", agent: "luna", briefHash: seen.briefHash })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: STALE_PREVIEW } });
     expect(published).toEqual([]);
   });
 
@@ -163,12 +163,12 @@ describe("Hand a task to an agent", () => {
     expect((await hand("t1", uuid(2))).json.error).toBe("Luna is already working on this task.");
     expect((await act({ action: "hand", taskId: "t1" })).status).toBe(400);
     runtime = { options, ledger: new HandledLedger() };
-    expect(await act({ action: "preview", taskId: "t1" })).toEqual({ status: 409, json: { ok: false, error: NOT_SET_UP } });
+    expect(await act({ action: "preview", taskId: "t1" })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: NOT_SET_UP } });
   });
 
   it("keeps a task the bus refused as failed, and Retry sends a fresh attempt whose answer counts while the old one's does not", async () => {
     busDown = "no responders";
-    expect(await hand("t1")).toEqual({ status: 502, json: { ok: false, error: "The task did not reach the bus: no responders. Nothing started; try again." } });
+    expect(await hand("t1")).toEqual({ status: 502, json: { ok: false, messagePhrase: expect.anything(), detail: expect.any(String), error: "The task did not reach the bus: no responders. Nothing started; try again." } });
     const failed = (await compose()).items.find((i) => i.key === `handoff:${uuid(1)}`);
     expect(failed?.title).toBe("Luna could not finish “Draft the engine notes”");
     expect(failed?.actions.map((a) => a.id)).toEqual(["task.retry", "task.discard"]);
@@ -227,7 +227,7 @@ describe("While the agent works and when it is done", () => {
     await hand("t1");
     feed(completed(attemptOf(), "Drafted the notes."));
     const done = await act({ action: "accept", id: uuid(1), done: true, requestId: uuid(2) });
-    expect(done.json).toEqual({ ok: true, message: "Marked “Draft the engine notes” done and closed the card.", receipt: uuid(2) });
+    expect(done.json).toMatchObject({ ok: true, message: "Marked “Draft the engine notes” done and closed the card.", receipt: uuid(2) });
     expect(findNode(loadBalanceState(db)?.outline ?? seed().outline, "t1")?.done).toBe(true);
     expect((await act({ action: "accept", id: uuid(1), done: true, requestId: uuid(2) })).json).toEqual(done.json);
     expect((await compose()).items.some((i) => i.kind === "task-handoff")).toBe(false);
@@ -236,7 +236,7 @@ describe("While the agent works and when it is done", () => {
 
     await hand("p1", uuid(3));
     feed(completed(attemptOf(), "Booked for Tuesday."));
-    expect((await act({ action: "accept", id: uuid(3), done: false, requestId: uuid(4) })).json).toEqual({ ok: true, message: "Closed the card. “Book the dentist” stays open." });
+    expect((await act({ action: "accept", id: uuid(3), done: false, requestId: uuid(4) })).json).toMatchObject({ ok: true, message: "Closed the card. “Book the dentist” stays open." });
     expect(findNode(loadBalanceState(db)?.outline ?? seed().outline, "p1")?.done).toBeUndefined();
   });
 
@@ -299,7 +299,7 @@ describe("Hand-off targets defined only in agents.d", () => {
     if (!resolved.options) throw new Error("no dispatch options");
     options = { ...options, dispatch: resolved.options };
     runtime = { ...runtime, options };
-    expect(await act({ action: "preview", taskId: "t1", agent: "ghost" })).toEqual({ status: 409, json: { ok: false, error: "ghost does not take Desk tasks on this stack." } });
+    expect(await act({ action: "preview", taskId: "t1", agent: "ghost" })).toEqual({ status: 409, json: { ok: false, messagePhrase: expect.anything(), error: "ghost does not take Desk tasks on this stack." } });
     expect(bootDispatch(["ghost"]).options).toBeUndefined();
     expect(published).toEqual([]);
   });

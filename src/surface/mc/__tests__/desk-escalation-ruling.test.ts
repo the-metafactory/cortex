@@ -157,7 +157,7 @@ describe("Vigil escalation explanations and answers", () => {
     const run = runtime();
     const response = await handleDeskRuling(post({ ref: "evil/repo#99", repo: "evil/repo", nodeId: "99" }), run, deps(soma));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, message: "Recorded your ruling on the escalated issue." });
+    expect(await response.json()).toMatchObject({ ok: true, message: "Recorded your ruling on the escalated issue." });
     expect(calls[0]).toEqual([DESK.somaBin!, "graph", "node", "13", "--repo", "github:github.com/example/other", "--json"]);
     expect(calls[1]?.slice(0, 4)).toEqual([DESK.somaBin!, "graph", "rule", "13"]);
     expect(calls[1]?.slice(-3)).toEqual(["--repo", "github:github.com/example/other", "--json"]);

@@ -168,7 +168,7 @@ describe("an auto-link in the classifier pass", () => {
     const one = activeMailLink(db, "m1");
     const two = activeMailLink(db, "m2");
     if (!one || !two) throw new Error("both mails should be linked");
-    expect(await undoByMail(s.rt, one.id)).toEqual({ status: 200, json: { ok: true, message: "“Agenda m1” is back on the Desk.", restored: "mail:m1" } });
+    expect(await undoByMail(s.rt, one.id)).toEqual({ status: 200, json: { ok: true, messagePhrase: expect.anything(), message: "“Agenda m1” is back on the Desk.", restored: "mail:m1" } });
     expect(activeMailLink(db, "m1")).toBeNull();
     expect(activeMailLink(db, "m2")?.id).toBe(two.id);
     expect(queryMailLog(db, { since: NOW + 1 }).map((e) => [e.messageId, e.action, e.where])).toEqual([["m1", "restore", "desk"]]);

@@ -20,72 +20,72 @@ const reviewBlock: BlockReason = {
 describe("state machine — valid transitions", () => {
   it("queued → dispatch → dispatched", () => {
     const result = transition("queued", { type: "dispatch" });
-    expect(result).toEqual({ ok: true, state: "dispatched", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "dispatched", blockReason: null });
   });
 
   it("dispatched → start → running", () => {
     const result = transition("dispatched", { type: "start" });
-    expect(result).toEqual({ ok: true, state: "running", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "running", blockReason: null });
   });
 
   it("running → block (permission) → blocked with reason", () => {
     const result = transition("running", { type: "block", reason: permissionBlock });
-    expect(result).toEqual({ ok: true, state: "blocked", blockReason: permissionBlock });
+    expect(result).toMatchObject({ ok: true, state: "blocked", blockReason: permissionBlock });
   });
 
   it("running → block (tool.error) → blocked with reason", () => {
     const result = transition("running", { type: "block", reason: toolErrorBlock });
-    expect(result).toEqual({ ok: true, state: "blocked", blockReason: toolErrorBlock });
+    expect(result).toMatchObject({ ok: true, state: "blocked", blockReason: toolErrorBlock });
   });
 
   it("running → block (review.checkpoint) → blocked with reason", () => {
     const result = transition("running", { type: "block", reason: reviewBlock });
-    expect(result).toEqual({ ok: true, state: "blocked", blockReason: reviewBlock });
+    expect(result).toMatchObject({ ok: true, state: "blocked", blockReason: reviewBlock });
   });
 
   it("running → complete → completed", () => {
     const result = transition("running", { type: "complete" });
-    expect(result).toEqual({ ok: true, state: "completed", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "completed", blockReason: null });
   });
 
   it("running → fail → failed", () => {
     const result = transition("running", { type: "fail" });
-    expect(result).toEqual({ ok: true, state: "failed", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "failed", blockReason: null });
   });
 
   it("blocked → resume → running (clears block_reason)", () => {
     const result = transition("blocked", { type: "resume" });
-    expect(result).toEqual({ ok: true, state: "running", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "running", blockReason: null });
   });
 
   it("blocked → principal_requeue → queued (clears block_reason)", () => {
     const result = transition("blocked", { type: "principal_requeue" });
-    expect(result).toEqual({ ok: true, state: "queued", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "queued", blockReason: null });
   });
 
   it("failed → principal_requeue → queued", () => {
     const result = transition("failed", { type: "principal_requeue" });
-    expect(result).toEqual({ ok: true, state: "queued", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "queued", blockReason: null });
   });
 
   it("queued → cancel → cancelled", () => {
     const result = transition("queued", { type: "cancel" });
-    expect(result).toEqual({ ok: true, state: "cancelled", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "cancelled", blockReason: null });
   });
 
   it("dispatched → cancel → cancelled", () => {
     const result = transition("dispatched", { type: "cancel" });
-    expect(result).toEqual({ ok: true, state: "cancelled", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "cancelled", blockReason: null });
   });
 
   it("running → cancel → cancelled", () => {
     const result = transition("running", { type: "cancel" });
-    expect(result).toEqual({ ok: true, state: "cancelled", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "cancelled", blockReason: null });
   });
 
   it("blocked → cancel → cancelled", () => {
     const result = transition("blocked", { type: "cancel" });
-    expect(result).toEqual({ ok: true, state: "cancelled", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "cancelled", blockReason: null });
   });
 });
 
@@ -280,7 +280,7 @@ describe("F-12 — principal_requeue legality (Decision 7)", () => {
 
   it("failed → principal_requeue → queued", () => {
     const result = transition("failed", { type: "principal_requeue" });
-    expect(result).toEqual({ ok: true, state: "queued", blockReason: null });
+    expect(result).toMatchObject({ ok: true, state: "queued", blockReason: null });
   });
 
   for (const from of [

@@ -181,7 +181,7 @@ describe("unsubscribe", () => {
     archivedUnread(5);
     const ledger = new HandledLedger();
     const { calls, post } = fakePost([500, 302, new Error("connect ETIMEDOUT")]);
-    expect(await unsubscribeMail(listed(letter("new")), ctx(), { db, ledger, now: NOW, post })).toEqual({ ok: false, status: 502, error: "The unsubscribe did not go through: lists.example answered HTTP 500." });
+    expect(await unsubscribeMail(listed(letter("new")), ctx(), { db, ledger, now: NOW, post })).toMatchObject({ ok: false, status: 502, error: "The unsubscribe did not go through: lists.example answered HTTP 500." });
     expect(unsubscribeOffer(db, letter("new"), ctx())).toMatchObject({ kind: "one-click", failed: "lists.example answered HTTP 500" });
     expect(await unsubscribeMail(listed(letter("new")), ctx(), { db, ledger, now: NOW + 1, post })).toMatchObject({ ok: false, error: expect.stringContaining("redirect (HTTP 302)") });
     expect(await unsubscribeMail(listed(letter("new")), ctx(), { db, ledger, now: NOW + 2, post })).toMatchObject({ ok: false, error: expect.stringContaining("could not be reached: connect ETIMEDOUT") });

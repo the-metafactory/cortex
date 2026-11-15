@@ -36,13 +36,13 @@ describe("a Message-ID listed under more than one account", () => {
   const two = [reading("a", [mail("work")]), reading("b", [mail("home")])];
 
   it("resolves to a named refusal", () => {
-    expect(resolveListedMail(two, KEY)).toEqual({ ok: false, reason: "ambiguous", error: AMBIGUOUS_ACCOUNT_REFUSAL });
+    expect(resolveListedMail(two, KEY)).toMatchObject({ ok: false, reason: "ambiguous", error: AMBIGUOUS_ACCOUNT_REFUSAL });
     expect(findListedMail(two, KEY)).toBeNull();
   });
 
   it("refuses when both accounts sit in one reading", () => {
     const one = [reading("a", [mail("work"), mail("home")])];
-    expect(resolveListedMail(one, KEY)).toEqual({ ok: false, reason: "ambiguous", error: AMBIGUOUS_ACCOUNT_REFUSAL });
+    expect(resolveListedMail(one, KEY)).toMatchObject({ ok: false, reason: "ambiguous", error: AMBIGUOUS_ACCOUNT_REFUSAL });
   });
 
   it("refuses every Desk mail action and runs no command", async () => {

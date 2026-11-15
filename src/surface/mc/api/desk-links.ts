@@ -1,3 +1,4 @@
+import { withActPhrase } from "../desk/act-result";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { DeskRuntime } from "../desk/compose";
@@ -49,7 +50,7 @@ async function subjectOf(db: Database, runtime: DeskRuntime, from: Subject, now:
  * links a task, Studio thread or note to a meeting the Desk lists, past or upcoming; {op: "unlink", link} ends it. A mail is
  * linked through {action: "attach"} on /api/desk/mail, and both undo doors end the same link.
  */
-export async function handleDeskLinks(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskLinksDeps = {}): Promise<Response> {
+async function handleDeskLinksRaw(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskLinksDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   if (!runtime?.options?.enabled) return fail(409, "The Desk is turned off on this stack.");
   const parsed = LinksRequestSchema.safeParse(await req.json().catch(() => null));
@@ -70,3 +71,5 @@ async function link(db: Database, runtime: DeskRuntime, from: Subject, event: st
   if (typeof target === "string") return { ok: false as const, status: 409, error: target };
   return linkToMeeting(db, subject, target, { id: ctx.newId(), requestId: ctx.requestId, origin: "desk", now: ctx.now });
 }
+
+export const handleDeskLinks = async (req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskLinksDeps = {}): Promise<Response> => withActPhrase(req, new URL(req.url).pathname, await handleDeskLinksRaw(req, db, runtime, deps));

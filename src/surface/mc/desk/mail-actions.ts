@@ -7,6 +7,7 @@ import { logMailDecision, mailFeatures, type MailLogAction, type MailFeatures } 
 import { loggedAction } from "./mail-similar";
 import { CORRECTION_MOVES } from "./mail-correction-schema";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult, type MoveTarget } from "./mail-move";
+import type { ActRefusal, ActWording } from "./act-result";
 import { CommandTimeout } from "../common/spawn";
 import { replySubject } from "./mail-triage";
 import type { SourceMail, SourceReading } from "./sources/command";
@@ -70,7 +71,7 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Move
   const address = mail.from.address.toLowerCase();
   const who = mail.from.name ?? address;
   if (isVip(new Set(listVips(db).map((v) => v.address)), address)) {
-    return refuse(409, `${who} is on your VIP list, and VIPs always show. Remove them there first.`);
+    return refuse(409, `${who} is on your VIP list, and VIPs always show. Remove them there first.`, { code: "act.forbidden", params: { reason: "vip" } });
   }
   const features = mailFeatures(db, mail);
   addSender(db, "unimportant", address, mail.from.name ?? null, deps.now);
@@ -79,14 +80,14 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Move
   if (!deps.config?.trash?.length && !deps.config?.move?.length) {
     deps.ledger.add(movedKey("trash", mail.id), deps.now);
     logMailDecision(db, features, "unimportant", "desk", deps.now);
-    return { ok: true, message: `${marked}.` };
+    return { ok: true, message: `${marked}.`, messagePhrase: { code: "mail.unimportant-hidden", params: { sender: who } } };
   }
   const moved = await moveMail(mail, "trash", deps, "unimportant", features);
-  if (!moved.ok) return refuse(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`);
-  return { ...moved, message: `${moved.message} ${marked}.` };
+  if (!moved.ok) return refuse(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`, { code: "act.failed", params: { kind: "move" } }, moved.error);
+  return { ...moved, message: `${moved.message} ${marked}.`, messagePhrase: { code: "mail.unimportant-moved", params: { target: "trash", sender: who } } };
 }
 
-export type DraftResult = { ok: true; message: string; id: string } | { ok: false; status: number; error: string };
+export type DraftResult = ({ ok: true; message: string; id: string } & ActWording) | ActRefusal;
 
 function draftId(stdout: string): string {
   try {
@@ -105,20 +106,24 @@ function draftId(stdout: string): string {
 export async function draftReply(mail: ListedMail, body: string, deps: Omit<MoveDeps, "db">): Promise<DraftResult> {
   const config = deps.config;
   const argv = config?.draft;
-  if (!config || !argv?.length) return refuse(409, "Drafting replies is not set up on this stack.");
-  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot draft a reply.");
-  if (body.trim() === "") return refuse(400, "Write the reply first.");
-  if (body.length > MAX_REPLY_CHARS) return refuse(400, `The reply is longer than ${MAX_REPLY_CHARS} characters.`);
+  if (!config || !argv?.length) return refuse(409, "Drafting replies is not set up on this stack.", { code: "act.not-set-up", params: { feature: "draft" } });
+  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot draft a reply.", { code: "act.invalid", params: { field: "account" } });
+  if (body.trim() === "") return refuse(400, "Write the reply first.", { code: "act.invalid", params: { field: "body" } });
+  if (body.length > MAX_REPLY_CHARS) return refuse(400, `The reply is longer than ${MAX_REPLY_CHARS} characters.`, { code: "act.invalid", params: { field: "body" } });
   const key = draftKey(mail.id);
-  if (!deps.ledger.claim(key)) return refuse(409, "A draft for this mail is already being saved.");
+  if (!deps.ledger.claim(key)) return refuse(409, "A draft for this mail is already being saved.", { code: "act.busy", params: { kind: "draft" } });
   try {
     const stdin = JSON.stringify({ action: "draft", account: mail.account, messageId: mail.id, to: mail.from.address, subject: replySubject(mail.subject), body });
     const result = await deps.run(argv, stdin, config.timeoutSeconds * 1000);
-    if (result.code !== 0) return refuse(502, `The draft was not saved: ${oneLine(result.stderr || result.stdout, `the draft command exited with code ${result.code}.`)}`);
-    return { ok: true, message: `Reply saved in your ${mail.account} Drafts.`, id: draftId(result.stdout) };
+    if (result.code !== 0) {
+      const line = oneLine(result.stderr || result.stdout, `the draft command exited with code ${result.code}.`);
+      return refuse(502, `The draft was not saved: ${line}`, { code: "act.failed", params: { kind: "draft" } }, line);
+    }
+    return { ok: true, message: `Reply saved in your ${mail.account} Drafts.`, id: draftId(result.stdout), messagePhrase: { code: "mail.reply-drafted", params: { account: mail.account } } };
   } catch (err) {
-    if (err instanceof CommandTimeout) return refuse(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`);
-    return refuse(502, `The draft command did not run: ${err instanceof Error ? err.message : String(err)}`);
+    const why = err instanceof Error ? err.message : String(err);
+    if (err instanceof CommandTimeout) return refuse(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`, { code: "act.failed", params: { kind: "draft" } }, why);
+    return refuse(502, `The draft command did not run: ${why}`, { code: "act.failed", params: { kind: "draft" } }, why);
   } finally {
     deps.ledger.release(key);
   }
@@ -148,18 +153,22 @@ const reportMessage = (stdout: string, fallback: string): string => {
  * send; without it, the command reports the mail its own way. Nothing moves; Spam stays a separate action.
  */
 export async function reportMail(mail: ListedMail, report: MailReportConfig | undefined, deps: Omit<MoveDeps, "db" | "config">): Promise<MailActionResult> {
-  if (!report?.command.length) return refuse(409, "Reporting mail is not set up on this stack.");
-  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot report it.");
+  if (!report?.command.length) return refuse(409, "Reporting mail is not set up on this stack.", { code: "act.not-set-up", params: { feature: "report" } });
+  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot report it.", { code: "act.invalid", params: { field: "account" } });
   const key = reportKey(mail.id);
-  if (!deps.ledger.claim(key)) return refuse(409, "This mail is already being reported.");
+  if (!deps.ledger.claim(key)) return refuse(409, "This mail is already being reported.", { code: "act.busy", params: { kind: "report" } });
   try {
     const stdin = JSON.stringify({ action: "report", account: mail.account, messageId: mail.id, ...(report.to ? { to: report.to } : {}) });
     const result = await deps.run(report.command, stdin, report.timeoutSeconds * 1000);
-    if (result.code !== 0) return refuse(502, `The mail was not reported: ${oneLine(result.stderr || result.stdout, `the report command exited with code ${result.code}.`)}`);
-    return { ok: true, message: reportMessage(result.stdout, report.to ? `A report draft to ${report.to} is in your ${mail.account} Drafts. Send it from there.` : "The mail was reported.") };
+    if (result.code !== 0) {
+      const line = oneLine(result.stderr || result.stdout, `the report command exited with code ${result.code}.`);
+      return refuse(502, `The mail was not reported: ${line}`, { code: "act.failed", params: { kind: "report" } }, line);
+    }
+    return { ok: true, message: reportMessage(result.stdout, report.to ? `A report draft to ${report.to} is in your ${mail.account} Drafts. Send it from there.` : "The mail was reported."), messagePhrase: { code: "mail.reported", params: report.to ? { to: report.to } : {} } };
   } catch (err) {
-    if (err instanceof CommandTimeout) return refuse(504, `The report command ${err.message}. A draft may exist; check Drafts.`);
-    return refuse(502, `The report command did not run: ${err instanceof Error ? err.message : String(err)}`);
+    const why = err instanceof Error ? err.message : String(err);
+    if (err instanceof CommandTimeout) return refuse(504, `The report command ${err.message}. A draft may exist; check Drafts.`, { code: "act.failed", params: { kind: "report" } }, why);
+    return refuse(502, `The report command did not run: ${why}`, { code: "act.failed", params: { kind: "report" } }, why);
   } finally {
     deps.ledger.release(key);
   }
@@ -184,7 +193,7 @@ const CORRECTION_DONE: Record<MailCorrection, string> = {
 
 const CORRECTED_TITLE: Record<MoveTarget, string> = { archive: "Archived after your correction", junk: "Moved to Junk after your correction", trash: "Deleted after your correction" };
 
-export type CorrectionResult = MoveResult | { ok: false; status: number; error: string; recorded: true; correction: number };
+export type CorrectionResult = MoveResult | ({ ok: false; status: number; error: string; recorded: true; correction: number } & ActWording);
 
 const loggedCorrection = (db: Database, id: number, mail: ListedMail, said: MailCorrection): boolean =>
   db.query<{ n: number }, [number, string, string]>("SELECT COUNT(*) AS n FROM desk_mail_log WHERE id = ? AND message_id = ? AND action = ? AND origin = 'correction'").get(id, mail.id, correctionAction(said))?.n === 1;
