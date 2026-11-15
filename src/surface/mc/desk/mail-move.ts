@@ -43,7 +43,7 @@ export type MoveResult = ({ ok: true; message: string; undo?: string; block?: st
 
 export const refuse = (status: number, error: string, messagePhrase?: DeskPhrase, detail?: string): ActRefusal => refuseWith(status, error, messagePhrase, detail);
 
-export const moved = (message: string, messagePhrase?: DeskPhrase, extra: { undo?: string; block?: string; restored?: string } = {}): MoveResult => ({ ok: true, message, ...wording(messagePhrase ?? { code: "act.done" }), ...extra });
+const moved = (message: string, messagePhrase?: DeskPhrase, extra: { undo?: string; block?: string; restored?: string } = {}): MoveResult => ({ ok: true, message, ...wording(messagePhrase ?? { code: "act.done" }), ...extra });
 
 interface Printed {
   message: string;

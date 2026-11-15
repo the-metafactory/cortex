@@ -18,7 +18,7 @@ export const INVITATION_LABELS: Record<InvitationAction, string> = {
 };
 export const INVITATION_NOTIFICATION_WARNING = "Replies notify the organizer. Undo cannot retract that notification.";
 export const INVITATION_NO_UNDO = "No Undo is available for an invitation reply; the organizer's notification cannot be retracted.";
-export const invitationRef = (adapterId: string, connectionId: string, canonicalId: string): ObjectReference => ({ adapterId, connectionId, objectType: "invitation", canonicalId });
+const invitationRef = (adapterId: string, connectionId: string, canonicalId: string): ObjectReference => ({ adapterId, connectionId, objectType: "invitation", canonicalId });
 const revision = z.string().min(1).max(500);
 const invitation = ObjectReferenceSchema.refine(ref => ref.objectType === "invitation");
 export const InvitationInputSchema = z.object({ message: ObjectReferenceSchema.refine(ref => ref.objectType === "message"), invitation, expectedRevision: revision }).strict();
