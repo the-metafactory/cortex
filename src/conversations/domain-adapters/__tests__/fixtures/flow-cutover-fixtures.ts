@@ -13,6 +13,7 @@ import { conversationSources } from "../../../../surface/mc/desk/conversation-so
 import { initDatabase } from "../../../../surface/mc/db/init";
 import type { DeskOptions } from "../../../../surface/mc/desk/compose";
 import { flowSaveDefinition, flowSaveRequest, openFlowSaveRig, FLOW_SAVE_NOW } from "./flow-save-fixtures";
+import { openFixtureAuthority } from "../../operations/lifecycle-fixtures";
 
 export const flowCutoverConfirm = (view: ProposalView) => ({ revision: view.proposal.revision, digest: view.digest });
 
@@ -48,9 +49,7 @@ export async function openFlowCutoverRig(conversationPolicy: "local" | "cloud" =
     restrictions, sinks: new Map(),
     connectors: new Map([["flow-example", { ...binding.connector, authorizeConnection: current => Promise.resolve({ version: 1 as const, available: current.status === "active" && current.accountScope.stack === "test", revision: current.connectionRevision }) }]]),
   };
-  const authority = host.lifecycleAuthority(registry, bindings);
-  await authority.publishHostRecord({ kind: "principal", value: principal }, 0);
-  await authority.publishHostRecord({ kind: "connection", value: connection }, 0);
+  const authority = await openFixtureAuthority(host, registry, bindings, principal, connection);
   const openSession = async (actor: Actor, conversationId: string) => {
     assert.equal(actor.principal, principal.principal);
     await host.meta(conversationId);
