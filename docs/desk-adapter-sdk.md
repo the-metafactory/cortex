@@ -1,7 +1,7 @@
 <!-- glossary-ignore: host, token, path, user, data, message, body, run -->
 # Desk adapter package and SDK authoring contract
 
-This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.10.0, an additive amendment of 1.0.0 through 1.9.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.10.0"`).
+This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.11.0, an additive amendment of 1.0.0 through 1.10.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.11.0"`).
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
@@ -329,3 +329,12 @@ Mail's one-click unsubscribe is a host-coordinated action with its own grant. A 
 Every attempt writes a receipt with `undo: false`; a completed receipt says there is no Undo. A refused attempt, such as a denied account or a missing message, still writes a receipt carrying the binding's reason. The host offers no compensating operation and no provider fallback, and a receipt from another connection or account is not read.
 
 Execute `bun scripts/probe-desk-mail-unsubscribe.ts` for the Cortex-side live probe. It runs a fixture binding against a real journal: the prompt, the grant, the completed receipt, a refused account and a missing message. The production helm-mail declaration, binding and real provider parity probe belong to the dependent adapter build; this Cortex slice does not activate them.
+
+<!-- glossary-ignore: node, message -->
+## Mail report kinds (SDK 1.11.0, node #3542)
+
+Mail has two kinds of report. Report as draft saves a report draft for the principal to send; it needs no grant, runs on a confirmation, and has no Undo here. A provider report (spam or phishing) submits the report to the mail provider. A package can import `mailReportDeclaration`, `mailReportSnapshot`, `MAIL_REPORT_CAPABILITY` and the `MailReportKind` type from the Desk SDK. The declaration defines `mail.report.draft`, `mail.report.spam` and `mail.report.phishing`, each taking one connection-qualified Mail message reference and returning that reference plus the folder the mail now sits in. A connection declares only the kinds it supports, and provider reports also need `mail.restore`, because Undo moves the mail back.
+
+`MailReportHost` asks for a separate standing grant per connection and report type, and the prompt says Undo cannot retract a report already sent to the provider. A grant for one report type, or for a move, never covers another. "Just this once" leaves no grant. Undo restores the location the report put the mail in, names that folder as the one it expects, and refuses a mail that moved since as a conflict. After an Undo the receipt says the report stands. A refused attempt, such as a missing message or a denied account, still writes a receipt carrying the binding's reason.
+
+Execute `bun scripts/probe-desk-mail-report.ts` for the Cortex-side live probe. It runs a fixture binding against a real journal for both report kinds, an Undo, a conflicted Undo and both refusals. The production helm-mail binding is the dependent adapter build; this Cortex slice does not activate it.

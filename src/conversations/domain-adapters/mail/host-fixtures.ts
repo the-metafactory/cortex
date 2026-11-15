@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { DomainAdapterRegistry } from "../registry";
+import { fixtureBindings } from "../fixtures";
+import type { AdapterDeclaration } from "../types";
 import { authority, attemptFixture, eventFixture } from "../operations/fixtures";
 import type { OperationJournalStore } from "../operations/journal";
 import type { ApprovedSnapshot, DispatchRequest, OwnerResult, OwnerSupport } from "../operations/types";
 import { canonicalWire } from "../operations/validation";
+import type { OperationIndex } from "./legacy-move";
 import type { MailGrantSelection, MailMoveAuthority } from "./move-host";
 
 export interface FixtureGrant {
@@ -64,4 +68,27 @@ export async function prepareDispatch(journal: OperationJournalStore, operationI
   const prepared = await journal.append(operationId, stored.revision, eventFixture(2, { kind: "attempt-prepared", attempt }, at), { support });
   const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, idempotencyKey: stored.journal.idempotencyKey, ownerRequestId: stored.journal.ownerRequestId, snapshot: stored.journal.snapshot, authority: approved.authority, supportDeclarationId: support.declarationId, deadlineAt: attempt.deadlineAt };
   return { request, support, at, revision: prepared.revision };
+}
+
+/** An in-memory operation index: every dispatched operation, and the compensations that undo one. */
+export function createOperationIndex(): OperationIndex & { operations: string[] } {
+  const operations: string[] = [];
+  const compensations = new Map<string, string[]>();
+  return {
+    operations,
+    add(operationId, compensates) {
+      if (!operations.includes(operationId)) operations.push(operationId);
+      if (compensates) compensations.set(compensates, [...(compensations.get(compensates) ?? []), operationId]);
+      return Promise.resolve();
+    },
+    list: () => Promise.resolve([...operations]),
+    compensations: original => Promise.resolve([...(compensations.get(original) ?? [])]),
+  };
+}
+
+export function registerFixtureDeclaration(declaration: AdapterDeclaration): DomainAdapterRegistry {
+  const registry = new DomainAdapterRegistry();
+  const registered = registry.register(declaration, fixtureBindings(declaration));
+  if (!registered.ok) throw new Error(registered.error.code);
+  return registry;
 }

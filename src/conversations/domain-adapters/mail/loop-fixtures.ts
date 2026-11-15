@@ -8,10 +8,9 @@ import { fixtureBindings } from "../fixtures";
 import { AT, openJournalFixture } from "../operations/fixtures";
 import { OperationJournalStore } from "../operations/journal";
 import type { DispatchRequest, OwnerResult } from "../operations/types";
-import type { OperationIndex } from "./legacy-move";
 import { mailMoveDeclaration } from "./move-contract";
 import { MailMoveHost, type MailMoveAuthority, type MailMoveReceipt } from "./move-host";
-import { deliver, fixtureAuthority, prepareDispatch, type FixtureGrant, type PreparedDispatch } from "./host-fixtures";
+import { createOperationIndex, deliver, fixtureAuthority, prepareDispatch, type FixtureGrant, type PreparedDispatch } from "./host-fixtures";
 import { MailLoopHost } from "./loop-host";
 import { DeskMailLoopGrants } from "./loop-grant-store";
 import type { LoopMail, MailLoopAction, MailLoopGrant, MailLoopKind, MailLoopSelection } from "./loop-contract";
@@ -75,20 +74,10 @@ export async function openMailLoopRig(): Promise<MailLoopRig> {
   let now = Date.parse(AT) + 60_000;
   const folders = new Map<string, string>();
   const calls: DispatchRequest[] = [];
-  const operations: string[] = [];
-  const compensations = new Map<string, string[]>();
   let denied = false;
   const auth = fixtureAuthority(() => fixture.journal, () => now, () => denied);
 
-  const index: OperationIndex = {
-    add(operationId, compensates) {
-      if (!operations.includes(operationId)) operations.push(operationId);
-      if (compensates) compensations.set(compensates, [...(compensations.get(compensates) ?? []), operationId]);
-      return Promise.resolve();
-    },
-    list: () => Promise.resolve([...operations]),
-    compensations: original => Promise.resolve([...(compensations.get(original) ?? [])]),
-  };
+  const index = createOperationIndex();
 
   const binding = (request: DispatchRequest): OwnerResult["result"] => {
     const input = request.snapshot.input as { message: { canonicalId: string }; from?: string };
