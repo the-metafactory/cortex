@@ -198,6 +198,11 @@ describe("renderBootTestConfig", () => {
     for (const port of originalPorts) {
       expect(usesListenerPort(`listen: "127.0.0.1:${port}"`, originalPorts)).toBe(true);
       expect(usesListenerPort(`leafnodes { port: ${port} }`, originalPorts)).toBe(true);
+      for (const key of ["http", "https", "http_port", "https_port", "monitor_port", "prof_port"]) {
+        const control = `${key}: ${port}`;
+        expect(usesListenerPort(control, originalPorts)).toBe(true);
+        expect(usesListenerPort(renderBootTestConfig(control, OPTS).conf, originalPorts)).toBe(false);
+      }
     }
     expect(conf).not.toContain("0.0.0.0");
     expect(conf).toContain(`listen: "127.0.0.1:-1"`);
