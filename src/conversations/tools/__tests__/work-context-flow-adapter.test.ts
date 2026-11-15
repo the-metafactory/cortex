@@ -4,6 +4,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { answering, openHost, scratchHosts } from "../../__tests__/fixtures/scratch";
 import { toolBody } from "../../__tests__/fixtures/tool-body";
+import { exerciseCloudWorkSource } from "../../__tests__/fixtures/work-source-conversation";
 import { ARC_FLOW_NAME, FLOW_NAME, flowYaml, openFlowReadRig, type FlowReadRig } from "../../domain-adapters/__tests__/fixtures/flow-read-fixtures";
 import { assertCloudFlowWorkToolsDenied, assertLocalFlowWorkTools, assertPolicyRaceWithheld, callFlowWorkTool, flowReadersFor } from "../../domain-adapters/__tests__/fixtures/flow-work-tools-fixtures";
 
@@ -123,11 +124,8 @@ describe("saved Flows behind work_search and work_read", () => {
       return host.attachSources({ resolvers: {}, readbacks: {}, readers, queries: () => readers });
     };
     await attach();
-    const { id } = await host.create({ title: "Saved Flow source", policy: "cloud", links: [], origin: { kind: "web" } }, "principal-example");
-    await host.submit(id, { inputId: randomUUID(), transport: "web", text: "Read the saved Flow.", mode: "queue" });
-    await host.waitForIdle(id);
+    const id = await exerciseCloudWorkSource(host, "Saved Flow source");
     expect(result.status).toBe("ok");
-    expect((await host.meta(id)).policy).toBe("cloud");
     await host.close();
     host = await openHost(hosts, options);
     await attach();
