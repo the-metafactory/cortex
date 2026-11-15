@@ -122,4 +122,3 @@ test("mail correction wording carries the original subject and sender as content
   await classifier.kick(db, { now: NOW, mail: [], events: [], vips: [] });
   expect(corrections).toContainEqual({ kind: "mail", source: mail.from.address, mode: "archive", label: "“Original subject” from sender@example.test: the person would archive it; it is not bulk", labelPhrase: { code: "mail.correction", params: { subject: mail.subject, sender: mail.from.address, action: "archive", learnedAction: "archive", category: "not bulk" } } });
 });
-
