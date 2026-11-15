@@ -26,6 +26,7 @@ import { DraftService, type DraftServiceDeps } from "./domain-adapters/drafting"
 import { OperationJournalStore } from "./domain-adapters/operations/journal";
 import type { DomainAdapterRegistry } from "./domain-adapters/registry";
 import { AuthorityMediator, type AuthorityBindings, type HostPolicyState } from "./authority";
+import { MAIL_REPLY_DRAFT_CAPABILITY, mailReplyDraftPolicy } from "./domain-adapters/mail/reply-draft-policy";
 import { creationFor } from "./creation";
 import { ConversationError, noLaneMessage } from "./errors";
 export { ConversationError } from "./errors";
@@ -284,7 +285,7 @@ export class ConversationHost {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), { fences: this.lifecycleFences(), diagnostics: this.adapterDiagnostics() });
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), { fences: this.lifecycleFences(), diagnostics: this.adapterDiagnostics(), mutationPolicies: new Map([[MAIL_REPLY_DRAFT_CAPABILITY, mailReplyDraftPolicy]]) });
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }
