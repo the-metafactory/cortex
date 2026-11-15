@@ -179,10 +179,10 @@ export function withoutHandled(state: RangerState, ledger: Pick<HandledLedger, "
 const ENV_KEEP = ["PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "SHELL"];
 
 /** Runs the Ranger CLI with a minimal environment, so no token in Cortex's environment reaches it. */
-export const spawnRanger: RangerRunner = async (argv) => {
+export const spawnRanger = async (argv: string[], timeoutMs = 120_000): Promise<RangerRunResult> => {
   const env: Record<string, string> = {};
   for (const k of ENV_KEEP) if (process.env[k] !== undefined) env[k] = process.env[k];
-  const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 120_000 });
+  const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
   const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   return { code, stdout, stderr };
 };
