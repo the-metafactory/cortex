@@ -50,7 +50,7 @@ describe("runningMeeting", () => {
 describe("holding interruptions during a meeting", () => {
   it("holds mail and reminders that arrived during a busy meeting, with the reason and the hold on the item", () => {
     const [mail, reminder] = mark([item(), item({ key: "reminder:1", kind: "reminder" })], [review], NOW + MIN);
-    expect(mail?.interrupt).toEqual({ delivery: "held", reason: { code: "mail.ranked" }, held: { eventKey: "review", title: "Review", until: NOW + 30 * MIN } });
+    expect(mail?.interrupt).toEqual({ delivery: "held", reason: { code: "mail.ranked", phrase: { code: "mail.ranked" } }, held: { eventKey: "review", title: "Review", until: NOW + 30 * MIN } });
     expect(reminder?.interrupt?.delivery).toBe("held");
   });
 
@@ -77,7 +77,7 @@ describe("holding interruptions during a meeting", () => {
   });
 
   it("releases on the next tick when the meeting is cancelled", () => {
-    expect(mark([item()], [], NOW + 2 * MIN)[0]?.interrupt).toEqual({ delivery: "pending", reason: { code: "mail.ranked" } });
+    expect(mark([item()], [], NOW + 2 * MIN)[0]?.interrupt).toEqual({ delivery: "pending", reason: { code: "mail.ranked", phrase: { code: "mail.ranked" } } });
     expect(mark([item()], [], NOW + 61 * MIN)[0]?.interrupt).toBeUndefined();
   });
 
