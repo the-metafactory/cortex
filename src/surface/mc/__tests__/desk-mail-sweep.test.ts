@@ -91,6 +91,7 @@ describe("sweep builder", () => {
     const groups = buildSweeps(input([...fyi, reply, fresh], { f1: fyiClass, f2: fyiClass, f3: fyiClass, f4: fyiClass, f5: fyiClass, q1: { ...fyiClass, predictedAction: "reply" } }));
     const sweep = groups.find((g) => g.id === "sweep:age:fyi");
     expect(sweep?.title).toBe("4 fyi mails older than 3 days are still unread");
+    expect(sweep).toMatchObject({ label: "fyi", labelPhrase: { code: "mail.sweep-category", params: { category: "fyi" } } });
     expect(sweep?.members.map((m) => m.id)).toEqual(["f1", "f2", "f3", "f4"]);
   });
 });

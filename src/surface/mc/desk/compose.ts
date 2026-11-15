@@ -18,7 +18,7 @@ import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoIsCloud, repoName, type AreaRule, type GoalActionsInput } from "./rank";
-import { DAY_MS, startOfDay } from "./time";
+import { DAY_MS, deskTimeZone, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
@@ -411,6 +411,7 @@ export async function composeDesk(
     calendars: [...calendars.values()],
     studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now, assistantName) : null,
     generatedAt: now,
+    timeZone: deskTimeZone(),
     displayName: desk.displayName || null,
     assistantName,
     topN: myDay.topN,
@@ -477,7 +478,7 @@ const CORRECTED_SAYING: Partial<Record<string, string>> = { "not bulk": "; it is
 function mailCorrections(db: Database, sourceIds: ReadonlySet<string>): ClassifierCorrection[] {
   return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS, sourceIds }).map((e) => {
     const action = learnedAction(e.action);
-    return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
+    return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}`, labelPhrase: { code: "mail.correction", params: { subject: e.subject, sender: e.sender, action: e.action, ...(action ? { learnedAction: action } : {}), category: e.category } } };
   });
 }
 

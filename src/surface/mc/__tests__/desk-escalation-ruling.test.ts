@@ -6,7 +6,7 @@ import { listVigilSubjects } from "../../../vigil/subjects-view";
 import { handleDeskRuling } from "../api/desk-ruling";
 import { HandledLedger, type RangerRunner } from "../desk/actions";
 import { composeCurrentDay, composeDesk, currentDayItems, type DeskOptions } from "../desk/compose";
-import { EscalationRulings, escalationEntries, explainRuling, RULING_BODY_UNREADABLE, RULING_MODEL_FAILED, RULING_NOT_GROUNDED, RULING_NO_MODEL, RULING_POLICY_REFUSED, RulingExplainLoop, RulingLedger } from "../desk/ruling";
+import { EscalationRulings, escalationEntries, RULING_STATUS_FRESH_MS, RULING_STATUS_RETRY_MS, explainRuling, RULING_BODY_UNREADABLE, RULING_MODEL_FAILED, RULING_NOT_GROUNDED, RULING_NO_MODEL, RULING_POLICY_REFUSED, RulingExplainLoop, RulingLedger } from "../desk/ruling";
 import type { WaitingTask } from "../desk/sources/waiting";
 import { initDatabase } from "../db/init";
 
@@ -140,7 +140,7 @@ describe("Vigil escalation explanations and answers", () => {
       const card = (await compose(async () => read)).items[0]!;
       expect(card.actions.some(action => action.id === "ranger.rule")).toBe(false);
       expect(card.detail.summary).toContain("Answer on the issue.");
-      expect(card.detail.links).toEqual([{ label: "Issue", url: "https://github.com/example/app/issues/12" }]);
+      expect(card.detail.links).toEqual([{ kind: "issue", label: "Issue", url: "https://github.com/example/app/issues/12" }]);
     }
   });
 
@@ -237,6 +237,46 @@ describe("escalation graph status refresh", () => {
     expect(calls).toBe(9);
   });
 
+  it("does not re-read a backlog of escalations on every compose before the status lifetime ends", async () => {
+    let now = NOW;
+    let calls = 0;
+    const reader = new EscalationRulings(DESK.somaBin!, async argv => {
+      calls++;
+      now += 1_000;
+      return node(true, "open", argv[3]);
+    }, () => now);
+    const refs = Array.from({ length: 142 }, (_, index) => `example/app#${index + 1}`);
+    await reader.warm(refs);
+    expect(calls).toBe(142);
+    for (let minute = 0; minute < 27; minute++) {
+      now += 60_000;
+      reader.read(refs);
+      await reader.warm(refs);
+    }
+    expect(calls).toBe(142);
+    now = NOW + 142_000 + RULING_STATUS_FRESH_MS;
+    await reader.warm(refs);
+    expect(calls).toBe(284);
+  });
+
+  it("waits before re-reading a node whose read failed", async () => {
+    let now = NOW;
+    let calls = 0;
+    const reader = new EscalationRulings(DESK.somaBin!, async () => {
+      calls++;
+      return calls === 1 ? result("", 1, "API rate limit exceeded") : node();
+    }, () => now);
+    await reader.warm([REF]);
+    expect(reader.read([REF]).get(REF)).toContain("could not be read");
+    now += RULING_STATUS_RETRY_MS - 1;
+    await reader.warm([REF]);
+    expect(calls).toBe(1);
+    now += 1;
+    await reader.warm([REF]);
+    expect(calls).toBe(2);
+    expect(reader.read([REF]).get(REF)).toBeNull();
+  });
+
   it("refreshes an open node to closed and makes a changed explanation target cold", async () => {
     let now = NOW;
     let closed = false;
@@ -244,7 +284,7 @@ describe("escalation graph status refresh", () => {
     await reader.warm([REF]);
     expect(reader.read([REF]).get(REF)).toBeNull();
     closed = true;
-    now += 30_000;
+    now += RULING_STATUS_FRESH_MS;
     await reader.warm([REF]);
     expect(reader.read([REF]).get(REF)).toContain("closed");
     const entry = { repo: "example/app", nodeId: "12", itemKey: KEY, title: "Format", status: "open" };

@@ -121,6 +121,7 @@ export interface ClassifierCorrection {
   source: string;
   mode: string;
   label: string;
+  labelPhrase?: import("./phrases").DeskPhrase;
 }
 
 export interface ClassifierExample {

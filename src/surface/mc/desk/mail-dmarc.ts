@@ -268,7 +268,7 @@ function failureCard(row: Row, d: DmarcDomain, config: FailureConfig, area: stri
       summary: `${d.domain}: ${plural(d.messages, "message")} in this report, SPF failed for ${d.spf.fail}, DKIM for ${d.dkim.fail}, both for ${d.dmarcFail}. Receivers quarantined ${d.disposition.quarantine} and rejected ${d.disposition.reject}.`,
       history: sources.map((s) => `${s.ip}: ${plural(s.count, "failing mail")} (SPF ${s.spfFail}, DKIM ${s.dkimFail}, both ${s.dmarcFail})`),
       refs: [row.message_id],
-      links: row.url ? [{ label: "Raw report", url: row.url }] : [],
+      links: row.url ? [{ kind: "report" as const, label: "Raw report", url: row.url }] : [],
     },
     since: row.created_at,
   };

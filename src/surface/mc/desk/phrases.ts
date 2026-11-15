@@ -1,5 +1,6 @@
 import type { PredictedAction, SimilarityBasis } from "./mail-prediction-schema";
 import type { InviteReply, InviteStatus } from "./mail-invitation-schema";
+import type { DeskItemKind } from "./types";
 
 export interface MailPhraseModifiers {
   vip?: string;
@@ -101,7 +102,18 @@ export type DeskPhrase =
   | { code: "studio.done"; params: { act: string } }
   | { code: "studio.spar-queued"; params: { mode: string } }
   | { code: "ranger.action-done"; params: { action: string } }
-  | { code: "ranger.action-queued"; params: { action: string } };
+  | { code: "ranger.action-queued"; params: { action: string } }
+  | { code: "mailrule.release"; params: { count: number } }
+  | { code: "mail.assistant"; params: { name: string } }
+  | { code: "assistant.retry"; params: { name: string } }
+  | { code: "vip.add"; params: { name?: string } }
+  | { code: "task.link"; params: { id: string } }
+  | { code: "mail.put-away-time"; params: { until: string } }
+  | { code: "mail.put-away-meeting"; params: { title: string } }
+  | { code: "mail.put-away-person"; params: { person: string } }
+  | { code: "correction.source"; params: { kind: DeskItemKind; source: string } }
+  | { code: "mail.correction"; params: { subject: string | null; sender: string; action: string; learnedAction?: PredictedAction; category: string | null } }
+  | { code: "mail.sweep-category"; params: { category: string } };
 
 export const DESK_ITEM_PHRASE_CODES = [
   "ranger.resume-queued", "ranger.blocked", "ranger.stopped", "ranger.approval-needed", "ranger.discussion-needed",
@@ -109,6 +121,8 @@ export const DESK_ITEM_PHRASE_CODES = [
   "ranger.retry-failed", "ranger.retried", "goal.check-regressed", "goal.reading", "meeting.soon", "reminder.due",
   "mail.meeting-today", "mail.deadline-today", "mail.vip", "mail.ranked", "mail.received", "mail.meeting-possible",
   "mail.meeting-linked", "mail.unimportant", "mail.precedent", "mail.unsubscribe", "mail.invitation", "mail.suspicious",
+  "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "mail.put-away-time",
+  "mail.put-away-meeting", "mail.put-away-person", "correction.source", "mail.correction", "mail.sweep-category",
 ] as const satisfies readonly DeskPhrase["code"][];
 
 export const DESK_ACT_PHRASE_CODES = [

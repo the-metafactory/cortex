@@ -1,6 +1,7 @@
 import type { AppState } from "../../../balance";
 import { completionReview, type CompletionReview } from "../../../balance";
 import { localDay } from "./my-day";
+import { deskTimeZone } from "./time";
 import type { DeskOptions } from "./compose";
 import type { SourceEvent, SourceReading } from "./sources/command";
 import type { StudioView, StudioThreadView } from "./studio/view";
@@ -16,7 +17,7 @@ export function mirrorWeek(now: number): MirrorWeek {
   start.setDate(start.getDate() - (start.getDay() + 6) % 7);
   const end = new Date(start);
   end.setDate(end.getDate() + 7);
-  return { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, from: localDay(start.getTime()), through: localDay(end.getTime() - 1), start: start.getTime(), end: end.getTime() };
+  return { timeZone: deskTimeZone(), from: localDay(start.getTime()), through: localDay(end.getTime() - 1), start: start.getTime(), end: end.getTime() };
 }
 export function mirrorOffered(now: number, schedule: MirrorSchedule | undefined): boolean {
   if (!schedule) return false;

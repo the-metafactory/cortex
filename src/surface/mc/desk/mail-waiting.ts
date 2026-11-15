@@ -6,7 +6,7 @@ import { logMailDecision, senderDomain, type MailFeatures, type MailLogAction } 
 import type { ListedMail } from "./mail-actions";
 import { plural } from "./mail-sweep";
 import { replySubject } from "./mail-triage";
-import { ago } from "./rank";
+import { ago, mailLink } from "./rank";
 import type { SourceReading, SourceSent } from "./sources/command";
 import { SingleFlight } from "./single-flight";
 import { DAY_MS, startOfDay } from "./time";
@@ -342,7 +342,7 @@ export function waitingItems(db: Database, now: number, options: WaitingItemOpti
           ...(w.snoozedUntil !== null ? [`You snoozed it until ${longDay(w.snoozedUntil)}.`] : []),
         ],
         refs: [w.messageId],
-        links: w.url ? [{ label: "Open in Mail", url: w.url }] : [],
+        links: w.url ? [mailLink(w.url)] : [],
       },
       ...(nudgeTo ? { reply: { to: nudgeTo.name ? `${nudgeTo.name} <${nudgeTo.address}>` : nudgeTo.address, subject: replySubject(w.subject) } } : {}),
       since: addWorkingDays(w.sentAt, config.afterDays),
