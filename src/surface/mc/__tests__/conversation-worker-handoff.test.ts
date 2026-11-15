@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { CreateRequest, CreateResult } from "../../../conversations/types";
+import { releasedTo } from "../../../conversations/tools/work-context";
 import type { WorkerHandoffOptions } from "../../../common/types/desk-workers";
 import type { DeskOptions } from "../desk/compose";
 import { initDatabase } from "../db/init";
@@ -329,11 +330,13 @@ describe("worker status authority and concurrent recovery", () => {
     const owner = workerOwner(deps(h));
     const prior = await owner.read(session, NODE);
     if (prior.state !== "available") throw new Error("expected initial status");
+    const released = releasedTo(session, prior.handoff);
+    if (!released) throw new Error("expected the initial status to be releasable");
     const calls = h.calls.length;
     setGraphRepositoryEnabled(h.db, "example/maps", false, NOW);
     expect(await owner.read(session, NODE)).toMatchObject({ state: "unauthorized" });
     expect(owner.recorded(session, NODE)).toBeNull();
-    expect(await owner.remember(session, prior.handoff, new AbortController().signal)).toBe(false);
+    expect(await owner.remember(session, released, new AbortController().signal)).toBe(false);
     expect(h.calls).toHaveLength(calls);
   });
 

@@ -1,6 +1,6 @@
 import type { StudioEvidence, StudioEvidenceInput, StudioEvidenceAccess } from "./studio-evidence";
 import { z } from "zod/v4";
-import { mayEnter } from "../../common/residency";
+import { mayEnter, release, type Released } from "../../common/residency";
 import type { Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
@@ -46,7 +46,7 @@ export interface WorkOwner {
   readers: () => WorkReaders;
   queries?: (session: ToolSession) => WorkReaders | undefined;
   now: () => number;
-  remember: (session: ToolSession, objects: readonly WorkObject[], signal: AbortSignal) => Promise<boolean>;
+  remember: (session: ToolSession, objects: readonly Released<WorkObject>[], signal: AbortSignal) => Promise<boolean>;
 }
 
 export const SEARCH_MAX_OFFSET = 500;
@@ -61,9 +61,14 @@ const ReadInput = z.object({ kind: z.enum(WORK_KINDS), id: z.string().trim().min
 const SNIPPET = 300;
 
 export const mayRelease = (session: ToolSession, policy: Policy): boolean => mayEnter(policy, session);
+/** The value cleared for this conversation by the residency gate, or null when its policy keeps it out. */
+export function releasedTo<T extends { readonly policy: unknown }>(session: ToolSession, value: T): Released<T> | null {
+  const outcome = release(value, session);
+  return "released" in outcome ? outcome.released : null;
+}
 const readersFor = (owner: WorkOwner, session: ToolSession): WorkReaders => ({ ...owner.readers(), ...owner.queries?.(session) });
 const age = (owner: WorkOwner, object: WorkObject): "fresh" | "stale" => owner.now() - object.observedAt > STALE_AFTER_MS ? "stale" : "fresh";
-const project = (owner: WorkOwner, object: WorkObject, snippetOnly: boolean) => ({
+const project = (owner: WorkOwner, object: Released<WorkObject>, snippetOnly: boolean) => ({
   kind: object.kind, id: object.id, title: redactToolText(object.title), status: object.status, area: object.area, url: object.url,
   observedAt: new Date(object.observedAt).toISOString(), freshness: age(owner, object),
   [snippetOnly ? "snippet" : "summary"]: redactToolText(snippetOnly ? object.summary.slice(0, SNIPPET) : object.summary),
@@ -97,7 +102,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
       const kinds = wanted.map(kind => ({ kind, reader: readers[kind] }));
       const unsupported = kinds.filter(entry => !entry.reader).map(entry => ({ kind: entry.kind, reason: UNSUPPORTED_REASON }));
       const unavailableKinds: { kind: WorkKind; reason: string }[] = [];
-      const found: WorkObject[] = [];
+      const found: Released<WorkObject>[] = [];
       let more = false;
       let partial = false;
       let restricted = false;
@@ -108,7 +113,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
         if (!reader) continue;
         signal.throwIfAborted();
         const page = await reader.search(input.query, input.limit + 1, input.offset);
-        const allowed = page.items.slice(0, input.limit).filter(object => object.kind === kind && mayRelease(session, object.policy));
+        const allowed = page.items.slice(0, input.limit).filter(object => object.kind === kind).flatMap(object => releasedTo(session, object) ?? []);
         const bounded = pagePartial(page);
         more ||= page.more || page.items.length > input.limit || bounded;
         partial ||= bounded;
@@ -147,11 +152,12 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
       const result = await reader.read(input.id);
       signal.throwIfAborted();
       if (result.state === "unavailable") return JSON.stringify({ status: result.reason, kind: input.kind, id: input.id, message: UNAVAILABLE_READ_MESSAGES[result.reason] });
-      if (!mayRelease(session, result.object.policy)) return JSON.stringify({ status: "unauthorized", kind: input.kind, id: input.id, message: "This conversation may not read that object." });
+      const cleared = releasedTo(session, result.object);
+      if (!cleared) return JSON.stringify({ status: "unauthorized", kind: input.kind, id: input.id, message: "This conversation may not read that object." });
       const again = await reader.read(input.id);
-      if (again.state !== "available" || again.object.policy !== result.object.policy || !mayRelease(session, again.object.policy)) return unavailable();
-      if (!await owner.remember(session, [result.object], signal)) return unavailable();
-      const view = project(owner, result.object, false);
+      if (again.state !== "available" || again.object.policy !== cleared.policy || !mayRelease(session, again.object.policy)) return unavailable();
+      if (!await owner.remember(session, [cleared], signal)) return unavailable();
+      const view = project(owner, cleared, false);
       return JSON.stringify({ status: view.freshness === "stale" ? "stale" : "ok", object: view });
     },
   };

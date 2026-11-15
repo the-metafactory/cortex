@@ -2,7 +2,8 @@ import { z } from "zod/v4";
 import type { Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
-import { mayRelease, STALE_AFTER_MS } from "./work-context";
+import type { Released } from "../../common/residency";
+import { mayRelease, releasedTo, STALE_AFTER_MS } from "./work-context";
 
 export const REQUIRED_FAMILIES = ["email", "calendar", "reminders", "discord", "mattermost"] as const;
 export const ID_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;
@@ -63,7 +64,7 @@ export interface CommunicationConnector {
 export interface CommunicationOwner {
   connectors: () => readonly CommunicationConnector[];
   now: () => number;
-  remember: (session: ToolSession, source: { connector: string; scope: string; policy: Policy }, signal: AbortSignal) => Promise<boolean>;
+  remember: (session: ToolSession, source: Released<{ connector: string; scope: string; policy: Policy }>, signal: AbortSignal) => Promise<boolean>;
 }
 
 const ItemSchema = z.object({ id: z.string().min(1).max(512), url: z.string().max(2_000).optional(), at: z.string().max(64).optional() }).loose();
@@ -160,7 +161,8 @@ export function communicationTools(owner: CommunicationOwner): ToolDefinition[] 
       if (!after || !unchanged || !await after.connector.authorize(session.principal, after.scope.id).catch(() => false)) return fail("denied");
       const items = z.array(ItemSchema).safeParse(page.items);
       if (page.items.length > MAX_ITEMS || !items.success || !Number.isFinite(page.observedAt)) return fail("provider-failure");
-      if (!await owner.remember(session, { connector: after.connector.id, scope: after.scope.id, policy: after.scope.policy }, signal)) return fail("denied");
+      const source = releasedTo(session, { connector: after.connector.id, scope: after.scope.id, policy: after.scope.policy });
+      if (!source || !await owner.remember(session, source, signal)) return fail("denied");
       const stale = owner.now() - page.observedAt > STALE_AFTER_MS;
       return JSON.stringify({
         status: items.data.length === 0 ? "no-match" : stale ? "stale" : "ok",

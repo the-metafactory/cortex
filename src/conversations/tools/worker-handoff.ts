@@ -3,7 +3,8 @@ import { WORKER_NODE_REF, WORKER_REPOSITORY_REF } from "../../common/types/desk-
 import type { Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
-import { mayRelease, STALE_AFTER_MS } from "./work-context";
+import type { Released } from "../../common/residency";
+import { releasedTo, STALE_AFTER_MS } from "./work-context";
 import type { CreationOwner } from "./proposals";
 import { proposalResult } from "./proposals";
 
@@ -59,7 +60,7 @@ export interface WorkerOwner {
   maps: (session: ToolSession) => readonly string[];
   read: (session: ToolSession, node: string) => Promise<WorkerRead>;
   recorded: (session: ToolSession, node: string) => Policy | null;
-  remember: (session: ToolSession, handoff: WorkerHandoff, signal: AbortSignal) => Promise<boolean>;
+  remember: (session: ToolSession, handoff: Released<WorkerHandoff>, signal: AbortSignal) => Promise<boolean>;
   now: () => number;
 }
 
@@ -68,7 +69,7 @@ const NOTHING_CANCELLED = "Nothing was cancelled.";
 const UNAVAILABLE = "The owning system could not answer for this node. This is not a confirmed absence.";
 const UNKNOWN = "This node is not a recorded implementation handoff from this principal's conversation. Prepare a brief first; nothing was started.";
 
-export type Guard = { handoff: WorkerHandoff } | { refusal: { status: string; message: string } };
+export type Guard = { handoff: Released<WorkerHandoff> } | { refusal: { status: string; message: string } };
 
 async function guard(owner: WorkerOwner, session: ToolSession, node: string, verb: "started" | "cancelled", signal: AbortSignal): Promise<Guard> {
   const read = await owner.read(session, node);
@@ -76,8 +77,9 @@ async function guard(owner: WorkerOwner, session: ToolSession, node: string, ver
   if (read.state === "unauthorized") return { refusal: { status: "refused", message: `This conversation may not read that node, so it cannot be ${verb === "started" ? "started" : "cancelled"}. Nothing was ${verb}.` } };
   if (read.state === "unavailable") return { refusal: { status: "unavailable", message: `${UNAVAILABLE} Nothing was ${verb}.` } };
   if (read.state === "unknown") return { refusal: { status: "refused", message: UNKNOWN.replace("started", verb) } };
-  if (!mayRelease(session, read.handoff.policy)) return { refusal: { status: "refused", message: `This node is outside what this conversation may release. Nothing was ${verb}.` } };
-  return { handoff: read.handoff };
+  const handoff = releasedTo(session, read.handoff);
+  if (!handoff) return { refusal: { status: "refused", message: `This node is outside what this conversation may release. Nothing was ${verb}.` } };
+  return { handoff };
 }
 
 const briefBody = (brief: BriefInput): string => [
@@ -180,9 +182,9 @@ export function workerTools(owner: WorkerOwner, creation: CreationOwner): ToolDe
         if (read.state === "unauthorized") return JSON.stringify({ status: "unauthorized", message: "This conversation may not read that node." });
         if (read.state === "unavailable") return JSON.stringify({ status: "unavailable", node: input.node, message: UNAVAILABLE });
         if (read.state === "unknown") return JSON.stringify({ status: "unknown", node: input.node, message: "No worker is recorded for this node in this principal's conversations." });
-        if (!mayRelease(session, read.handoff.policy)) return JSON.stringify({ status: "unauthorized", node: input.node, message: "This node is outside what this conversation may release." });
-        if (!await owner.remember(session, read.handoff, signal)) return JSON.stringify({ status: "unknown", node: input.node, message: "The result changed before release and was withheld. Read it again." });
-        const handoff = read.handoff;
+        const handoff = releasedTo(session, read.handoff);
+        if (!handoff) return JSON.stringify({ status: "unauthorized", node: input.node, message: "This node is outside what this conversation may release." });
+        if (!await owner.remember(session, handoff, signal)) return JSON.stringify({ status: "unknown", node: input.node, message: "The result changed before release and was withheld. Read it again." });
         return JSON.stringify({
           status: "ok", node: handoff.node, map: handoff.map, state: handoff.state, active: WORKER_ACTIVE.has(handoff.state),
           generation: handoff.generation, pr: handoff.pr, result: handoff.result === null ? null : redactToolText(handoff.result),
