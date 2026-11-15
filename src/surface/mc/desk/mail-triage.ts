@@ -1,5 +1,6 @@
 import type { MailEvidence, SuggestedAction } from "./classify";
 import type { DeskEvidence } from "./types";
+export { replySubject } from "../../../conversations/domain-adapters/mail/reply-subject";
 
 export interface EvidenceLinks {
   mail?: string;
@@ -18,13 +19,6 @@ const SUGGESTIONS: Partial<Record<string, string>> = {
 export const suggestionLine = (suggested: SuggestedAction | undefined): string | undefined => (suggested ? SUGGESTIONS[suggested] : undefined);
 
 const bareMessageId = (ref: string): string => ref.replace(/^<|>$/g, "");
-
-const REPLY_PREFIX = /^(re|aw|antw|sv):/i;
-
-export const replySubject = (subject: string): string => {
-  const s = subject.trim();
-  return REPLY_PREFIX.test(s) ? s : `Re: ${s}`;
-};
 
 export function evidenceUrl(template: string | undefined, kind: "mail" | "note", ref: string): string | undefined {
   if (!template) return undefined;

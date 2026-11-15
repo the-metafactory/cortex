@@ -13,6 +13,10 @@ export interface MailSourceItem {
 	readonly receivedAt: string;
 	readonly unread: boolean;
 	readonly firstParagraph?: string;
+	readonly headers?: {
+		readonly listUnsubscribe?: string;
+		readonly listUnsubscribePost?: string;
+	};
 }
 /** One Mail source's last listing, as the host's source cache holds it; `error` is set when that run failed. */
 export interface MailSourceListing {
@@ -81,9 +85,22 @@ export interface ConformanceReport {
 	mailQueries?: ConformanceMailQuery[];
 }
 export declare function formatReport(report: ConformanceReport): string;
-export declare const DESK_ADAPTER_SDK_VERSION = "1.12.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.13.0";
 /** The connection id every conformance run uses for the package's one synthetic connection. */
 export declare const CONFORMANCE_CONNECTION_ID = "conformance-connection";
+export interface MailExecutionProvider {
+	readonly version?: number;
+	draft?(input: unknown): Promise<unknown>;
+	lookup?(input: unknown): Promise<unknown>;
+	move?(input: unknown): Promise<unknown>;
+	restore?(input: unknown): Promise<unknown>;
+	lookupMove?(input: unknown): Promise<unknown>;
+	unsubscribe?(input: unknown): Promise<unknown>;
+	lookupUnsubscribe?(input: unknown): Promise<unknown>;
+}
+export interface MailExecutionConnections {
+	connection(binding: MailConnectionBinding): MailExecutionProvider | undefined;
+}
 export type ScenarioVerdict = "isolated" | "failed";
 export declare const FAILURE_SCENARIOS: readonly [
 	"module-load",
@@ -211,6 +228,7 @@ export interface MailActionScenarioContext {
 declare const MAIL_ACTION_STEPS: readonly [
 	"repeat",
 	"reopen",
+	"restart",
 	"reconcile"
 ];
 /** Bounded lifecycle steps over the same approved operation, never another provider attempt. */
@@ -222,6 +240,7 @@ export interface MailActionScenarioOptions {
 	snapshot(context: MailActionScenarioContext): Omit<ApprovedSnapshot, "digest">;
 	steps?: readonly MailActionScenarioStep[];
 	dispatchWaitMs?: number;
+	execution?: MailExecutionConnections;
 }
 /** A stage observed from the production journal, including its actual receipt entries. */
 export interface MailActionScenarioStage {
@@ -245,6 +264,7 @@ export interface MailActionScenarioReport {
 	ownerCalls: OwnerCalls;
 	networkRequests: number;
 	credentialRequests: number;
+	reconstructions: number;
 }
 /** Drives an external Mail fixture through real approval, dispatch, durable reopening and lookup reconciliation. */
 export declare function runMailActionScenario(packageDir: string, options: MailActionScenarioOptions): Promise<MailActionScenarioReport>;
