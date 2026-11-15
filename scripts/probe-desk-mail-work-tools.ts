@@ -7,7 +7,7 @@ await withTempHome(async () => {
     const rig = await openMailWorkRig(policy);
     try {
       await assertMailWorkPolicies(rig);
-      console.log(`${policy}: connection policies, permitted fields, distinct sources and inert Mail instructions passed`);
+      console.log(`${policy}: connection policies, permitted fields, distinct sources, Mail text passthrough and zero owner effects during direct tool reads passed`);
       if (policy === "cloud") {
         for (const name of ["work_search", "work_read"] as const) {
           for (const fetchNumber of [1, 2]) await assertMailPolicyRace(rig, name, fetchNumber);

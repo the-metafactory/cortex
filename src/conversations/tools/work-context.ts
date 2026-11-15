@@ -79,10 +79,10 @@ const PARTIAL_COVERAGE: ReadonlySet<NonNullable<WorkPage["coverage"]>> = new Set
 const pagePartial = (page: WorkPage): boolean => page.status === "partial" || page.coverage !== undefined && PARTIAL_COVERAGE.has(page.coverage);
 interface SearchStatusInput { readonly partial: boolean; readonly restricted: boolean; readonly found: number; readonly kinds: number; readonly unavailable: number; readonly noMatch: boolean; readonly more: boolean }
 const searchStatus = ({ partial, restricted, found, kinds, unavailable: missing, noMatch, more }: SearchStatusInput): "ok" | "partial" | "denied" | "unavailable" | "empty" =>
-  partial || restricted && found ? "partial"
+  !found && missing === kinds ? "unavailable"
+    : partial || restricted && found ? "partial"
     : restricted ? "denied"
     : found ? "ok"
-    : missing === kinds ? "unavailable"
     : noMatch || !more ? "empty"
     : "partial";
 

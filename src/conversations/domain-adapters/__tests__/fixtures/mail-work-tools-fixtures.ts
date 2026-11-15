@@ -112,6 +112,7 @@ export async function assertMailWorkPolicies(rig: MailWorkRig) {
   assert.equal(search.json.results.length, cloud ? 1 : 2);
   assert.equal(search.remembered.length, cloud ? 1 : 2);
   assert.equal(new Set(search.remembered.map(object => object.id)).size, search.remembered.length);
+  assert.equal(new Set(search.remembered.map(object => object.url)).size, search.remembered.length);
   assert.ok(search.json.coverageLimits[0].note.includes("listed Mail"));
   for (const index of [0, 1]) {
     const result = await callMailWorkTool(rig, "work_read", { kind: "mail", id: rig.id(index) });
@@ -122,6 +123,7 @@ export async function assertMailWorkPolicies(rig: MailWorkRig) {
     } else {
       assert.equal(result.json.status, "ok");
       assert.equal(result.json.object.id, rig.id(index));
+      assert.equal(new URL(result.json.object.url, "https://desk.example.test").searchParams.get("item"), `mail:${rig.id(index)}`);
       assert.ok(result.json.object.summary.includes(`Account: account-${index}`));
       assert.ok(result.json.object.summary.includes(MAIL_INSTRUCTION));
       assert.deepEqual(result.remembered.map(object => [object.kind, object.id, object.policy]), [["mail", rig.id(index), index === 0 ? "local" : "cloud"]]);

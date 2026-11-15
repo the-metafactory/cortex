@@ -61,6 +61,37 @@ describe("listed Mail behind the work tools", () => {
     expect((await callMailWorkTool(rig, "work_read", { kind: "mail", id: rig.id(0, SHARED_MAIL_ID) })).json.status).toBe("not-found");
   });
 
+  test("citations distinguish the same Message-ID on different connections", async () => {
+    const rig = await open();
+    const result = await callMailWorkTool(rig, "work_search", { kinds: ["mail"] });
+    expect(new Set(result.remembered.map(object => object.url)).size).toBe(2);
+    for (const object of result.remembered) {
+      expect(new URL(object.url, "https://desk.example.test").searchParams.get("item")).toBe(`mail:${object.id}`);
+    }
+  });
+
+  test("failed empty scans withhold claims of exhausted coverage", async () => {
+    const rig = await open();
+    rig.rig.hooks.query = () => Promise.reject(new Error("synthetic owner failure"));
+    const page = await rig.readers().mail.search("", 2, 0);
+    expect(page.status).toBe("unavailable");
+    expect(page.coverage).toBe("incomplete");
+    expect(page.noMatch).toBe(false);
+    expect(page.items).toEqual([]);
+  });
+
+  test("search stops after filling the requested window and lookahead", async () => {
+    const rig = await open();
+    const listing = rig.listings[0]!;
+    const seed = listing.mail[0]!;
+    rig.listings[0] = { ...listing, mail: Array.from({ length: 550 }, (_, index) => ({ ...seed, id: `<${index}@example.test>`, subject: `Example ${index}` })) };
+    const result = await callMailWorkTool(rig, "work_search", { kinds: ["mail"], limit: 2 });
+    expect(result.json.results.map((object: { id: string }) => object.id)).toEqual([rig.id(0, "<0@example.test>"), rig.id(0, "<1@example.test>")]);
+    expect(result.json.coverage).toBe("partial");
+    expect(result.json.next).toEqual({ offset: 2 });
+    expect(rig.rig.calls.read).toBe(3);
+  });
+
   test("failures claim no absence and unavailable or malformed references make no owner call", async () => {
     const rig = await open();
     const before = rig.rig.calls.read;
@@ -74,6 +105,10 @@ describe("listed Mail behind the work tools", () => {
       const result = await callMailWorkTool(rig, name, input);
       expect(result.json.status).toBe("unavailable");
       expect(result.remembered).toEqual([]);
+      if (name === "work_search") {
+        expect(result.json.coverage).toBe("partial");
+        expect(result.json.unavailable.map((entry: { kind: string }) => entry.kind)).toEqual(["mail"]);
+      }
     }
   });
 

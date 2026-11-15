@@ -36,8 +36,16 @@ const toObject = (connection: MailWorkConnection, object: ReleasedObject): WorkO
     text(object.value.firstParagraph).slice(0, 1000),
   ].join("\n"),
   policy: connection.policy ?? "local", area: null,
-  url: `?desk=day&item=${encodeURIComponent(`mail:${object.ref.canonicalId}`)}`, observedAt: observedAtOf(object, Date.now()),
+  url: `?desk=day&item=${encodeURIComponent(`mail:${workId(object.ref.connectionId, object.ref.canonicalId)}`)}`, observedAt: observedAtOf(object, Date.now()),
 });
+
+function mailSearchStatus({ found, restricted, incomplete, failed }: { found: number; restricted: boolean; incomplete: boolean; failed: boolean }): NonNullable<WorkPage["status"]> {
+  if (found > 0) return restricted || incomplete || failed ? "partial" : "ok";
+  if (restricted) return "denied";
+  if (failed) return "unavailable";
+  if (incomplete) return "partial";
+  return "ok";
+}
 
 export function mailWorkReaders(config: MailWorkRunner): { mail: WorkReader } {
   const connections = () => config.connections().filter(connection => connection.destination.adapterId === "mail" && connection.destination.objectType === "mailbox");
@@ -64,7 +72,7 @@ export function mailWorkReaders(config: MailWorkRunner): { mail: WorkReader } {
     let incomplete = all.length > QUERY_LIMITS.connections;
     let failed = false;
     let pages = 0;
-    for (const connection of all.slice(0, QUERY_LIMITS.connections)) {
+    scan: for (const connection of all.slice(0, QUERY_LIMITS.connections)) {
       const request = await config.runner.create(config.context, [source(connection)], config.sink);
       let continuation: string | undefined;
       do {
@@ -74,6 +82,7 @@ export function mailWorkReaders(config: MailWorkRunner): { mail: WorkReader } {
         if (run.released === undefined || run.result.status !== "ok" && run.result.status !== "partial") { failed = true; break; }
         const objects = objectsOf(connection, run.released).map(object => toObject(connection, object));
         items.push(...objects.filter(object => [object.title, object.summary].some(field => field.toLowerCase().includes(wanted))));
+        if (items.length > offset + limit) { incomplete = true; break scan; }
         continuation = run.result.continuation;
         incomplete ||= run.result.status === "partial" && !continuation;
       } while (continuation);
@@ -81,8 +90,8 @@ export function mailWorkReaders(config: MailWorkRunner): { mail: WorkReader } {
     }
     return {
       items: items.slice(offset, offset + limit), more: incomplete || items.length > offset + limit, restricted,
-      status: items.length ? restricted || incomplete || failed ? "partial" : "ok" : restricted ? "denied" : failed ? "unavailable" : incomplete ? "partial" : "ok",
-      coverage: incomplete || failed && items.length > 0 ? "incomplete" : "exhausted", noMatch: !restricted && !incomplete && !failed && items.length === 0,
+      status: mailSearchStatus({ found: items.length, restricted, incomplete, failed }),
+      coverage: (incomplete || failed) ? "incomplete" : "exhausted", noMatch: !restricted && !incomplete && !failed && items.length === 0,
       coverageLimit: COVERAGE,
     };
   };
