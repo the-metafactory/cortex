@@ -27,8 +27,13 @@ describe("cortex/await-async-expect", () => {
       "  await Promise.all(expect(link()).rejects.toThrow());",
       "});",
       "test('b', () => [expect(link()).rejects.toThrow()]);",
+      "test('c', () => {",
+      "  ids.forEach((id) => expect(load(id)).rejects.toThrow());",
+      "  setTimeout(() => expect(link()).resolves.toBe(1));",
+      "  ids.map(function (id) { return expect(load(id)).rejects.toThrow(); });",
+      "});",
     ].join("\n");
-    expect(flagged(code)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 11]);
+    expect(flagged(code)).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 11, 13, 14, 15]);
   });
 
   test("accepts awaited, returned and arrow-bodied assertions and plain expectations", () => {
@@ -43,6 +48,9 @@ describe("cortex/await-async-expect", () => {
       "});",
       "test('b', () => { return expect(link()).rejects.toThrow(); });",
       "test('c', () => expect(link()).resolves.toBe(1));",
+      "it.skip('d', function () { return expect(link()).rejects.toThrow(); });",
+      "test.each([1])('e %p', (n) => expect(load(n)).resolves.toBe(n));",
+      "beforeEach(() => Promise.all([expect(link()).resolves.toBe(1)]));",
     ].join("\n");
     expect(flagged(code)).toEqual([]);
   });
