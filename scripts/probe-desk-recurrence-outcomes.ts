@@ -8,11 +8,7 @@ import { serveMyDayRoute } from "./lib/my-day-route";
 const DAY = 86_400_000;
 const stack = await balanceSyncFixture();
 const { server, get } = serveMyDayRoute(stack.readRoute);
-const row = (view: MyDayView, id: string): OutlineNode => {
-  const node = findNode(view.outline, id);
-  if (!node) throw new Error(`Missing outline row ${id}`);
-  return node;
-};
+const row = (view: MyDayView, id: string): OutlineNode => findNode(view.outline, id) ?? assert.fail(`Missing outline row ${id}`);
 try {
   const seed = syncFixtureState();
   const area = findNode(seed.outline, "area:work");
@@ -24,7 +20,7 @@ try {
   const lateDate = "2026-11-17";
   stack.setNow(lateNow);
   const before = await get();
-  changeMyDay({ db: stack.db, desk: stack.runtime.options, now: lateNow, date: lateDate, requestId: crypto.randomUUID(), command: { op: "outline-complete", id: "twice", revision: before.revision } });
+  changeMyDay({ db: stack.db, desk: stack.runtime.options, now: lateNow, date: lateDate, requestId: crypto.randomUUID(), command: { op: "outline-complete", id: "twice", revision: before.revision, confirm: true } });
 
   const after = await get();
   const task = row(after, "twice");

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_SETTINGS, applyRecurrence, completeCalendarOccurrence, findNode, newRecurrence, nextOccurrence, recurrenceFinished, recurrenceProjection, scheduledAfter, validateRecurrence, type AppState, type OutlineNode, type Recurrence } from "..";
+import { required } from "../core/required";
 import { initDatabase } from "../../surface/mc/db/init";
 import { loadBalanceState, saveBalanceState } from "../../surface/mc/desk/balance-store";
 import { BalanceStateSchema } from "../../surface/mc/desk/balance-store-schema";
@@ -22,7 +23,7 @@ const mondayThursday: Recurrence = { unit: "week", interval: 2, weekdays: [1, 4]
 
 function complete(db: Database, id: string, day: string): void {
   const meta = loadMeta(db);
-  changeMyDay({ db, desk, now: at(day), date: localDay(at(day)), requestId: crypto.randomUUID(), command: { op: "outline-complete", id, revision: meta.revision } });
+  changeMyDay({ db, desk, now: at(day), date: localDay(at(day)), requestId: crypto.randomUUID(), command: { op: "outline-complete", id, revision: meta.revision, confirm: true } });
 }
 function reload(db: Database, id: string): OutlineNode {
   const stored = loadBalanceState(db);
@@ -105,7 +106,7 @@ describe("late completion of a calendar occurrence", () => {
   test("reopening a completion restores the planned occurrence and drops its outcomes", () => {
     const db = seeded(leaf("t", mondayThursday));
     complete(db, "t", "2026-11-17");
-    changeMyDay({ db, desk, now: at("2026-11-17"), date: "2026-11-17", requestId: crypto.randomUUID(), command: { op: "outline-reopen", id: "t", revision: loadMeta(db).revision } });
+    changeMyDay({ db, desk, now: at("2026-11-17"), date: "2026-11-17", requestId: crypto.randomUUID(), command: { op: "outline-reopen", id: "t", revision: loadMeta(db).revision, confirm: true } });
     expect(reload(db, "t").repeat?.occurrence).toBe("2026-11-02");
     expect(loadBalanceState(db)?.outcomes).toEqual([]);
     db.close();
@@ -151,7 +152,7 @@ describe("stopping limits", () => {
     complete(db, "t", "2026-11-17");
     const task = reload(db, "t");
     expect(task.repeat?.timesDone).toBe(1);
-    expect(recurrenceFinished(task.repeat as Recurrence, task.repeat?.occurrence ?? "")).toBe(false);
+    expect(recurrenceFinished(required(task.repeat), task.repeat?.occurrence ?? "")).toBe(false);
     db.close();
   });
   test("the count finishes the repeat after the last completion", () => {

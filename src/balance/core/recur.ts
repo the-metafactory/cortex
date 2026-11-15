@@ -44,7 +44,8 @@ export function isCalendarRepeat(repeat: Recurrence): boolean {
     return repeat.mode === "calendar";
 }
 export function validateRecurrence(repeat: Recurrence): void {
-    if (repeat.mode !== undefined && repeat.mode !== "calendar" && repeat.mode !== "completion")
+    const mode: string | undefined = repeat.mode;
+    if (mode !== undefined && mode !== "calendar" && mode !== "completion")
         throw new Error("A repeat counts from the planned date or from completion.");
     if (!Number.isInteger(repeat.interval) || repeat.interval < 1)
         throw new Error("A repeat interval is a whole number of at least 1.");
