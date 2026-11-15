@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.11.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.12.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -772,13 +772,13 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 			canonicalId: z.ZodString;
 		}, z.core.$strict>;
 		said: z.ZodEnum<{
-			archive: "archive";
 			trash: "trash";
+			archive: "archive";
+			junk: "junk";
 			todo: "todo";
 			plan: "plan";
 			reply: "reply";
 			keep: "keep";
-			junk: "junk";
 			matters: "matters";
 			"not-bulk": "not-bulk";
 		}>;
@@ -943,6 +943,58 @@ export declare function mailReportSnapshot(options: {
 	kind: MailReportKind;
 	input: MailReportInput;
 	provenance: Provenance;
+}): ApprovedSnapshot;
+export declare const MAIL_MOVE_CAPABILITY = "mail.move";
+export declare const MAIL_TRASH_CAPABILITY = "mail.trash";
+export declare const MAIL_RESTORE_CAPABILITY = "mail.restore";
+export declare const MAIL_MOVE_CAPABILITIES: readonly [
+	"mail.move",
+	"mail.trash",
+	"mail.restore"
+];
+export type MailMoveAction = "move" | "trash" | "restore";
+declare const MAIL_MOVE_TARGETS: readonly [
+	"archive",
+	"junk"
+];
+export type MailMoveTarget = (typeof MAIL_MOVE_TARGETS)[number];
+/** The declaration a Mail adapter publishes for the move verbs. The Cortex runtime registers it as the contract a fixture binding or a real adapter must meet. */
+export declare function mailMoveDeclaration(adapterId: string, only?: readonly MailMoveAction[]): AdapterDeclaration;
+export declare const mailAccountRef: (adapterId: string, connectionId: string, account: string) => ObjectReference;
+export declare const mailMessageRef: (adapterId: string, connectionId: string, messageId: string) => ObjectReference;
+export type MailMoveInput = {
+	action: "move";
+	message: ObjectReference;
+	target: MailMoveTarget;
+} | {
+	action: "trash";
+	message: ObjectReference;
+} | {
+	action: "restore";
+	message: ObjectReference;
+	from: string;
+};
+export declare function mailMoveSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: ObjectReference;
+	input: MailMoveInput;
+	provenance: Provenance;
+	policy?: "local" | "cloud";
+}): ApprovedSnapshot;
+export declare const MAIL_REPLY_DRAFT_CAPABILITY = "mail.reply-draft.create";
+/** The existing reply-draft wire contract, shared by the host and external Mail adapters. */
+export declare function mailReplyDraftDeclaration(adapterId?: string): AdapterDeclaration;
+/** Builds the exact message/account approval shape without trimming the reply text. */
+export declare function mailReplyDraftSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: ObjectReference;
+	message: ObjectReference;
+	body: string;
+	provenance: Provenance;
+	policy?: "local" | "cloud";
+	capability?: CapabilityDeclaration;
 }): ApprovedSnapshot;
 /**
  * The call a package's module supplies for one query capability. The host passes the validated fetch request for

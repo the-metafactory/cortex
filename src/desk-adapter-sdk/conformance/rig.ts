@@ -56,7 +56,7 @@ export async function openConformanceRig(input: ConformanceRigInput): Promise<Co
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "conformance-principal", stack: STACK, identityBindingRevision: "1", status: "active" };
   const connection: ConnectionRecord = {
     version: 1, status: "active", connectionId: input.connectionId, adapterId: input.adapterId, principalRef: principal.principalRef, connectionRevision: "1",
-    credentialHandle: SYNTHETIC_CREDENTIAL_HANDLE, accountScope: { account: "conformance-account", resource: "conformance-resource" },
+    credentialHandle: SYNTHETIC_CREDENTIAL_HANDLE, accountScope: { account: input.mailBinding?.account ?? "conformance-account", resource: "conformance-resource" },
     readCapabilityIds: [...input.readCapabilityIds], writeCapabilityIds: [...input.writeCapabilityIds], readDestinations: [...input.destinations], writeDestinations: [...input.destinations],
     connectorId: "conformance-connector", executionBindingRef: input.connector.support.declarationId, registryRevision: "registry-1",
   };
