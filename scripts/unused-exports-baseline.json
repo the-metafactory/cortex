@@ -656,7 +656,7 @@
   "src/surface/mc/desk/rule-attach.ts": 2,
   "src/surface/mc/desk/ruling.ts": 9,
   "src/surface/mc/desk/source-boundary.ts": 2,
-  "src/surface/mc/desk/sources/command.ts": 9,
+  "src/surface/mc/desk/sources/command.ts": 6,
   "src/surface/mc/desk/sources/waiting.ts": 1,
   "src/surface/mc/desk/studio-conversation-writer.ts": 8,
   "src/surface/mc/desk/studio/acts.ts": 4,

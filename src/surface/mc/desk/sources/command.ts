@@ -72,7 +72,7 @@ export interface MailHeaders {
 }
 
 const MAX_LINKS = 20;
-const MailLinkSchema = z.object({
+export const MailLinkSchema = z.object({
   text: z.string().transform(printable).pipe(z.string().min(1).max(200)),
   href: z.string().max(2000).refine((u) => /^https?:\/\//i.test(u) && URL.canParse(u)),
 });
@@ -267,6 +267,8 @@ function oneEntryPerOccurrence(events: SourceEvent[]): SourceEvent[] {
   });
 }
 
+export const SourceOutputSchema = z.looseObject({ events: z.unknown().optional(), items: z.unknown().optional() });
+
 export function parseSourceOutput(stdout: string, now: number = Date.now()): ParsedSource {
   let body: unknown;
   try {
@@ -274,9 +276,10 @@ export function parseSourceOutput(stdout: string, now: number = Date.now()): Par
   } catch {
     throw new Error("printed no JSON object on stdout");
   }
-  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Error("printed JSON that is not an object with events or items");
-  const events = "events" in body ? body.events : undefined;
-  const items = "items" in body ? body.items : undefined;
+  const output = SourceOutputSchema.safeParse(body);
+  if (!output.success) throw new Error("printed JSON that is not an object with events or items");
+  const reported = output.data;
+  const { events, items } = reported;
   let dropped = 0;
   const problems: string[] = [];
   const keep = <T>(name: string, list: unknown, schema: z.ZodType<T>): T[] => {
@@ -294,8 +297,8 @@ export function parseSourceOutput(stdout: string, now: number = Date.now()): Par
     });
   };
   const metadata = <T>(name: string, schema: z.ZodType<T>): T | undefined => {
-    if (!(name in body)) return undefined;
-    const parsed = schema.safeParse(Reflect.get(body, name));
+    if (!(name in reported)) return undefined;
+    const parsed = schema.safeParse(Reflect.get(reported, name));
     if (parsed.success) return parsed.data;
     problems.push(...entryProblems(name, parsed.error));
     return undefined;
@@ -313,7 +316,7 @@ export function parseSourceOutput(stdout: string, now: number = Date.now()): Par
   const listed = Array.isArray(items) ? items : undefined;
   const mail = listed ? keep("items", listed.filter((e) => !isSent(e)), SourceMailSchema) : keep("items", items, SourceMailSchema);
   const sent = listed ? keep("sent items", listed.filter(isSent), SourceSentSchema) : [];
-  const junkField = { junk: (body as { junk?: unknown }).junk };
+  const junkField = { junk: reported.junk };
   const reportedJunk = keepField(junkField, SourceMailSchema);
   const junkIds = new Set(reportedJunk?.map(m => junkIdentity(m.account, m.id)));
   return { events: oneEntryPerOccurrence(keep("events", events, SourceEventSchema)), mail: mail.filter(m => !junkIds.has(junkIdentity(m.account, m.id))), sent, junk: reportedJunk ? recentJunk(reportedJunk, now) : undefined, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };

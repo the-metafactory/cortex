@@ -166,6 +166,8 @@ cortex desk check-source docs/desk/examples/source-broken.json
 cat docs/desk/examples/source-mail.json | cortex desk check-source
 ```
 
+The Cortex SDK export `@the-metafactory/cortex/desk-sdk` carries the zod schemas and types these commands are checked with (`SourceOutputSchema`, `SourceMailSchema`, `WriterAnswer`, `ParserAnswerSchema` and the rest).
+
 Valid output exits 0 with the number of accepted events and mail items. Invalid output exits 1 and names the problems on stderr. The broken example names `events[0].start` and `items[0].unread`. A file argument of `-`, or no argument, reads stdin.
 
 ## Parsers and writers
