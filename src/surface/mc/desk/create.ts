@@ -25,7 +25,7 @@ export interface WriterResult {
 
 export type WriterRunner = (argv: string[], stdin: string, timeoutMs: number) => Promise<WriterResult>;
 
-const WriterAnswer = z.object({
+export const WriterAnswer = z.object({
   id: z.string().trim().min(1),
   url: z.string().regex(/^https?:/i).optional(),
   message: z.string().max(300).optional(),
