@@ -45,11 +45,6 @@ async function subjectOf(db: Database, runtime: DeskRuntime, from: Subject, now:
   });
 }
 
-/**
- * POST {op: "link", requestId, from: {kind: "task", id} | {kind: "thread", slug} | {kind: "note", id}, to: {kind: "meeting", event}}
- * links a task, Studio thread or note to a meeting the Desk lists, past or upcoming; {op: "unlink", link} ends it. A mail is
- * linked through {action: "attach"} on /api/desk/mail, and both undo doors end the same link.
- */
 async function handleDeskLinksRaw(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskLinksDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   if (!runtime?.options?.enabled) return fail(409, "The Desk is turned off on this stack.");
@@ -72,4 +67,9 @@ async function link(db: Database, runtime: DeskRuntime, from: Subject, event: st
   return linkToMeeting(db, subject, target, { id: ctx.newId(), requestId: ctx.requestId, origin: "desk", now: ctx.now });
 }
 
+/**
+ * POST {op: "link", requestId, from: {kind: "task", id} | {kind: "thread", slug} | {kind: "note", id}, to: {kind: "meeting", event}}
+ * links a task, Studio thread or note to a meeting the Desk lists, past or upcoming; {op: "unlink", link} ends it. A mail is
+ * linked through {action: "attach"} on /api/desk/mail, and both undo doors end the same link.
+ */
 export const handleDeskLinks = async (req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskLinksDeps = {}): Promise<Response> => withActPhrase(req, new URL(req.url).pathname, await handleDeskLinksRaw(req, db, runtime, deps));

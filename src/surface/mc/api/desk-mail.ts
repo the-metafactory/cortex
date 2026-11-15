@@ -1,7 +1,6 @@
 import { sourceBoundary } from "../desk/source-boundary";
 import { z } from "zod";
 import { answer as actAnswer, failResponse, type ActResult } from "../desk/act-result";
-import type { DeskPhrase } from "../desk/phrases";
 import { CommitmentSchema, decisionReceipt, MailDecisionSchema, mailYesFilter, saveDecisionDraft } from "../desk/mail-yes-filter";
 import { calendarsOnly, freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
 import { calendarAvailability } from "../desk/calendar-availability";
