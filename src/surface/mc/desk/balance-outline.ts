@@ -4,6 +4,7 @@ import type { DeskOptions } from "./compose";
 import type { MyDayMeta } from "./my-day-schema";
 import { stampCreated, stampTouched } from "./balance-touch";
 import { studioOwned } from "./studio-outline";
+import { applyOutlineTimeFields, planOutlineTimeFields } from "./balance-time-fields";
 
 export const STALE_OUTLINE = "The outline changed in another window or source. Your draft is kept; reload the latest outline before saving again.";
 function focusCount(node: OutlineNode, month: string): number {
@@ -98,7 +99,10 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   if (command.op === "outline-add") {
     const parent = openParent(state, desk, meta, command.parent);
     delete parent.done;
+    const isTask = command.kind !== "project";
+    const plan = planOutlineTimeFields({ id: "", title: "", weight: 0, ordering: "parallel", children: [] }, command, { date, dueDate: command.dueDate, clears: false, canRepeat: isTask });
     const node: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: command.weight ?? 50, ordering: "parallel", children: [], ...(command.context ? { context: command.context } : {}), ...(command.estimateMinutes ? { estimateMinutes: command.estimateMinutes } : {}), ...(command.kind === "project" ? { done: true } : { effort: command.effort ?? 1 }), ...(command.note ? { note: command.note } : {}), ...(command.dueDate ? { dueDate: command.dueDate } : {}) };
+    applyOutlineTimeFields(node, plan);
     stampCreated(node, date);
     parent.children.push(node);
     return node.id;
@@ -108,7 +112,9 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   if (command.op === "outline-edit") {
     const details = command.details;
     if ((isArea(state, node) || studioOwned(meta, node.id)) && details.title !== node.title) throw new Error("This title belongs to its configured area or Studio source. Edit it there.");
+    const plan = planOutlineTimeFields(node, details, { date, dueDate: details.dueDate || undefined, clears: true, canRepeat: !isArea(state, node) && node.children.length === 0 });
     setOutlineFocus(state, node, details.focus, command.yes, date);
+    applyOutlineTimeFields(node, plan);
     node.title = details.title;
     node.weight = details.weight;
     node.ordering = details.ordering;

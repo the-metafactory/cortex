@@ -1,0 +1,1 @@
+{"afterAdd":{"startDate":"2026-11-13","deferredUntil":"2026-11-14","repeat":{"unit":"week","interval":2,"weekdays":[1,4],"mode":"calendar","anchor":"2026-11-16"}},"afterEdit":{"unit":"day","interval":3,"mode":"completion"},"clearedAll":true,"invalidStatus":400,"cardDeferral":"2026-11-13","outlineDeferral":"2026-11-13","clearedThroughOutline":true,"temporaryStackOnly":true}
