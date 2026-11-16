@@ -42,6 +42,7 @@ import { expireTaskHandoffs, openTaskHandoffs, type DispatchOptions } from "./ta
 import type { BalanceDayAccess } from "./balance-day";
 import type { PiSettings } from "../../../conversations/pi";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
+import { MAIL_ROUND_INTERRUPT_REASONS, readMailRound } from "./mail-round";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
@@ -61,6 +62,7 @@ import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
 import { readRoutines } from "./routines";
 import type { RoutineOptions, RoutineRunner } from "./routine-command";
 import type { FlowOptions } from "../../../common/types/config";
+import type { MailRoundsConfig } from "../../../common/types/desk-mail-rounds";
 import type { WorkerHandoffOptions } from "../../../common/types/desk-workers";
 import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
@@ -82,6 +84,7 @@ export type AdapterCapabilityAdmission = { kind: "allowed" } | { kind: "denied";
 
 export interface DeskRuntime {
   conversations?: () => boolean;
+  now?: () => number;
   adapterDay?: BalanceDayAccess;
   adapterAttention?: AdapterAttentionAccess;
   adapterCapability?: (request: AdapterCapabilityRequest) => Promise<AdapterCapabilityAdmission>;
@@ -150,6 +153,7 @@ export interface DeskOptions {
   mailDmarc?: DmarcConfig;
   mailReport?: MailReportConfig;
   mailDigest?: DigestConfig;
+  mailRounds?: MailRoundsConfig;
   mailUnsubscribe?: UnsubscribeConfig;
   mailMirror?: MailMirrorConfig;
   mailWaiting?: WaitingConfig;
@@ -273,7 +277,8 @@ export async function composeDesk(
   const canMove = Boolean(desk.mailActions?.move?.length);
   const mailGroups = canMove ? listMailGroups(db, readings, desk, deps.handled, now) : null;
   const held = mailGroups?.digests.held ?? new Set<string>();
-  const mail = readings.flatMap((r) => r.mail.filter((m) => !offDesk.has(m.id) && !digested.has(m.id) && !held.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const roundMail = readings.flatMap((r) => r.mail.filter((m) => !offDesk.has(m.id) && !digested.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const mail = roundMail.filter((m) => !held.has(m.id));
   const vips = listVips(db);
   const vipSet = new Set(vips.map((v) => v.address));
   const suspicion = suspicionContext(db, desk.mailOwnDomains);
@@ -317,7 +322,7 @@ export async function composeDesk(
       onSorted: linkOnSorted,
     });
   }
-  const classified = classifier || localClassifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
+  const classificationsOn = Boolean(classifier ?? localClassifier);
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
   const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
@@ -385,9 +390,30 @@ export async function composeDesk(
   const studioSlugs = new Map([...myDay.studioTasks, ...myDay.studioProjects].map(link => [link.id, link.slug]));
   const adapterRows = adapters.items.map(item => withOwnerRespond(item, adapters.owners.get(item.key), studioSlugs, myDay.outline));
   sources.push(...adapters.sources);
+  const mailItemOptions = (mails: (SourceMail & { area: string | null; sourceId: string })[]) => ({
+    now,
+    mail: mails,
+    yesFilter,
+    events,
+    vips: vipSet,
+    unimportant: new Set(unimportant),
+    trash: canMove || Boolean(desk.mailActions?.trash?.length),
+    archive: canMove,
+    spam: canMove,
+    draft: Boolean(desk.mailActions?.draft?.length),
+    ...(classificationsOn ? { classified: readClassifications(db, mails.map((m) => m.id)) } : {}),
+    ...(desk.mailLinks ? { links: desk.mailLinks } : {}),
+    onDesk: new Set(deskCalendar.map((e) => e.key)),
+    suspicion,
+    report: Boolean(desk.mailReport),
+    studio: Boolean(desk.studio),
+    assistantName,
+    handoff: handoffReady(desk, handing),
+    unsubscribe,
+  });
   const corrected = applyCorrections(quietAdapterInterrupts([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set(deskCalendar.map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), assistantName: assistantName, handoff: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
+    ...mailItems({ ...mailItemOptions(withoutAnsweredRead(mail, answers)), invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
     ...meetingItems(deskCalendar, now, rules.meetingMinutes),
     ...ruleCards,
@@ -410,6 +436,12 @@ export async function composeDesk(
   const moved = movedKeys(db);
   const repositories = mentionRepositories(desk.areas, desk.conversationProjects ?? [], rangerResult?.state ?? null);
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => withMentions({ ...i, todoFingerprint: sourceIdentity(i) }, repositories));
+  const heldMail = roundMail.filter((m) => held.has(m.id));
+  const heldInterrupting = heldMail.length > 0
+    ? markInterrupts(mailItems({ ...mailItemOptions(heldMail), invitations: new Map() }), rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })
+    : [];
+  const interrupting = new Set([...corrected, ...heldInterrupting].filter((item) => item.kind === "mail" && item.interrupt?.reason && (MAIL_ROUND_INTERRUPT_REASONS as readonly string[]).includes(item.interrupt.reason.code)).map((item) => item.key));
+  const mailRound = readMailRound(db, { now, slots: desk.mailRounds?.slots, availability, mail: roundMail, sweeps, digests, interrupting, readings });
   return {
     ...(routines ? { routines } : {}),
     calendarAvailability: availability,
@@ -445,6 +477,7 @@ export async function composeDesk(
     notifications: rules.notifications,
     decisions: readDecisions(db, now),
     autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier) }),
+    mailRound,
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),
     mailHidden: hiddenMail(db),
