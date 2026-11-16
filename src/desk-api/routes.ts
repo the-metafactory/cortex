@@ -7,7 +7,7 @@ interface DeskApiRoute {
 
 const route = (method: DeskApiMethod, ...paths: string[]): DeskApiRoute[] => paths.map((path) => ({ method, path }));
 
-/** The Desk routes an external UI may rely on; `{name}` marks a path parameter. A removal needs a major bump of DESK_API_VERSION, an addition a minor one. */
+/** The Desk routes an external UI may rely on; `{name}` marks a parameter of the URL. A removal needs a major bump of DESK_API_VERSION, an addition a minor one. */
 export const DESK_API_ROUTES: readonly DeskApiRoute[] = [
   ...route("GET", "/api/desk", "/api/desk/contract", "/api/desk/studio", "/api/desk/studio/relations", "/api/desk/outline/history", "/api/desk/flows", "/api/desk/flows/card", "/api/desk/flows/{name}", "/api/desk/graph-surfaces/destinations", "/api/desk/graph-surfaces/node", "/api/desk/balance-surfaces/destinations", "/api/desk/balance-surfaces/task", "/api/desk/graph-repositories", "/api/desk/graph-repositories/{ref}/nodes", "/api/desk/routine-history", "/api/desk/routine-log", "/api/desk/routine-occurrences", "/api/desk/routine-removal", "/api/vigil/subjects"),
   ...route("GET", "/api/desk/my-day", "/api/desk/calendars", "/api/desk/vips", "/api/desk/unimportant", "/api/desk/mail/rules", "/api/desk/mail/dmarc", "/api/desk/corrections", "/api/desk/interruptions", "/api/desk/meeting-brief", "/api/desk/routine-display", "/api/desk/routine-editor", "/api/desk/routine-lifecycle", "/api/desk/routine-schedule", "/api/desk/connections", "/api/desk/drafts", "/api/desk/drafts/{id}", "/api/desk/drafts/{id}/details"),
