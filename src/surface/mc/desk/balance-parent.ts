@@ -13,6 +13,7 @@ import {
   type ParserRouting,
 } from "./parser-routing";
 import { parserPermissions } from "./parser-permissions";
+import { parserMessages } from "./parser-prompt";
 import type { DeskItem } from "./types";
 import { sourceIdentity } from "./source-task";
 
@@ -94,8 +95,8 @@ export async function proposeBalanceParent({
       parserUnavailable("integration-unavailable"),
     );
   const request = {
-    operation: "balance-parent",
-    version: 1,
+    operation: "balance-parent" as const,
+    version: 1 as const,
     revision: day.revision,
     source: {
       key: source.key,
@@ -109,7 +110,7 @@ export async function proposeBalanceParent({
     const raw: unknown = JSON.parse(
       await run(
         desk.ask.parser,
-        JSON.stringify(request),
+        JSON.stringify({ ...request, messages: parserMessages(request) }),
         desk.ask.timeoutSeconds * 1000,
       ),
     );
