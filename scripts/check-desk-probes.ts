@@ -186,6 +186,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-outline-touch.ts",
   "probe-desk-recurrence-outcomes.ts",
   "probe-desk-repeating-row.ts",
+  "probe-desk-search.ts",
   "probe-desk-package-backend.ts",
   "probe-desk-query.ts",
   "probe-desk-read-admission.ts",

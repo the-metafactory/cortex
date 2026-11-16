@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.8.0";
+export declare const DESK_API_VERSION = "1.9.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -1949,6 +1949,36 @@ export interface DeskAutonomy {
 		at: number;
 		ok: boolean;
 	}[];
+}
+declare const DESK_SEARCH_KINDS: readonly [
+	"desk-note",
+	"desk-reminder",
+	"studio-capture",
+	"studio-thread",
+	"desk-item",
+	"balance-task",
+	"balance-project"
+];
+export type DeskSearchKind = (typeof DESK_SEARCH_KINDS)[number];
+export interface DeskSearchOpenRoute {
+	method: "GET";
+	path: string;
+}
+export interface DeskSearchHit {
+	kind: DeskSearchKind;
+	id: string;
+	title: string;
+	snippet: string;
+	at: string | null;
+	open: DeskSearchOpenRoute & {
+		query: Record<string, string>;
+	};
+}
+export interface DeskSearchResponse {
+	status: "ok" | "empty";
+	hits: DeskSearchHit[];
+	next: string | null;
+	unavailableKinds: DeskSearchKind[];
 }
 declare const BODY: unique symbol;
 /** A `Response` that carries the JSON body type it was built from, so a handler that declares it as its return type cannot send another shape. */
