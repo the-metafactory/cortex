@@ -261,7 +261,7 @@ allow:
     reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
     owner: cortex#436
   - pattern: config-tree
-    path: docs/agents-md/architecture.md
+    path: docs/agent-guide/architecture.md
     match: migrated from grove-v2 `~/\.config/grove
     reason: grove-namespace subsystem — path accurate as of writing; grove→cortex rename tracked separately (cortex#436)
     owner: cortex#436
