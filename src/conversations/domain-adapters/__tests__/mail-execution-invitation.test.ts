@@ -25,8 +25,8 @@ function invitationProvider(options: { omit?: readonly string[] } = {}) {
     restore: () => Promise.resolve({}),
     lookupInvitation: input => { lookups.push(input); return Promise.resolve({ status: "found", request: inputs[0], result: { ref: (inputs[0] as { invitation: unknown }).invitation, revision: "r2" } }); },
   };
-  const provider: Record<string, unknown> = { ...full };
-  for (const name of options.omit ?? []) delete provider[name];
+  const omitted = new Set(options.omit);
+  const provider = Object.entries(full).reduce<Record<string, unknown>>((kept, [name, call]) => omitted.has(name) ? kept : { ...kept, [name]: call }, {});
   return { inputs, lookups, connection: () => provider as MailExecutionProvider };
 }
 
