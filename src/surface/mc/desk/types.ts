@@ -10,6 +10,9 @@ import type { CalendarAvailability } from "./calendar-availability";
 import type { EventAvailability } from "./calendar-contract";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import type { DeskPhrase } from "./phrases";
+import { INTERRUPT_REASON_CODES } from "../../../desk-sdk/interrupt-reason";
+
+export { INTERRUPT_REASON_CODES };
 import type { MailRoundView } from "./mail-round";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
@@ -169,8 +172,6 @@ const FRESHNESS_LABEL: Record<NonNullable<DeskItem["freshness"]>, string | null>
 export function freshnessLabel(status: DeskItem["freshness"]): string | null {
   return status ? FRESHNESS_LABEL[status] : null;
 }
-
-export const INTERRUPT_REASON_CODES = ["meeting.soon", "reminder.due", "mail.meeting-today", "mail.deadline-today", "mail.vip", "mail.ranked"] as const;
 
 export type InterruptReasonCode = (typeof INTERRUPT_REASON_CODES)[number];
 

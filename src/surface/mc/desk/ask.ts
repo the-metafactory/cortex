@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ParserPermissionsSchema, type ParserPermissions } from "../../../common/types/desk-parser";
 import { ParserRoutingSchema, parserUnavailable, type ParserRouting } from "./parser-routing";
+import { parserMessages } from "./parser-prompt";
 import { DAY_MS, startOfDay } from "./time";
 import type { CapabilityRefusal } from "./routine-capability-contract";
 
@@ -243,7 +244,7 @@ export async function parseWithCommand(argv: string[], request: ParserRequest, r
   const invalid = (): ParseResult => ({ kind: "none", reason: "The parser returned an invalid answer.", routing: parserUnavailable("invalid-output") });
   let raw: unknown;
   try {
-    raw = JSON.parse(await run(argv, JSON.stringify(request), timeoutMs));
+    raw = JSON.parse(await run(argv, JSON.stringify({ ...request, messages: parserMessages(request) }), timeoutMs));
   } catch {
     return request.routing ? invalid() : null;
   }

@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.15.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.16.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -399,6 +399,131 @@ export declare const CloseAnswer: z.ZodObject<{
 export type WriterRequest = AskCard & {
 	requestId: string;
 };
+export declare const MailMoveCommandRequestSchema: z.ZodObject<{
+	account: z.ZodString;
+	messageId: z.ZodString;
+	action: z.ZodLiteral<"move">;
+	target: z.ZodEnum<{
+		junk: "junk";
+		archive: "archive";
+		trash: "trash";
+	}>;
+}, z.core.$strip>;
+export declare const MailRestoreCommandRequestSchema: z.ZodObject<{
+	account: z.ZodString;
+	messageId: z.ZodString;
+	action: z.ZodLiteral<"restore">;
+	from: z.ZodEnum<{
+		junk: "junk";
+		archive: "archive";
+		trash: "trash";
+	}>;
+}, z.core.$strip>;
+export declare const MailTrashCommandRequestSchema: z.ZodObject<{
+	account: z.ZodString;
+	messageId: z.ZodString;
+	action: z.ZodLiteral<"trash">;
+}, z.core.$strip>;
+export declare const MailLocateCommandRequestSchema: z.ZodObject<{
+	account: z.ZodString;
+	messageId: z.ZodString;
+	action: z.ZodLiteral<"locate">;
+}, z.core.$strip>;
+export declare const MailDraftCommandRequestSchema: z.ZodObject<{
+	account: z.ZodString;
+	messageId: z.ZodString;
+	action: z.ZodLiteral<"draft">;
+	to: z.ZodString;
+	subject: z.ZodString;
+	body: z.ZodString;
+}, z.core.$strip>;
+export declare const MailReportCommandRequestSchema: z.ZodObject<{
+	account: z.ZodString;
+	messageId: z.ZodString;
+	action: z.ZodLiteral<"report">;
+	to: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export declare const MailInvitationReplyCommandRequestSchema: z.ZodObject<{
+	account: z.ZodString;
+	messageId: z.ZodString;
+	action: z.ZodLiteral<"invite-reply">;
+	uid: z.ZodString;
+	reply: z.ZodEnum<{
+		accept: "accept";
+		decline: "decline";
+	}>;
+	requestId: z.ZodString;
+}, z.core.$strip>;
+export declare const MailMoveCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodCatch<z.ZodObject<{
+	message: z.ZodCatch<z.ZodString>;
+	folder: z.ZodCatch<z.ZodPipe<z.ZodString, z.ZodTransform<string | null, string>>>;
+}, z.core.$strip>>>;
+export declare const MailRestoreCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodCatch<z.ZodObject<{
+	message: z.ZodCatch<z.ZodString>;
+	folder: z.ZodCatch<z.ZodPipe<z.ZodString, z.ZodTransform<string | null, string>>>;
+}, z.core.$strip>>>;
+export declare const MailTrashCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodCatch<z.ZodObject<{
+	message: z.ZodCatch<z.ZodString>;
+	folder: z.ZodCatch<z.ZodPipe<z.ZodString, z.ZodTransform<string | null, string>>>;
+}, z.core.$strip>>>;
+export declare const MailLocateCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodObject<{
+	place: z.ZodEnum<{
+		junk: "junk";
+		inbox: "inbox";
+		archive: "archive";
+		trash: "trash";
+		gone: "gone";
+	}>;
+	folder: z.ZodCatch<z.ZodPipe<z.ZodString, z.ZodTransform<string | null, string>>>;
+	unread: z.ZodPipe<z.ZodUnknown, z.ZodTransform<boolean, unknown>>;
+}, z.core.$strip>>;
+export declare const MailDraftCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodCatch<z.ZodObject<{
+	id: z.ZodCatch<z.ZodString>;
+}, z.core.$strip>>>;
+export declare const MailReportCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodCatch<z.ZodObject<{
+	message: z.ZodCatch<z.ZodString>;
+}, z.core.$strip>>>;
+export declare const MailInvitationReplyCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodCatch<z.ZodObject<{
+	message: z.ZodCatch<z.ZodString>;
+}, z.core.$strip>>>;
+export declare const PushCommandRequestSchema: z.ZodObject<{
+	key: z.ZodString;
+	title: z.ZodString;
+	why: z.ZodString;
+	action: z.ZodOptional<z.ZodObject<{
+		label: z.ZodString;
+		url: z.ZodURL;
+	}, z.core.$strip>>;
+	reason: z.ZodOptional<z.ZodObject<{
+		code: z.ZodEnum<{
+			"meeting.soon": "meeting.soon";
+			"reminder.due": "reminder.due";
+			"mail.meeting-today": "mail.meeting-today";
+			"mail.deadline-today": "mail.deadline-today";
+			"mail.vip": "mail.vip";
+			"mail.ranked": "mail.ranked";
+		}>;
+		phrase: z.ZodObject<{
+			code: z.ZodEnum<{
+				"meeting.soon": "meeting.soon";
+				"reminder.due": "reminder.due";
+				"mail.meeting-today": "mail.meeting-today";
+				"mail.deadline-today": "mail.deadline-today";
+				"mail.vip": "mail.vip";
+				"mail.ranked": "mail.ranked";
+			}>;
+			params: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
+		}, z.core.$strip>;
+		target: z.ZodOptional<z.ZodString>;
+		eventKey: z.ZodOptional<z.ZodString>;
+		dueAt: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>>;
+	held: z.ZodOptional<z.ZodObject<{
+		eventKey: z.ZodString;
+		title: z.ZodString;
+		until: z.ZodNumber;
+	}, z.core.$strip>>;
+}, z.core.$strip>;
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -1174,8 +1299,8 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 			plan: "plan";
 			reply: "reply";
 			keep: "keep";
-			trash: "trash";
 			archive: "archive";
+			trash: "trash";
 			"not-bulk": "not-bulk";
 			matters: "matters";
 		}>;

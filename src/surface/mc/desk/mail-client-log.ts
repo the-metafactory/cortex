@@ -1,3 +1,5 @@
+import { MailLocateCommandRequestSchema, MailLocateCommandResultSchema } from "../../../desk-sdk/mail-command-contract";
+import type { z } from "zod";
 import type { Database } from "bun:sqlite";
 import type { WriterRunner } from "./create";
 import type { MailActionsConfig, TrashLedger } from "./mail-actions";
@@ -6,8 +8,6 @@ import { movedTarget } from "./mail-move";
 import type { SourceReading } from "./sources/command";
 
 const DESK_MOVES = new Set<MailLogAction>(["archive", "junk", "trash", "unimportant"]);
-const PLACES = ["inbox", "archive", "junk", "trash", "gone"] as const;
-type Place = (typeof PLACES)[number];
 
 export const LOCATE_ATTEMPTS = 3;
 
@@ -20,11 +20,7 @@ export interface ClientLogDeps {
   retentionDays: number;
 }
 
-interface Located {
-  place: Place;
-  folder: string | null;
-  unread: boolean;
-}
+type Located = z.output<typeof MailLocateCommandResultSchema>;
 
 const NOT_LOOKED_UP = "not-looked-up";
 
@@ -34,27 +30,14 @@ function handledOnDesk(deps: ClientLogDeps, messageId: string): boolean {
   return (last?.where === "desk" || last?.where === "rule") && DESK_MOVES.has(last.action);
 }
 
-function readLocated(stdout: string): Located | null {
-  try {
-    const parsed: unknown = JSON.parse(stdout);
-    if (!parsed || typeof parsed !== "object" || !("place" in parsed)) return null;
-    const place = PLACES.find((p) => p === parsed.place);
-    if (!place) return null;
-    const folder = "folder" in parsed && typeof parsed.folder === "string" && parsed.folder.trim() ? parsed.folder.trim().slice(0, 200) : null;
-    const unread = "unread" in parsed && parsed.unread === true;
-    return { place, folder, unread };
-  } catch {
-    return null;
-  }
-}
-
 async function locate(deps: ClientLogDeps, d: Departure): Promise<Located | null | typeof NOT_LOOKED_UP> {
   const argv = deps.config?.move;
   const account = d.mail.account;
   if (!argv?.length || !account) return NOT_LOOKED_UP;
   try {
-    const result = await deps.run(argv, JSON.stringify({ action: "locate", account, messageId: d.mail.id }), (deps.config?.timeoutSeconds ?? 30) * 1000);
-    return result.code === 0 ? readLocated(result.stdout) : null;
+    const result = await deps.run(argv, JSON.stringify(MailLocateCommandRequestSchema.parse({ action: "locate", account, messageId: d.mail.id })), (deps.config?.timeoutSeconds ?? 30) * 1000);
+    const located = result.code === 0 ? MailLocateCommandResultSchema.safeParse(result.stdout) : null;
+    return located?.success ? located.data : null;
   } catch {
     return null;
   }
