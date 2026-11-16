@@ -13,6 +13,7 @@ import type { DeskPhrase } from "./phrases";
 import { INTERRUPT_REASON_CODES } from "../../../desk-sdk/interrupt-reason";
 
 export { INTERRUPT_REASON_CODES };
+import type { MailRoundView } from "./mail-round";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
@@ -250,6 +251,7 @@ export interface DeskView {
   mailHidden?: import("./mail-snooze").HiddenMail[];
   mailSweeps?: import("./mail-sweep").MailSweepView[];
   mailDigests?: import("./mail-digest").MailDigestView[];
+  mailRound?: MailRoundView;
   dmarc?: import("./mail-dmarc").DmarcWeek;
   myDay?: MyDayView;
   mirror?: import("./mirror").WeeklyMirror;

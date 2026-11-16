@@ -97,13 +97,13 @@ describe("mission-control server", () => {
   it("serves the Desk API contract handshake", async () => {
     const res = await fetch(`http://localhost:${testPort}/api/desk/contract`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("x-desk-api-version")).toBe("1.0.0");
+    expect(res.headers.get("x-desk-api-version")).toBe(DESK_API_VERSION);
     const body = await res.json();
     expect(body.version).toBe(DESK_API_VERSION);
     expect(body.phraseCodes).toEqual([...DESK_PHRASE_CODES]);
     expect(Object.keys(body.vocabularies).sort()).toEqual([
-      "ADAPTER_CAPABILITY_ACTION", "CORRECTION_MOVES", "DESK_ITEM_KINDS", "FIELD_SCHEMAS", "HANDOFF_KEY_PREFIX",
-      "MAX_INSTRUCTION", "RULE_ACTIONS", "RULE_MATCHES", "SNOOZE_TIMES", "STUDIO_RESPOND_ACTION", "SWEEP_WORDS", "WAITING_OPS",
+      "ADAPTER_CAPABILITY_ACTION", "CORRECTION_MOVES", "DEFAULT_MAIL_ROUND_SLOTS", "DESK_ITEM_KINDS", "FIELD_SCHEMAS", "HANDOFF_KEY_PREFIX",
+      "MAIL_ROUND_GROUP_KINDS", "MAX_INSTRUCTION", "RULE_ACTIONS", "RULE_MATCHES", "SNOOZE_TIMES", "STUDIO_RESPOND_ACTION", "SWEEP_WORDS", "WAITING_OPS",
     ]);
     expect(body.vocabularies.DESK_ITEM_KINDS).toEqual([...DESK_ITEM_KINDS]);
   });
@@ -121,7 +121,7 @@ describe("mission-control server", () => {
   it("stamps the Desk API version on Desk, conversation and vigil responses only", async () => {
     for (const path of ["/api/desk", "/api/conversations", "/api/vigil/subjects"]) {
       const res = await fetch(`http://localhost:${testPort}${path}`);
-      expect(res.headers.get("x-desk-api-version")).toBe("1.0.0");
+      expect(res.headers.get("x-desk-api-version")).toBe(DESK_API_VERSION);
     }
     const health = await fetch(`http://localhost:${testPort}/health`);
     expect(health.headers.get("x-desk-api-version")).toBeNull();

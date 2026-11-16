@@ -31,6 +31,8 @@ A calendar, a mail account, a model that sorts mail, a place to write notes and 
 
 `GET /api/desk` returns `ahead[]` with the calendar events and reminders that start from tomorrow through the sixth day after today (the window ends at the start of the seventh day). The Desk never fills in days a source did not read. To find them, read `calendarAvailability.sources[]`: each calendar source reports `to`, the end of its declared coverage. Days after that `to` are unread, not empty.
 
+`GET /api/desk` also returns `mailRound`, the durable scheduled mail round. It names the round `id`, its `revision`, whether it is `due`, its effective `scheduledFor`, the always-present `nextScheduledAt`, how many mails are `waiting` for the successor, the ordered `groups` and `mails`, and any `unavailable` mail or calendar sources. A round captures its members at a slot and keeps them until they are handled; later arrivals wait for the successor, and an unfinished round survives midnight and a restart. The slots are set by `mc.desk.mailRounds.slots` (default `08:30`, `13:30` and `16:30` every day in the stack's time zone); a busy or unknown meeting moves a slot to the end of its meeting chain.
+
 ## How the Desk ranks items
 
 Fixed rules rank the items, and each reason comes from a template:

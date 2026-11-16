@@ -7,6 +7,7 @@ import { RoutineOptionsSchema } from "./desk-routines";
 import { WorkerHandoffOptionsSchema } from "./desk-workers";
 import { DeskConversationsSchema } from "./desk-conversations";
 import { DeskDispatchSchema } from "./desk-dispatch";
+import { MailRoundsSchema } from "./desk-mail-rounds";
 /**
  * F-007: Bot Configuration Types
  *
@@ -693,6 +694,7 @@ export const DeskSchema = z.object({
         .optional(),
     })
     .default({}),
+  mailRounds: MailRoundsSchema,
   ruling: z
     .object({
       explainer: z
