@@ -17,8 +17,8 @@ function reportProvider(options: { omit?: readonly string[]; timeout?: boolean }
   const lookups: unknown[] = [];
   const full: MailExecutionProvider = {
     version: 1,
-    report: input => { inputs.push(input); const parsed = MailReportInputSchema.parse(input); if (options.timeout) return Promise.reject(new Error("The provider reported before a timeout.")); return Promise.resolve({ ref: parsed.message, folder: "Junk" }); },
-    lookupReport: input => { lookups.push(input); return Promise.resolve({ status: "found", request: {}, result: { status: "reported", folder: "Junk" } }); },
+    report: input => { inputs.push(input); const parsed = MailReportInputSchema.parse({ message: (input as { message: unknown }).message }); if (options.timeout) return Promise.reject(new Error("The provider reported before a timeout.")); return Promise.resolve({ ref: parsed.message, folder: "Junk" }); },
+    lookupReport: input => { lookups.push(input); return Promise.resolve({ status: "found", request: inputs[0], result: { status: "reported", folder: "Junk" } }); },
     restore: () => Promise.resolve({ status: "restored", folder: "Inbox" }),
     move: () => Promise.resolve({}),
   };
@@ -36,7 +36,8 @@ describe("packaged Mail report execution", () => {
     const report = await runMailActionScenario(dir, { capabilityId: `mail.report.${kind}`, mail: scenarioMail(), execution: native, snapshot: reportSnapshot(kind) });
     expect(report.stages[0]?.state).toBe("succeeded");
     expect(native.inputs).toHaveLength(1);
-    expect(MailReportInputSchema.safeParse(native.inputs[0]).success).toBe(true);
+    expect(MailReportInputSchema.safeParse({ message: (native.inputs[0] as { message: unknown }).message }).success).toBe(true);
+    expect(native.inputs[0]).toMatchObject({ version: 1, kind, requestId: expect.stringMatching(new RegExp(`^mail\\.report\\.${kind}:`)) });
     const output = report.events.map(event => JSON.stringify(event)).join("\n");
     expect(output).toContain("Junk");
     expect(MailReportOutputSchema.safeParse({ ref: mailMessageRef("mail", "conformance-connection", SCENARIO_MESSAGE), folder: "Junk" }).success).toBe(true);

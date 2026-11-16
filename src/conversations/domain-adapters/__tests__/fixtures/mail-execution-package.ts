@@ -44,7 +44,7 @@ export function createDeskAdapter(host) {
         const context = contextFor(request), snapshot = request.snapshot, listing = await host.mail.listed(connection);
         const mail = listing?.mail.find(item => item.ref.messageId === snapshot.target.canonicalId);
         const requestId = identity.capabilityId + ":" + request.ownerRequestId;
-        const native = ${action === "report" ? "{ " : "{ version: 1, requestId, account: listing.account, messageId: snapshot.target.canonicalId, "}
+        const native = ${action === "report" ? `{ version: 1, requestId, kind: ${JSON.stringify(reportKind)}, ` : "{ version: 1, requestId, account: listing.account, messageId: snapshot.target.canonicalId, "}
           ${action === "report" ? "message: snapshot.target" : action === "reply" ? "recipient: mail.from.address, subject: mailReplySubject(mail.subject), body: snapshot.input.body" : "context: { operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest }"}
           ${action === "move" ? ', action: "move", target: snapshot.input.target' : action === "trash" ? ', action: "trash", target: "trash"' : action === "restore" ? ', action: "restore", from: snapshot.input.from' : ""} };
         ${options.forge === "account" ? 'native.account = "other-account";' : options.forge === "message" ? 'native.messageId = "other-message";' : options.forge === "body" ? 'native.body = "changed";' : options.forge === "context" ? 'native.context = { operationId: "other", attemptId: "other", snapshotDigest: "0".repeat(64) };' : ""}

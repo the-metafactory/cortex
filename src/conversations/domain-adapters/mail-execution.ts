@@ -3,7 +3,7 @@ import type { DeskAdapterConnection, DeskMailExecutionBridge, DeskMailExecutionM
 import { replySubject } from "./mail/reply-subject";
 import { unsubscribeMethod } from "./mail/unsubscribe-method";
 import { admittedCallKey, admittedDispatch, admittedLookup, connectionKey, DeskBackendUnavailableError } from "./package-backend";
-import { MAIL_REPORT_CAPABILITY, MailReportInputSchema, MailReportOutputSchema } from "./mail/report-contract";
+import { MAIL_REPORT_CAPABILITY, MAIL_REPORT_KINDS, MailReportInputSchema, type MailReportKind, MailReportOutputSchema } from "./mail/report-contract";
 import { mailBindingFor } from "./mail-read";
 import type { MailExecutionConnections } from "./mail-execution-source";
 import type { OperationJournalStore } from "./operations/journal";
@@ -43,7 +43,7 @@ const NATIVE_INPUT: Record<string, z.ZodType> = {
   move: z.object({ ...nativeBase, context: nativeContext, action: z.enum(["move", "trash"]), target: z.enum(["archive", "junk", "trash"]) }).strict(),
   restore: z.object({ ...nativeBase, context: nativeContext, action: z.literal("restore"), from: z.string().min(1) }).strict(),
   unsubscribe: z.object({ ...nativeBase, context: nativeContext }).strict(),
-  report: MailReportInputSchema,
+  report: MailReportInputSchema.extend({ version: z.literal(1), requestId: z.string().min(1), kind: z.enum(MAIL_REPORT_KINDS) }).strict(),
 };
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const fail = (code: string, message: string): never => { throw new DeskBackendUnavailableError({ code, message }); };
@@ -117,7 +117,7 @@ export function mailExecutionBridge(source: MailReadSource | undefined, executio
       if (LOOKUPS.has(method)) {
         if (input !== requestId) return fail("mail_execution_scope", "The lookup belongs to another owner request.");
       } else if (method === "report") {
-        if (!admittedDispatch() || !record(input) || canonicalWire(input.message) !== canonicalWire(snapshot.target) || canonicalWire(input) !== canonicalWire(snapshot.input)) return fail("mail_execution_scope", "The report must name the approved message.");
+        if (!admittedDispatch() || !record(input) || canonicalWire(input.message) !== canonicalWire(snapshot.target) || canonicalWire({ message: input.message }) !== canonicalWire(snapshot.input) || input.requestId !== requestId || snapshot.capabilityId !== MAIL_REPORT_CAPABILITY[input.kind as MailReportKind]) return fail("mail_execution_scope", "The report must name the approved message, kind and request.");
       } else {
         if (!admittedDispatch() || !record(input) || input.version !== 1 || input.requestId !== requestId || input.account !== binding.account || input.messageId !== snapshot.target?.canonicalId) return fail("mail_execution_scope", "The provider call does not match the approved message and account.");
         const original = snapshot.input;
