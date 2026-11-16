@@ -321,12 +321,32 @@ declare const ASK_KINDS: readonly [
 	"goal",
 	"calendar",
 	"routine",
-	"conversation"
+	"conversation",
+	"row"
 ];
 export type AskKind = (typeof ASK_KINDS)[number];
 declare const FIELD_SCHEMAS: {
 	routine: z.ZodObject<{
 		proposalId: z.ZodUUID;
+	}, z.core.$strip>;
+	row: z.ZodObject<{
+		title: z.ZodString;
+		area: z.ZodString;
+		repeat: z.ZodObject<{
+			mode: z.ZodOptional<z.ZodEnum<{
+				calendar: "calendar";
+				completion: "completion";
+			}>>;
+			unit: z.ZodEnum<{
+				month: "month";
+				day: "day";
+				week: "week";
+			}>;
+			interval: z.ZodNumber;
+			weekdays: z.ZodOptional<z.ZodArray<z.ZodNumber>>;
+			count: z.ZodOptional<z.ZodNumber>;
+			until: z.ZodOptional<z.ZodISODate>;
+		}, z.core.$strict>;
 	}, z.core.$strip>;
 	conversation: z.ZodObject<{
 		text: z.ZodString;

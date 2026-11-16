@@ -3,6 +3,8 @@ import { ParserPermissionsSchema, type ParserPermissions } from "../../../common
 import { ParserRoutingSchema, parserUnavailable, type ParserRouting } from "./parser-routing";
 import { parserMessages } from "./parser-prompt";
 import { DAY_MS, startOfDay } from "./time";
+import { OutlineRepeatInputSchema } from "./balance-command";
+import type { RowRepeat } from "./routine-schedule";
 import { ASK_KINDS } from "../../../desk-api/wire/ask";
 import type { AskKind, DeskProposal, ConversationOffer } from "../../../desk-api/wire/ask";
 import type { Expect, SameShape } from "../../../common/types/same-shape";
@@ -15,6 +17,7 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 
 export const FIELD_SCHEMAS = {
   routine: z.object({ proposalId: z.uuid() }),
+  row: z.object({ title: text(300), area: text(200), repeat: OutlineRepeatInputSchema }),
   conversation: z.object({ text: text(1000), area: text(200).optional() }),
   reminder: z.object({ text: text(300), due: iso }),
   note: z.object({ text: text(1000) }),
@@ -47,6 +50,7 @@ export function validateCard(kind: unknown, fields: unknown): AskCard | string {
 
 export const KIND_LABEL: Record<AskKind, string> = {
   routine: "Routine",
+  row: "Repeat it for me",
   reminder: "Reminder",
   note: "Note",
   capture: "Studio capture",
@@ -60,6 +64,7 @@ export const notSetUp = (kind: AskKind): string => `${KIND_PLURAL[kind]} are not
 
 const KIND_PLURAL: Record<AskKind, string> = {
   routine: "Routines",
+  row: "Repeating rows",
   reminder: "Reminders",
   note: "Notes",
   capture: "Studio captures",
@@ -282,6 +287,7 @@ function problemFor(kind: AskKind, fields: Record<string, unknown>, at: number |
   if (kind === "reminder" && at === undefined) return "When should I remind you?";
   if (kind === "calendar" && at === undefined) return "When is it?";
   if (kind === "task" && !fields.map) return "Which map should the task go on? None is set up.";
+  if (kind === "row" && !fields.area) return "Which area should this go in?";
   return checked;
 }
 
@@ -298,6 +304,14 @@ export function toProposal(kind: AskKind, fields: Record<string, unknown>, writa
     ...(writable.has(kind) ? {} : { unwritable: true as const }),
     via,
   };
+}
+
+export const PARSER_KINDS: readonly AskKind[] = ASK_KINDS.filter((kind) => kind !== "row");
+
+const ROW_WRITABLE: ReadonlySet<AskKind> = new Set(["row"]);
+
+export function rowProposal(row: RowRepeat, area: string | undefined): DeskProposal {
+  return toProposal("row", { title: row.title, ...(area ? { area } : {}), repeat: row.repeat }, ROW_WRITABLE, "rules");
 }
 
 type _WireConversationFields = Expect<SameShape<AskFields["conversation"], WireConversationOffer["fields"]>>;

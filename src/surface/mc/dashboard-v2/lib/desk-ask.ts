@@ -16,8 +16,8 @@ const post = async <T>(path: string, body: unknown, fetchImpl: FetchLike): Promi
   return { ok: false, text: line || `The request failed (HTTP ${res.status}).`, ...(parsed?.uncertain === true ? { uncertain: true as const } : {}) };
 };
 
-export async function askDesk(text: string, fetchImpl: FetchLike = fetch, area?: string): Promise<{ ok: true; proposal: DeskProposal } | { ok: false; text: string }> {
-  const r = await post<{ proposal: DeskProposal }>("/api/desk/ask", { text, ...(area ? { area } : {}) }, fetchImpl);
+export async function askDesk(text: string, fetchImpl: FetchLike = fetch, area?: string, choice?: "routine"): Promise<{ ok: true; proposal: DeskProposal } | { ok: false; text: string }> {
+  const r = await post<{ proposal: DeskProposal }>("/api/desk/ask", { text, ...(area ? { area } : {}), ...(choice ? { choice } : {}) }, fetchImpl);
   return r.ok ? { ok: true, proposal: r.body.proposal } : r;
 }
 

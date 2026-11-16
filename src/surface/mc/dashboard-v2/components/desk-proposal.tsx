@@ -10,6 +10,7 @@ type FieldType = "text" | "long" | "time" | "map";
 
 const FIELDS: Record<AskKind, { key: string; label: string; type: FieldType }[]> = {
   routine: [],
+  row: [{ key: "title", label: "Task", type: "text" }],
   conversation: [{ key: "text", label: "Message", type: "long" }],
   reminder: [{ key: "text", label: "What", type: "text" }, { key: "due", label: "When", type: "time" }],
   note: [{ key: "text", label: "Note", type: "long" }],
