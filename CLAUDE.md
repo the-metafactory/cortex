@@ -15,155 +15,25 @@ When `CONTEXT.md` and your instinct disagree, `CONTEXT.md` wins. When a term cro
 
 ## Architecture
 
-cortex is the **M7 application** of the metafactory Myelin stack — the operator's collaboration surface that consumes the bus (M2–M6) and presents activity to humans. It replaces both `the-metafactory/grove` (legacy v0.29.0) and `the-metafactory/grove-v2` (v0.22.1) as the canonical home for Discord/Mattermost adapters, Mission Control dashboard, workflow runner, and bus-side taps.
+cortex is the **M7 application** of the metafactory Myelin layer model: the principal's collaboration surface. It consumes the bus (M2–M6), owns no part of M1–M6, and presents activity to humans. The runtime is one entrypoint, `src/cortex.ts`, plus the relay and CLIs; daemons are launchd plists. No platform adapter lives in-tree: `web`, `slack`, `mattermost` and `discord` are first-party arc adapter bundles (ADR-0024).
 
-cortex is layer 7 in the OSI-style **M1–M7 Myelin stack**:
+cortex inherits its source from `the-metafactory/grove-v2`. The migration runs in phases MIG-0 to MIG-8, planned in `docs/plan-cortex-migration.md`.
 
-```
-M7 SURFACES (cortex, pilot, signal-collector, future apps) ← cortex lives HERE
-M6 COMPOSITION (myelin)
-M5 DISCOVERY   (myelin)
-M4 IDENTITY    (myelin)
-M3 ENVELOPE    (myelin — schema + namespace)
-M2 TRANSPORT   (myelin abstraction over NATS)
-M1 CONNECTIVITY (NATS leaf nodes / federation)
-```
+### Task guides
 
-cortex consumes contracts from M2–M6, owns no part of M1–M6 itself, and shares M7 with sibling apps (pilot for review-loop coordination, signal-collector for telemetry, future apps).
+Read the guide when your task touches its area. These are not loaded by default.
 
-Internal componentisation (per `docs/architecture.md` §8):
-
-- `src/cortex.ts` — Top-level entrypoint (MIG-7.1). Wires bus + adapters + runner + taps + renderers.
-- `src/bus/` — M2–M6 client code: NATS connection, envelope validator, surface-router, dispatch-handler, system-events. The G-1100 ladder lifted from grove-v2 plus the surface-router (cortex#25 + #27).
-- `src/bus/myelin/` — Vendored myelin schema + envelope + subscription primitives.
-- `src/bus/nats/` — NATS client wrapping.
-- `src/surface/mc/` — Mission Control v3 (149 files lifted from grove-v2 `src/mission-control/`). API, state, DB, dashboard-v2 React tree, worker (CF Worker REST API + WebSocket), notifications.
-- `src/surface-sdk/` — The stable, versioned surface-plugin SDK barrel (`PlatformAdapter`, `Renderer`, envelope/target types + `SURFACE_SDK_VERSION`). What an out-of-tree bundle compiles against, and nothing else in cortex (ADR-0024).
-- `src/adapters/` — Surface-plugin **registry + loader** (`registry.ts`, `loader.ts`) + the never-extracted `mock` adapter + dispatch/render glue. **ZERO in-tree platform adapters**: `web`, `slack`, `mattermost`, `discord` are each extracted to a first-party arc **adapter bundle** (`metafactory-cortex-adapter-*`), declared as a cortex dependency in `arc-manifest.yaml`, auto-installed by `arc upgrade cortex`, and loaded at boot even with `system.plugins.external` off (first-party bundle exemption, ADR-0024). `createDefaultSurfacePluginRegistry()` registers none.
-- `src/runner/` — CC orchestration: cc-session (streaming `claude --print --output-format stream-json`), session-manager (per-thread CC session for `--resume`), stream-parser, agent-team (multi-agent moderator + participants), dispatch-listener, security-preamble, prompt-builder, worklog-manager, task-tracker, bash-guard hook.
-- `src/taps/` — Publishers onto the bus: `cc-events/` (CC hooks + EventLogger + relay + cloud-publisher), `gh-webhook/` (CF Worker at `hooks.meta-factory.ai` validating GitHub HMAC and forwarding).
-- `src/cli/` — Principal CLIs: `cldyo-live` (instrumented Opus session wrapper), `cortex/` (top-level CLI). The Discord CLI is no longer here — it was extracted to the `metafactory-bundle-discord` arc bundle (ADR-0017, epic #1171); cortex consumes it as a dependency. The live Discord adapter is likewise extracted — to the `metafactory-cortex-adapter-discord` bundle (ADR-0024); no platform adapter stays in-tree.
-- `src/renderers/` — Renderer SDK glue + the in-tree `dashboard` renderer (the permanent OQ8 fail-safe anchor; inert per ADR-0005 §4). `pagerduty` is extracted to the `metafactory-cortex-renderer-pagerduty` bundle. Boot HARD-FAILS if `system.>` renderer coverage drops below two distinct classes with ≥1 effective sink — the coverage guard (ADR-0024 §OQ9, #1893).
-- `src/common/` — Shared types + utilities: agent-detection, event-processor, event-utils, github-events, agents/, config/, timeout, types/, usage.
-- `src/services/` — launchd plists: `ai.meta-factory.cortex.stack.plist` (generic template — every discovered stack, incl. `meta-factory`/`work`, renders from this one; cortex#1848 removed the two personal-slug templates), `ai.meta-factory.cortex.relay.plist` (shared relay).
-- `src/settings/` — `cortex-hooks.json` (CC hook registration).
-- Config: `~/.config/metafactory/cortex/cortex.yaml` (post-MIG-7.9 — migrated from grove-v2 `~/.config/grove/bot.yaml` via `migrate-config`).
-
-Read `docs/architecture.md` for the full layered model + agent + presence/renderer model + event architecture + agent task routing pattern. Read `docs/plan-cortex-migration.md` for the per-phase migration plan (MIG-0..MIG-8) that drives all current work.
-
-## Migration provenance
-
-cortex inherits source from `the-metafactory/grove-v2`. Legacy `the-metafactory/grove` (v0.29.0) is in maintenance-mode for security work and contributes nothing to cortex (per migration plan §2.2 — ~6,500 LOC of legacy-only agent/persona/AAA + parallel NATS work that does not migrate).
-
-The migration is phased MIG-0 (bootstrap) through MIG-8 (legacy retirement). Per-phase work is tracked as GitHub issues `cortex#1` umbrella (C-100) + `cortex#2..#10` for each phase.
-
-## Message Keywords
-
-- `async:` prefix — fire-and-forget. Ack immediately, post result when done.
-- `team:` prefix — spawn multi-agent team (moderator + participants).
-- No prefix — synchronous chat, response posted when CC finishes.
-
-## Discord Channel Routing
-
-Repos get channels. GitHub entities get threads. No `cortex.yaml` config needed.
-
-```
-#cortex (channel)                  — repo context
-  └── cortex/issue/9 (thread)      — issue #9
-  └── cortex/pr/54 (thread)        — PR #54
-  └── cortex/c-108 (thread)        — feature C-108 (→ resolves to issue)
-```
-
-When invoked from a channel or thread, the agent should:
-1. Match channel name against `github.repos` short names → scope work to that repo
-2. If in a thread, parse the entity: `{repo}/issue/{N}`, `{repo}/pr/{N}`, `{repo}/{feature-id}`
-3. When starting work on an entity with no existing thread, create one
-4. Route worklog to the invoking thread/channel
-
-See `docs/sop-discord-channel-routing.md` for the full SOP (lifted from grove-v2 at MIG-7.11).
-
-### Discord post style
-
-Keep posts **substantive and low-ceremony**. We turn work around fast, so back-to-back posts that each close with a thank-you emoji (🙏) read as repetitive filler. Use a closing 🙏 / "thanks" **sparingly** — reserve it for genuine first-time moments (a real first contribution, acknowledging a sharp catch the first time it happens), not as a default sign-off on every message. Default to ending on the substance. Same for decorative emoji generally: one purposeful lead emoji is fine; don't stack them.
-
-## PAI Integration
-
-cortex provides two ways to integrate from PAI sessions (outside of Discord):
-
-### Session Instrumentation (live dashboard)
-
-Any Claude Code session can pipe events to the cortex Mission Control dashboard by setting env vars:
-
-```bash
-CORTEX_CHANNEL=<name> CORTEX_AGENT_NAME=<display> CORTEX_AGENT_ID=<id> claude
-```
-
-| Env Var | Purpose | Example |
-|---------|---------|---------|
-| `CORTEX_CHANNEL` | **Required.** Enables the EventLogger hook. Value is the channel/identity label. | `andreas` |
-| `CORTEX_AGENT_NAME` | Display name shown on dashboard agent cards. | `Andreas` |
-| `CORTEX_AGENT_ID` | Agent identifier for event correlation. | `andreas` |
-| `CORTEX_PRINCIPAL` | Principal (the human running the stack) stamped onto events for correlation. | `Andreas` |
-
-During the MIG-7 cutover window the legacy `GROVE_*` env vars remain accepted by the EventLogger for backward compatibility; new sessions should prefer the `CORTEX_*` names. The deprecation shim retires at MIG-8.
-
-`CORTEX_PRINCIPAL` is the vocabulary-migration (R9) rename of the operator-the-human env var. During the transition release the EventLogger still accepts the legacy `CORTEX_OPERATOR` (emits a deprecation warning) and `GROVE_OPERATOR` names; both fallbacks are removed in the breaking v3.0.0.
-
-**Event pipeline:** CC hooks → `~/.claude/events/raw/` → cortex-relay (policy filter) → `~/.local/share/metafactory/cortex/events/published/` → cortex daemon (`ai.meta-factory.cortex.meta-factory` and/or `.work` plist) → bus → dashboard API → `cortex.meta-factory.ai`
-
-**Pre-configured wrapper:** `cldyo-live` (at `~/.local/bin/`) starts an instrumented Opus session. Plain `cldyo` stays dark (no events). Use `cldyo-live` when you want your work visible on the dashboard.
-
-### Discord CLI (team updates)
-
-The `discord` CLI is provided by the **`metafactory-bundle-discord`** arc bundle (ADR-0017, epic #1171), not by cortex itself — cortex declares the bundle as a dependency in `arc-manifest.yaml`. Once the bundle is installed, post messages to Discord channels from any terminal session:
-
-```bash
-discord post "PR merged, tests passing"              # Default channel
-discord post --channel tasks "Deployed v0.5.0"       # Specific channel
-discord post --thread 111111111111111111 "Done"     # Specific thread
-discord read                                          # Read last 10 messages
-```
-
-Useful at the end of workflows to update the team. See `discord --help` for full command list.
-
-## Configuration files
-
-cortex is configured with the **config-split (multi-file) layout** — this is the
-**standard**. A stack's config is a directory the daemon points `--config` at; a
-pointer (sentinel) file's dirname selects the layout, and the boot composer
-(`composeRawConfig`, `src/common/config/loader.ts`) deep-merges the layers in a
-fixed precedence (later layers win on leaf keys), producing the SAME
-`LoadedConfig` the old single file produced.
-
-| Layer | Owns | Blast radius |
-|---|---|---|
-| `system/system.yaml` | substrate / transport: `claude`, `execution`, `attachments`, `paths`, `plugins`, **`nats` (incl. the `nats.subjects` landmine — ONE place), `bus`** | whole stack |
-| `network/*.yaml` | federation roster (`policy.federated.{registry, networks[]}`) — OPTIONAL | cross-principal |
-| `surfaces/surfaces.yaml` | shared surface-gateway bindings (Discord/Slack/Mattermost tokens) — OPTIONAL | cross-stack |
-| `stacks/*.yaml` | per-deployment `principal` / `stack` / `policy` / `capabilities` / `agents` / `github` | one stack |
-
-Precedence: `system/` → `network/*` (sorted) → `surfaces/` → `stacks/*` (sorted).
-`nats.subjects` lives in **exactly one place** (`system/system.yaml`) — a
-duplicate double-binds the boot subscriber and double-delivers every envelope
-(cortex#491). Never re-declare it in a stack file.
-
-- **Single-file `cortex.yaml` is LEGACY.** It still loads via the transitional
-  single-file fallback (no `system/system.yaml` marker present), so monolith
-  deployments keep working — but it is not the form a fresh install should adopt.
-- **Pointer-file naming is load-bearing.** cortex derives its single-instance
-  PID file from the `--config` basename; per-stack deployments MUST give each
-  pointer a per-stack name (`research.yaml`, `work.yaml`, …), never a uniform
-  `cortex.yaml`, or the second daemon collides on `cortex-cortex.pid`.
-
-**Canonical template:** [`docs/config-layout/`](docs/config-layout/) — copy that
-directory to `~/.config/metafactory/cortex/<slug>/`, fill the `<REPLACE_ME>` markers, point
-your daemon at the pointer file. The repo-root `cortex.yaml.example` is the
-legacy single-file reference. See
-[`docs/config-layout/README.md`](docs/config-layout/README.md),
-[`docs/sop-stack-onboarding.md`](docs/sop-stack-onboarding.md) (Step 3 copies
-this template), and
-[`docs/migrations/0003-config-split-layout.md`](docs/migrations/0003-config-split-layout.md).
-
+| When the task involves | Read |
+|---|---|
+| Finding your way around `src/`, or the layer model | `docs/agent-guide/architecture.md`, then `docs/architecture.md` |
+| Stack configuration, `system.yaml`, `inference`, pointer files | `docs/agent-guide/config-files.md` |
+| Picking up a MIG item or feature, branch and PR naming, ticking plans | `docs/agent-guide/implementation-workflow.md` |
+| `cortex stack` or `cortex network` commands, federation | `docs/agent-guide/platform-management.md` |
+| Building or deploying the dashboard or worker | `docs/agent-guide/dashboard-deployment.md` |
+| Discord channels and threads, `async:` and `team:` messages | `docs/agent-guide/discord-routing.md`, `docs/agent-guide/message-keywords.md` |
+| Session instrumentation (`CORTEX_*` env vars), the `discord` CLI | `docs/agent-guide/pai-integration.md` |
+| Editing CLAUDE.md, shippable-path gates, third-party code, diagrams | `docs/agent-guide/repo-conventions.md` |
+| Wire contracts in `src/bus/**` | `src/bus/CLAUDE.md` and `docs/agents-md/wire-grounding.md` |
 
 ## Naming
 
@@ -191,56 +61,15 @@ this template), and
 - NEVER add CF Access bypass-everyone policies or disable authentication on any endpoint. If cross-origin auth fails, fix the architecture (same-subdomain routing, proper CORS), don't bypass auth. If you encounter a bypass-everyone policy during any investigation, immediately flag it as a SEV-1 security finding.
 - cortex does NOT have: ProcessManager, ManagedProcess, FileWatcher, `grove.config.ts`, or any process orchestration. The runtime is a single `src/cortex.ts` entrypoint plus relay + CLIs; daemons are launchd plists, not bot-side orchestration.
 - NEVER use empty catch blocks. Every catch must either: (a) log the error via `process.stderr.write()` or the event pipeline (`system.error` event), or (b) handle it meaningfully, with the reason said in code: return a named fallback (a constant or helper whose name states why falling back is safe), or bind the error as `_err` only where a test pins that ignoring it is correct. A comment never carries the reason (see the next rule). Silently swallowing errors hides bugs.
-- **No new comments.** `cortex/no-comments` (`eslint/no-comments.ts`) fails lint on a new comment; say it in code instead: rename, extract a named function or constant, tighten a type, or add a test. Kept: a URL to the issue or vendor doc behind an external constraint, a `/** doc */` on an export, a license header, and tool directives (`prettier-ignore`, `glossary-ignore:`). `eslint-disable` comments do nothing (`noInlineConfig`). Existing comments are baselined in `eslint-suppressions.json`; `eslint/suppressions-guard.ts` fails any rule whose total grows past `origin/main`, except a non-preset rule this change switches on in `eslint.config.js` for the first time. To burn it down: list a file's hits with an empty suppressions file (`bun --bun eslint <file> --suppressions-location <empty.json>`), delete narration, turn constraints into names, types or tests, then `bun run lint --prune-suppressions` (the procedure is the Soma `no-comments` skill).
+- **No new comments.** `cortex/no-comments` (`eslint/no-comments.ts`) fails lint on a new comment; say it in code instead: rename, extract a named function or constant, tighten a type, or add a test. Kept: a URL to the issue or vendor doc behind an external constraint, a `/** doc */` on an export, a license header, and tool directives (`prettier-ignore`, `glossary-ignore:`). `eslint-disable` comments do nothing (`noInlineConfig`). Existing comments are baselined in `eslint-suppressions.json`. `eslint/suppressions-guard.ts` fails any rule whose total grows past `origin/main`, except a non-preset rule this change switches on in `eslint.config.js` for the first time. To burn it down, follow the Soma `no-comments` skill.
 - **Run `bun run check` before you push.** It runs every CI gate (lint, duplication, unused-exports, typecheck, vocab, sdk, shippable, xdg, test) plus a not-behind-`origin/main` check; CI calls the same gates. Run the suite with `bun run test`: a bare `bun test` refuses, because it would read this machine's real HOME. The rule table in `AGENTS.md` lists each rule and the check that enforces it.
 
 - Hooks must stay non-blocking. The cc-events EventLogger writes JSONL to `~/.claude/events/raw/` and returns; the cortex-relay process picks up files asynchronously. Never call out to the bot, the bus, or any network endpoint from inside a hook.
 - Migration moves preserve behavior. MIG-1..MIG-7 PRs are file moves + minimal import-path rewrites unless the plan explicitly calls for a refactor. If a move tempts you to "fix something while I'm in here", file a follow-up issue instead.
-- Surface plugins (adapters + renderers) load with **full daemon authority** — there is no sandbox (ADR-0024 D4). The default-off `system.plugins.external` flag is the trust boundary: NEVER load an unsigned/untrusted (third-party) bundle by default, and never widen the loader's **first-party bundle exemption** past its anchor. "First-party" is a *checkable, un-spoofable* property — a bundle whose arc-recorded `repoUrl` matches a dependency in cortex's OWN `arc-manifest.yaml`, narrowed by `ADAPTER_BUNDLE_DEP_NAME_RE` / `RENDERER_BUNDLE_DEP_NAME_RE`. Never key the exemption on the bundle's own manifest, its arc `tier`, or a name prefix (all author-controlled); those are the exact spoof vectors PR #1942 closed. cortex core ships ZERO in-tree platform adapters and exactly one in-tree renderer (`dashboard`, the fail-safe anchor) — don't re-add an in-tree adapter/renderer copy of an extracted bundle (D2: no plugin has two sources of truth).
-- Deployment-specific identifiers NEVER ship in a committed path — real platform ids (Discord/Slack snowflakes), internal-domain emails, real principal/seed identities, tokens, and secrets belong only in `~/.config/metafactory/cortex/`, never in the repo. Two CI gates cover this with DIFFERENT scopes; don't conflate them. (1) `scripts/check-shippable-hygiene.ts` (BLOCKING `shippable-hygiene` job) fails the build on config identity-SHAPES in shippable agent fragments (`agents.d/*.yaml`, `personas/*.md`, `arc-manifest*.yaml`) and seeds/migrations — live 17–20-digit Discord/Slack snowflakes, internal `@meta-factory.*` emails, non-placeholder seed identities, and presence-bearing fragments not marked `# audience: generic` (a fragment must be a `.example` template or carry that marker with every id an `__ENV__` placeholder or zeroed sentinel). It is SCOPED to those shapes: it does NOT detect arbitrary tokens, API keys, or general third-party identities. (2) Tokens, API keys, and high-entropy secrets are the `confidentiality-gate` caller's domain (gitleaks tier-1) — WARN-ONLY during the burn-in window, blocking only after a principal flips enforcement. Practice: ship `.example` placeholders + generic identifiers; never a live snowflake, internal email, real seed identity, or secret. If either gate flags something real, REMOVE it; do not allowlist it. Root-cause class of the cortex#1312 leak (design doc §4 L1/L2, compass#87).
-
-## CLAUDE.md Management
-
-**CLAUDE.md is fully generated — NEVER hand-edit it.** It is produced by `arc upgrade compass` from:
-
-- **Template:** `compass/templates/CLAUDE.md.template` (shared ecosystem template; the installed copy lives at `~/.local/share/metafactory/arc/repos/compass/templates/CLAUDE.md.template`)
-- **Config:** `agents-md.yaml` (repo-specific placeholders and section list)
-- **Section files:** `docs/agents-md/*.md` (repo-specific content injected at marked positions)
-
-**To change agent rules:**
-
-1. Edit the appropriate section file in `docs/agents-md/`:
-   - `architecture.md` — System architecture overview + migration provenance
-   - `critical-rules.md` — Repo-specific rules (injected after the standard Critical Rules block)
-   - `implementation-workflow.md` — Migration + feature workflow, blueprint integration
-   - `dashboard-deployment.md` — CF Pages / wrangler deploy instructions
-   - `message-keywords.md` — Bot message keyword reference
-   - `discord-routing.md` — Discord channel routing SOP
-   - `pai-integration.md` — PAI session instrumentation and Discord CLI
-2. Update `agents-md.yaml` if adding a new section file (specify `position` and `file`)
-3. Regenerate: `arc upgrade compass` (regenerates CLAUDE.md for every repo under `~/Developer/` that has an `agents-md.yaml`)
-4. Commit both the source files AND the regenerated `CLAUDE.md`
-
-**Injection positions:** `after:description`, `after:critical-rules`, `after:sop-table`, `after:versioning`
-
-## Open Source Attribution
-
-When incorporating open-source code, UX patterns, or significant ideas from other projects:
-
-1. Add an entry to `THIRD-PARTY-NOTICES.md` with: repository URL, author, license type, full license text, and a note explaining what was incorporated (code import vs pattern inspiration)
-2. If the source project has no LICENSE file but declares a license in README, note this discrepancy
-3. The dashboard footer links to `THIRD-PARTY-NOTICES.md` on GitHub for end-user visibility
-
-## Generated images
-
-All AI-generated images (architecture diagrams, infographics, etc.) for cortex follow the ecosystem rule:
-
-- **Source of truth** lives in **`~/Documents/andreas_brain/assets/`** following the naming convention `YYYY-MM-DD-{topic}/YYYY-MM-DD-{descriptive-name}.{ext}`.
-- **Repo copy** at `docs/diagrams/` is for inline rendering in `docs/architecture.md`, README, and design specs. Treat the repo copy as a render artifact; the andreas_brain copy is the source.
-- The art skill outputs to `~/Downloads/` first for preview; once approved, move to andreas_brain (not directly into the repo).
-- Existing example: `docs/diagrams/cortex-architecture.jpg` + source at `~/Documents/andreas_brain/assets/2026-05-09-cortex-architecture/2026-05-09-cortex-architecture.jpg`.
-
-When updating or regenerating a diagram, update both the andreas_brain canonical copy and the in-repo render copy.
+- Surface plugins (adapters and renderers) load with **full daemon authority**; there is no sandbox (ADR-0024 D4). Never load a third-party bundle by default (`system.plugins.external` stays off), and never widen the **first-party bundle exemption**: it keys on the arc-recorded `repoUrl` matching a dependency in cortex's own `arc-manifest.yaml`, narrowed by `ADAPTER_BUNDLE_DEP_NAME_RE` / `RENDERER_BUNDLE_DEP_NAME_RE`, never on the bundle's manifest, its arc `tier` or a name prefix (the spoof vectors PR #1942 closed). Don't re-add an in-tree copy of an extracted adapter or renderer.
+- Deployment-specific identifiers NEVER ship in a committed path: real platform ids (Discord/Slack snowflakes), internal-domain emails, real principal or seed identities, tokens and secrets live only in `~/.config/metafactory/cortex/`. Ship `.example` placeholders. If `shippable-hygiene` or `confidentiality-gate` flags something real, remove it; never allowlist it. The two gates have different scopes: see `docs/agent-guide/repo-conventions.md`.
+- Discord posts are substantive and low-ceremony: end on the substance, keep a closing 🙏 for genuine first-time moments, and use at most one lead emoji.
+- `CLAUDE.md` is generated from `docs/agents-md/*.md`, `agents-md.yaml` and the compass template. Edit those, never `CLAUDE.md`; the procedure is in `docs/agent-guide/repo-conventions.md`.
 
 
 ## GitHub Labels (ecosystem standard)
@@ -335,86 +164,6 @@ Task: "Merge PR #42"
 → Output: "SOP: versioning | Current: v0.2.0 | Bump: patch → v0.2.1"
 ```
 
-## Implementation Workflow
-
-cortex uses one feature numbering scheme during MIG-0..MIG-8 and adds a second one after cutover:
-
-- **C-series** (e.g., C-108): cortex features and migration phases. Tracked in `blueprint.yaml` + GitHub issues (`cortex#1` umbrella for C-100, `cortex#2..#10` for C-101..C-109 migration phases).
-- **MIG-N.x** (e.g., MIG-7.10): per-phase checklist items in `docs/plan-cortex-migration.md`. Each MIG-N maps to one C-NNN feature.
-- **F-/G-series** (post-MIG-8): inherited from grove-v2 design specs that migrate at MIG-7.11. Activate after the migration plan retires.
-
-**Workflow (migration mode — MIG-0..MIG-8):**
-
-```
-1. Read docs/plan-cortex-migration.md — pick the next phase + checklist item
-2. Check blueprint.yaml: `blueprint ready` shows what's unblocked
-3. Create feature branch via worktree:
-     git worktree add ../cortex-{slug} -b feat/c-{id}-{slug} origin/main
-4. Implement the move/refactor (most files are ports from grove-v2; few new)
-5. Push + open PR with title `feat(cortex): C-NNN.X — {scope} (MIG-N.Y)`
-6. Drive PR through pilot-loop review (Echo for code review, Luna for design review)
-7. After merge: tick the checkbox on BOTH docs/plan-cortex-migration.md AND the GitHub issue
-8. Close the phase issue when all its phase items tick
-```
-
-**Workflow (post-MIG-8, normal feature mode):**
-
-```
-1. Read the design spec (e.g., docs/design-collaboration-surface.md)
-2. Pick next feature by dependency order from the iteration plan
-3. Create feature branch: feat/c-{id}-{slug} (or feat/f-{id}-{slug}, feat/g-{id}-{slug})
-4. Work the checkboxes against acceptance criteria in the design spec
-5. PR → review → merge to main
-6. Tick checkboxes in BOTH the iteration plan AND the GitHub tracking issue
-```
-
-**Sync rule:** Iteration plans exist in two places — `docs/iteration-*.md` (repo artifact, agents read it) and a GitHub Issue (trackable, commentable). When a checkbox is completed, update both.
-
-**Migration artefacts:**
-- `docs/plan-cortex-migration.md` — Per-phase migration plan (MIG-0..MIG-8). Drives all current work; retires at MIG-8.
-- `docs/architecture.md` — Canonical M1–M7 stack + cortex internal componentisation. Static reference.
-
-**Design + iteration docs** (lifted from grove-v2 at MIG-7.11):
-- `docs/design-collaboration-surface.md` + `docs/iteration-collaboration-surface.md`
-- `docs/design-mission-control.md` + `docs/iteration-mission-control.md`
-- See `docs/` for the full set.
-
-## Platform Management
-
-`cortex stack` + `cortex network` are the control plane for a stack's full lifecycle: stand one up locally (`stack`), then federate it onto a network (`network`).
-
-### Standing up a stack
-
-`cortex stack create <slug>` scaffolds a config-split stack skeleton **born aligned** — the dir basename, the slug, and the trailing segment of `stack.id` are all the same — so the slug↔`stack.id` drift the install-time `warn_stack_identity_drift` detector catches ([ADR-0004](docs/adr/0004-stack-slug-authority.md)) can never form for a stack created this way. It is the prevent-side complement to that detector.
-
-| Command | Purpose |
-|---|---|
-| `cortex stack create <slug> [--principal <id>] [--apply]` | Scaffold a born-aligned (dir==slug==`stack.id` trailing segment), unique-within-principal config-split stack from the `docs/config-layout/` template (#808). Sets `stack.nkey_seed_path` to the conventional path — `arc upgrade cortex` auto-provisions the seed. Dry-run by default; never overwrites an existing dir. |
-| `cortex stack list [--config-dir <path>]` | List discovered stacks with their `stack.id` and an aligned/DRIFT flag. |
-
-### Network lifecycle
-
-A **network** is a federation of principals whose stacks interconnect at the NATS leaf-node layer ("feel like TCP/IP" join, #738).
-
-| Command | Purpose |
-|---|---|
-| `cortex network create <id> --hub <tls-url> --leaf-port <port> --admin-seed <path> [--apply]` | Network admin stands up a NEW network's topology row in the registry — a signed-admin claim, **no raw SQL** (#747). Dry-run by default. |
-| `cortex network join <id> [--principal-seed <root>] [--apply]` | A principal joins one of their stacks to a network. Derives inputs from `cortex.yaml` (#753). Idempotent. Dry-run by default. |
-| `cortex network status --principal <id>` | Read-only: joined networks, leaf link state, peers, accept-subjects, counters. |
-| `cortex network leave <id> [--apply]` | Reverse a join cleanly + idempotently. Dry-run by default. |
-| `cortex provision-stack register <principal> --seed-path <p> --registry-url <u> [--principal-seed <root>]` | Register a stack's pubkey + capabilities with the registry (proof-of-possession). |
-
-The one-rule essentials:
-
-- **Stacks are scaffolded with `cortex stack create`** — born aligned (dir==slug==`stack.id` trailing segment) so drift can't form, and unique within the principal (it refuses a dir collision OR a duplicate `stack.id`). Dry-run by default; pass `--apply` to write.
-- **Networks are created with `cortex network create`, not SQL.** The registry's `POST /networks/<id>` is fail-closed: the admin pubkey must be on `REGISTRY_ADMIN_PUBKEYS` or it returns `503 admin_not_configured` / `403 admin_not_authorized`.
-- **A principal's 2nd+ stack joins with `--principal-seed <root>`** (the FIRST stack's seed, #791). The add-stack claim is root-signed and fetch-merges the principal's existing stacks so they survive; on the standalone `provision-stack register` path the pinned `--registry-pubkey` is also required. Omit `--principal-seed` for a first-stack join.
-- **A federating stack's bus must be operator-mode** — it must define the NSC operator + the account the leaf binds to (mirror `~/.config/nats/local.conf`). An **anonymous / hard-isolated** bus (the `halden` / `community` pattern) **cannot federate**: the leaf remote names an account the server doesn't know and `nats-server` crashes. The #794 fix makes `cortex network join` refuse (fail-fast) on such a bus rather than taking it offline — convert the bus to operator-mode first.
-- **`stack create` / network `join` / `leave` / `create` default to dry-run** — they print the intended actions and touch nothing. Pass `--apply` to mutate the live deployment.
-
-SOPs: [`docs/sop-stack-onboarding.md`](docs/sop-stack-onboarding.md) (stand up a stack with `cortex stack create`, then federate it; §B0.1 operator-mode bus), [`docs/sop-network-join.md`](docs/sop-network-join.md) (join / multi-stack / status / leave), [`docs/sop-federation-onboarding.md`](docs/sop-federation-onboarding.md) (peer-principal onboarding).
-
-
 ## Blueprint-Driven Development
 
 All ecosystem repos track features in `blueprint.yaml`. Before starting feature work, check the dependency graph:
@@ -442,39 +191,6 @@ See `compass/sops/versioning.md` for the full procedure. Key repo-specific detai
 - Version source of truth: `arc-manifest.yaml`
 - Release title format: `"Cortex vX.Y.Z -- Short Description"`
 - Deploy command: `arc upgrade cortex`
-
-## Dashboard Deployment
-
-The dashboard frontend (`src/surface/mc/dashboard-v2/`) is a React app deployed to **Cloudflare Pages** as a separate step. It is NOT automatically deployed via GitHub — it requires a manual build + deploy.
-
-**Project:** `grove-dashboard` on CF Pages → `grove.meta-factory.ai`. The DNS rename to `cortex.meta-factory.ai` is out of scope for v1 cortex (see `docs/plan-cortex-migration.md` open question 12) — operator-facing brand (`Cortex`) and the legacy DNS host can legitimately differ; rename is a separate post-MIG-8 phase with a 30-day redirect window.
-
-**Deploy workflow:**
-
-```bash
-# 1. Build the frontend (from repo root)
-bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting
-
-# 2. Deploy to CF Pages
-bunx wrangler pages deploy dist/dashboard-v2 --project-name grove-dashboard
-```
-
-The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify step 1.
-
-**`--splitting` is load-bearing** (G-1114.D): the Network graph view `React.lazy`-imports the heavy `@xyflow/react` + `elkjs` engine, and code-splitting is what lands that engine in a separate, lazily-loaded `network-canvas-*.js` chunk instead of the entry bundle. Without the flag bun inlines the dynamic import back into the single entry bundle (every principal then downloads the +0.62 MB-gzip graph engine for a tab they may never open). When deploying, ensure the build emits the `network-canvas-*` chunk alongside the entry — that confirms the split held.
-
-**When to deploy:**
-- After any change to `src/surface/mc/dashboard-v2/` files (app.tsx, types.ts, hooks, etc.)
-- After merging a PR that modifies dashboard components
-- The backend (`cortex` bot via `arc upgrade cortex`) and the frontend (CF Pages via `wrangler`) are deployed independently.
-
-**Architecture:**
-- `cortex` serves the REST API + WebSocket at `localhost:8767` locally, or via the CF Worker at `grove.meta-factory.ai/api/*` in production (`src/surface/mc/worker/`).
-- The daemon serves the bundled dashboard from `dist/dashboard-v2` at `/mc/`. Without `mc.ui.dir`, `/` redirects to `/mc/` and keeps the query string; with `mc.ui.dir` the external UI owns `/` and the bundled dashboard stays at `/mc/`.
-- The dashboard frontend is static HTML/JS hosted on CF Pages.
-- Frontend connects to the API via URL params (`?api=`) or auto-detection.
-- CF Access cookies cover dashboard + API on each TLD (`.ai`, `.dev`, `.io`) — no cross-origin cookie issue, no bypass-everyone policies (see Critical Rules).
-
 
 ## Multi-Agent Worktree Discipline
 
