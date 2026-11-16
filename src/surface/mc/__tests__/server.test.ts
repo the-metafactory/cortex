@@ -106,6 +106,8 @@ describe("mission-control server", () => {
       "MAIL_ROUND_ACTIONS", "MAIL_ROUND_GROUP_KINDS", "MAIL_ROUND_UNDO_OUTCOMES", "MAX_INSTRUCTION", "OUTLINE_REPEAT_FIELDS", "OUTLINE_REPEAT_MODES", "OUTLINE_REPEAT_UNITS", "OUTLINE_TIME_FIELDS", "RULE_ACTIONS", "RULE_MATCHES", "SNOOZE_TIMES", "STUDIO_RESPOND_ACTION", "SWEEP_WORDS", "WAITING_OPS",
     ]);
     expect(body.vocabularies.DESK_ITEM_KINDS).toEqual([...DESK_ITEM_KINDS]);
+    expect(Object.keys(body.vocabularies.FIELD_SCHEMAS)).toContain("row");
+    expect(body.vocabularies.FIELD_SCHEMAS.row.required).toEqual(["title", "area", "repeat"]);
   });
 
   it("answers 405 to POST on the contract handshake", async () => {

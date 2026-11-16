@@ -35,6 +35,18 @@ function withRequestFields(yaml: string, fixed: Record<string, unknown> | undefi
   return `${stepsWithTheirCommentAnnotations}\n${stringifyYaml({ input })}`;
 }
 
+export function routineOffer(text: string, label: string, refusal: string | undefined): DeskProposal {
+  const schedule = routineSchedule(text);
+  const scheduled = typeof schedule === "string" ? null : schedule;
+  const problem = typeof schedule === "string" ? schedule : refusal;
+  return {
+    kind: "routine", label,
+    fields: scheduled ? { title: scheduled.request, schedule: scheduled.words } : { title: text },
+    ...(problem ? { problem, unwritable: true as const } : {}),
+    via: "rules",
+  };
+}
+
 export async function buildRoutineCard(db: Database, text: string, options: RoutineOptions | undefined, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<DeskProposal> {
   const blocked = (problem: string): DeskProposal => ({ kind: "routine", label: "Routine", fields: { title: text }, problem, unwritable: true, via: "rules" });
   if (!options) return blocked("Routines are not set up on this stack.");

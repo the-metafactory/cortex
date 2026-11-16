@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { findNode, type AppState } from "../../../balance";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../../conversations/types";
-import { BalanceCommandSchema, type BalanceCommand } from "./balance-command";
+import { BalanceCommandSchema, type BalanceCommand, type OutlineRepeatInput } from "./balance-command";
 import { areaProjects, balanceDestinations, resolveBalanceProject } from "./balance-destinations";
 import { STALE_OUTLINE } from "./balance-outline";
 import { loadBalanceState } from "./balance-store";
@@ -43,10 +43,18 @@ export function balanceDestination(state: AppState, desk: DeskOptions, fields: R
 
 export type BalanceKind = "task" | "project";
 
-function addCommand(kind: BalanceKind, fields: Record<string, string>, parent: string, revision: number): BalanceCommand | { refused: string } {
+interface BalanceAdd {
+  operationId: string;
+  fields: Record<string, string>;
+  repeat?: OutlineRepeatInput;
+  signal?: AbortSignal;
+}
+
+function addCommand(kind: BalanceKind, request: BalanceAdd, parent: string, revision: number): BalanceCommand | { refused: string } {
+  const { fields, repeat } = request;
   const due = kind === "task" ? fields.due : undefined;
   if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return { refused: `${due} is not a due date in the form YYYY-MM-DD.` };
-  const parsed = BalanceCommandSchema.safeParse({ op: "outline-add", revision, parent, title: fields.title ?? "", kind, ...(fields.note ? { note: fields.note } : {}), ...(due ? { dueDate: due } : {}) });
+  const parsed = BalanceCommandSchema.safeParse({ op: "outline-add", revision, parent, title: fields.title ?? "", kind, ...(fields.note ? { note: fields.note } : {}), ...(due ? { dueDate: due } : {}), ...(repeat ? { repeat } : {}) });
   if (!parsed.success) return { refused: parsed.error.issues.some(i => i.path[0] === "dueDate") ? `${due ?? ""} is not a valid due date.` : "Balance takes a title of up to 300 characters and a note of up to 10,000." };
   return parsed.data;
 }
@@ -68,48 +76,55 @@ function readReceipt(db: Database, operationId: string): ReadbackResult {
 const DESK_OFF = "The Desk is turned off on this stack.";
 const receiptReadback = (db: Database) => (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(db, operation.operationId));
 
-export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): OwnerWriter {
+function addToBalance(kind: BalanceKind, deps: BalanceWriterDeps, desk: DeskOptions, request: BalanceAdd, studio: StudioProjection | undefined): CreateResult {
   const clock = deps.now ?? Date.now;
-  const add = (desk: DeskOptions, request: CreateRequest, studio: StudioProjection | undefined): CreateResult => {
-    if (request.signal.aborted) throw new Error("The conversation stopped waiting before Balance was called.");
-    const state = loadBalanceState(deps.db);
-    if (!state) return failed("Balance has no saved outline on this stack yet.");
-    const where = balanceDestination(state, desk, request.fields);
-    if ("refused" in where) return failed(where.refused);
-    syncBalance(deps.db, desk, clock(), studio);
-    const requestId = operationUuid(request.operationId);
-    const attempt = (revision: number): string | undefined => {
-      const command = addCommand(kind, request.fields, where.parent, revision);
-      if ("refused" in command) throw new Error(command.refused);
-      const now = clock();
-      return changeMyDay({ db: deps.db, desk, now, date: localDay(now), requestId, command, studio }).outlineId;
-    };
-    const stale = (error: unknown): boolean => ownerRefusal(error) && error.message === STALE_OUTLINE;
-    const attemptWithStaleRetry = (): string | undefined => {
-      try { return attempt(loadMeta(deps.db).revision); }
-      catch (error) {
-        if (!stale(error)) throw error;
-        syncBalance(deps.db, desk, clock(), studio);
-        return attempt(loadMeta(deps.db).revision);
-      }
-    };
-    let outlineId: string | undefined;
-    try { outlineId = attemptWithStaleRetry(); }
-    catch (error) {
-      if (!ownerRefusal(error)) throw error;
-      return failed(stale(error) ? `Balance kept changing while the ${kind} was being added.` : error.message);
-    }
-    if (!outlineId) throw new Error(`Balance answered without the new ${kind}'s outline id.`);
-    return { state: "created", canonicalId: outlineId };
+  if (request.signal?.aborted) throw new Error("The conversation stopped waiting before Balance was called.");
+  const state = loadBalanceState(deps.db);
+  if (!state) return failed("Balance has no saved outline on this stack yet.");
+  const where = balanceDestination(state, desk, request.fields);
+  if ("refused" in where) return failed(where.refused);
+  syncBalance(deps.db, desk, clock(), studio);
+  const requestId = operationUuid(request.operationId);
+  const attempt = (revision: number): string | undefined => {
+    const command = addCommand(kind, request, where.parent, revision);
+    if ("refused" in command) throw new Error(command.refused);
+    const now = clock();
+    return changeMyDay({ db: deps.db, desk, now, date: localDay(now), requestId, command, studio }).outlineId;
   };
+  const stale = (error: unknown): boolean => ownerRefusal(error) && error.message === STALE_OUTLINE;
+  const attemptWithStaleRetry = (): string | undefined => {
+    try { return attempt(loadMeta(deps.db).revision); }
+    catch (error) {
+      if (!stale(error)) throw error;
+      syncBalance(deps.db, desk, clock(), studio);
+      return attempt(loadMeta(deps.db).revision);
+    }
+  };
+  let outlineId: string | undefined;
+  try { outlineId = attemptWithStaleRetry(); }
+  catch (error) {
+    if (!ownerRefusal(error)) throw error;
+    return failed(stale(error) ? `Balance kept changing while the ${kind} was being added.` : error.message);
+  }
+  if (!outlineId) throw new Error(`Balance answered without the new ${kind}'s outline id.`);
+  return { state: "created", canonicalId: outlineId };
+}
+
+async function addWhenDeskOn(kind: BalanceKind, deps: BalanceWriterDeps, request: BalanceAdd): Promise<CreateResult> {
+  const desk = deps.desk();
+  if (!desk?.enabled) return failed(DESK_OFF);
+  return withStudioProjection(desk, studio => addToBalance(kind, deps, desk, request, studio));
+}
+
+export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): OwnerWriter {
   return {
-    create: async request => {
-      const desk = deps.desk();
-      if (!desk?.enabled) return failed(DESK_OFF);
-      return withStudioProjection(desk, studio => add(desk, request, studio));
-    },
+    create: (request: CreateRequest) => addWhenDeskOn(kind, deps, request),
     readback: receiptReadback(deps.db),
   };
+}
+
+export function writeRepeatingRow(deps: BalanceWriterDeps, request: Required<Omit<BalanceAdd, "signal">>): Promise<CreateResult> {
+  return addWhenDeskOn("task", deps, request);
 }
 
 export interface InboxWriterDeps extends BalanceWriterDeps {
