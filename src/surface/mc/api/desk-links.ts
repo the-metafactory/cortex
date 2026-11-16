@@ -1,6 +1,7 @@
 import { withActPhrase } from "../desk/act-result";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
+import { MeetingChoiceSchema } from "./desk-mail-choice";
 import type { DeskRuntime } from "../desk/compose";
 import { linkToMeeting, meetingTarget, taskSubject, undoAttach, type LinkSubject } from "../desk/links";
 import { readingEvents } from "../desk/mail-snooze";
@@ -9,7 +10,7 @@ import { listOpenNotes } from "../desk/notes";
 import { STUDIO_SLUG } from "../desk/studio/format";
 import { oneLine } from "../desk/studio/edit";
 import { withSyncedBalance } from "../desk/studio-my-day";
-import { fail, MeetingChoiceSchema, noStore, undoAttachDeps } from "./desk-mail";
+import { fail, noStore, undoAttachDeps } from "./desk-mail";
 
 const SubjectSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("task"), id: z.string().min(1).max(200) }).strict(),

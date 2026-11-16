@@ -1,5 +1,6 @@
 import { sourceBoundary } from "../desk/source-boundary";
 import { z } from "zod";
+import { MeetingChoiceSchema, SnoozeChoiceSchema } from "./desk-mail-choice";
 import { answer as actAnswer, failResponse, type ActResult } from "../desk/act-result";
 import { CommitmentSchema, decisionReceipt, MailDecisionSchema, mailYesFilter, saveDecisionDraft } from "../desk/mail-yes-filter";
 import { calendarsOnly, freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
@@ -26,7 +27,7 @@ import { approveHandoff, discardHandoff, HAND_ACTION, handMailToAssistant, HANDO
 import { handoffReady } from "../desk/compose";
 import { assistantNameOf } from "../desk/assistant-name";
 import { closeHandoffTask } from "../desk/mail-handoff-close";
-import { cancelSnooze, hideMail, readingEvents, undoHide, snoozeMail, SNOOZE_TIMES } from "../desk/mail-snooze";
+import { cancelSnooze, hideMail, readingEvents, undoHide, snoozeMail } from "../desk/mail-snooze";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
 import { attachMail, meetingTarget, taskTarget, undoAttach, type LinkTarget } from "../desk/links";
 import { readMyDay } from "../desk/my-day";
@@ -40,15 +41,6 @@ const waitingOp = (action: string): WaitingOp | null => {
 };
 
 const HANDOFF_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
-
-export const MeetingChoiceSchema = z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict();
-
-const SnoozeChoiceSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.enum(SNOOZE_TIMES) }).strict(),
-  z.object({ kind: z.literal("date"), date: z.string().max(10) }).strict(),
-  MeetingChoiceSchema,
-  z.object({ kind: z.literal("person"), address: z.string().min(3).max(320) }).strict(),
-]);
 
 const AttachTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("task"), id: z.string().min(1).max(200) }).strict(),

@@ -7,7 +7,7 @@ import type { ObjectReference as WireObjectReference } from "../../../desk-api/w
 
 export { INTERRUPT_REASON_CODES } from "../../../desk-sdk/interrupt-reason";
 export { DESK_ITEM_KINDS } from "../../../desk-api/wire/types";
-export type { DeskItemKind, DeskArea, DeskAction, DeskLink, DeskMention, JunkReviewMail, DeskEvidence, DeskPrecedent, DeskCorrectionMode, DeskCorrection, DeskWhyContent, DeskItem, InterruptReasonCode, DeskInterruptReason, InterruptFeedback, MeetingHold, DeskInterrupt, InterruptReasonView, DeskFoldedGroup, DeskEvent, DeskGoal, DeskView, DeskMailClassifier } from "../../../desk-api/wire/types";
+export type { DeskItemKind, DeskArea, DeskAction, DeskLink, DeskMention, JunkReviewMail, DeskEvidence, DeskPrecedent, DeskCorrectionMode, DeskCorrection, DeskWhyContent, DeskItem, InterruptReasonCode, DeskInterruptReason, InterruptFeedback, MeetingHold, DeskInterrupt, InterruptReasonView, DeskFoldedGroup, DeskEvent, DeskGoal, DeskView, DeferredItem, DeskMailClassifier } from "../../../desk-api/wire/types";
 
 export type AreaPolicy = (typeof AREA_POLICIES)[number];
 

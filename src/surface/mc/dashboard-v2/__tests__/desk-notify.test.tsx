@@ -27,6 +27,7 @@ const view = (items: DeskItem[], notifications = true): DeskView => ({
   topN: 5,
   areas: [],
   items,
+  deferred: [],
   today: [],
   ahead: [],
   vips: [],

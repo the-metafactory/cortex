@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFER_ACTIONS } from "../surface/mc/api/desk-items-defer";
 import { ADAPTER_CAPABILITY_ACTION, STUDIO_RESPOND_ACTION } from "../surface/mc/desk/adapter-actions";
 import { FIELD_SCHEMAS } from "../surface/mc/desk/ask";
 import { HANDOFF_KEY_PREFIX, MAX_INSTRUCTION } from "../surface/mc/desk/handoff";
@@ -13,7 +14,7 @@ import { MAIL_ROUND_ACTIONS, MAIL_ROUND_GROUP_KINDS, MAIL_ROUND_UNDO_OUTCOMES } 
 import { OUTLINE_REPEAT_FIELDS, OUTLINE_REPEAT_MODES, OUTLINE_REPEAT_UNITS, OUTLINE_TIME_FIELDS } from "../surface/mc/desk/balance-command";
 import { DEFAULT_MAIL_ROUND_SLOTS } from "../common/types/desk-mail-rounds";
 
-export const DESK_API_VERSION = "1.3.0";
+export const DESK_API_VERSION = "1.4.0";
 const DESK_API_VERSION_HEADER = "x-desk-api-version";
 export const DESK_CONTRACT_PATH = "/api/desk/contract";
 
@@ -34,6 +35,7 @@ export function deskContract() {
       RULE_ACTIONS,
       RULE_MATCHES,
       SNOOZE_TIMES,
+      DEFER_ACTIONS,
       SWEEP_WORDS,
       WAITING_OPS,
       DESK_ITEM_KINDS,

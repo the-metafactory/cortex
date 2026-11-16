@@ -93,6 +93,7 @@ import { handleGetDesk } from "./api/desk";
 import { DESK_CONTRACT_PATH, deskContract, withDeskApiVersion } from "../../desk-api/version";
 import { handleDeskAdapterAction } from "./api/desk-adapter";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
+import { handleDeskItemsDefer } from "./api/desk-items-defer";
 import { handleDeskMail } from "./api/desk-mail";
 import { DESK_MAIL_ROUND_PATH, handleDeskMailRound } from "./api/desk-mail-round";
 import { withActPhrase } from "./desk/act-result";
@@ -706,6 +707,8 @@ async function handleApi(
   if (pathname.startsWith(`${BALANCE_SURFACES_PATH}/`)) return handleDeskBalanceSurfaces(req, url, balanceSurfaces);
 
   if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db, graphScope ? { graphScope } : {});
+
+  if (pathname === "/api/desk/items/defer") return handleDeskItemsDefer(req, db, desk);
 
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk, desk?.now ? { now: desk.now } : {});
 
