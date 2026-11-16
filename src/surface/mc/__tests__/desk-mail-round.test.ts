@@ -35,7 +35,7 @@ describe("a durable scheduled mail round", () => {
     rig.setState({ mail: [roundMail("a", roundAt(2, 7))] });
     expect((await rig.get()).mailRound).toMatchObject({ due: false, waiting: 1 });
     rig.setNow(roundAt(2, 8, 31));
-    const due = await rig.get();
+    const due = await rig.refresh();
     expect(due.mailRound).toMatchObject({ due: true, revision: 1, waiting: 0, scheduledFor: new Date(roundAt(2, 8, 30)).toISOString() });
     expect(due.mailRound?.mails.map((m) => m.key)).toEqual(["mail:a"]);
 
@@ -113,7 +113,7 @@ describe("a durable scheduled mail round", () => {
     expect(before.mailRound).toMatchObject({ due: false });
     expect(before.mailRound?.nextScheduledAt).toBe(new Date(roundAt(9, 9, 30)).toISOString());
     rig.setNow(roundAt(9, 9, 31));
-    expect((await rig.get()).mailRound?.due).toBe(true);
+    expect((await rig.refresh()).mailRound?.due).toBe(true);
   });
 
   it("survives an unavailable source and a restart with its membership intact", async () => {

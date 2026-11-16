@@ -188,6 +188,8 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 
 `mailRounds.slots` sets when the Desk offers a scheduled mail round. It defaults to `["08:30", "13:30", "16:30"]`, every day including weekends, in the stack's time zone. Each entry is a local `HH:MM` time; a busy or unknown meeting moves that slot to the end of the meeting chain it overlaps or touches. An opening round keeps its membership: later mail waits for the successor, and an unfinished round survives midnight and a restart. `GET /api/desk` returns `mailRound` with the round `id`, `revision`, `due`, `scheduledFor`, `nextScheduledAt`, `waiting`, `groups`, `mails` and `unavailable` sources. The next slot is named even when no round is due, and an empty queue never creates one.
 
+The calendar reading must cover the slot and its entire meeting chain before a queued round can open. Missing, incomplete, stale or insufficient calendar coverage leaves mail queued, including a successor after handling the last member of an open round. Qualified coverage restores scheduling and catch-up across a restart. `unavailable.calendar` names sources whose evidence is missing for the schedule; while it is nonempty, `nextScheduledAt` remains a scheduling indication rather than proof of a free effective slot. A source explicitly declaring only attention does not require a calendar provider.
+
 `mail.classifier` is optional. It accepts exactly one of two forms: `command`, or `baseUrl` with `model`. Without a classifier, fixed rules rank mail.
 
 | Classifier key | Default | Value and meaning |
