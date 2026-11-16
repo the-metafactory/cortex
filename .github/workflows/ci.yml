@@ -199,6 +199,25 @@ jobs:
       - name: bun run test
         run: bun scripts/check.ts test
 
+  test-min-bun:
+    name: Test (oldest supported Bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read engines.bun
+        id: engines
+        run: echo "version=$(jq -r '.engines.bun | ltrimstr(">=")' package.json)" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.engines.outputs.version }}
+
+      - run: bun install --frozen-lockfile
+
+      - name: bun run test on the declared minimum
+        run: bun run test
+
   # ──────────────────────────────────────────────────────────────────
   # Surface-SDK .d.ts drift guard (cortex#1950). The shippable, self-contained
   # plugin-SDK type artifact (src/surface-sdk/generated/surface-sdk.d.ts) is
