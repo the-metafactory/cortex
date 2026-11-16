@@ -78,12 +78,16 @@ export const URGENCY_LABEL: Record<DeskItem["urgency"], string> = {
   waiting: "Waiting on you",
 };
 
-const BRIEFING_ASK =
-  /^(?:(?:hey |ok |so )?ivy,? )?(?:(?:what (?:needs|wants) (?:me|my attention))|(?:what(?:'s| is) (?:up|next)(?: for me)?(?: today)?)|(?:(?:please )?(?:give me |read me )?(?:a |the |my )?brief(?:ing| me))|(?:anything (?:for me|urgent)))(?: (?:now|today|right now))?[?.!]*$/;
+const BRIEFING_BODY =
+  "(?:(?:what (?:needs|wants) (?:me|my attention))|(?:what(?:'s| is) (?:up|next)(?: for me)?(?: today)?)|(?:(?:please )?(?:give me |read me )?(?:a |the |my )?brief(?:ing| me))|(?:anything (?:for me|urgent)))(?: (?:now|today|right now))?[?.!]*$";
 
-export function isBriefingRequest(text: string): boolean {
-  const said = text.toLowerCase().replace(/[’`]/g, "'").trim();
-  return BRIEFING_ASK.test(said);
+const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const normalised = (s: string): string => s.toLowerCase().replace(/[’`]/g, "'").trim();
+
+export function isBriefingRequest(text: string, assistantName?: string): boolean {
+  const names = ["ivy", ...(assistantName ? [normalised(assistantName)] : [])].filter((n) => n !== "").map(escapeRegex);
+  return new RegExp(`^(?:(?:hey |ok |so )?(?:${names.join("|")}),? )?${BRIEFING_BODY}`).test(normalised(text));
 }
 
 const SPOKEN_ITEMS = 3;

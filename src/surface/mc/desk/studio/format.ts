@@ -183,9 +183,7 @@ const SECTION_KEYS: Record<string, string> = {
   question: "question",
   "where i stand": "stand",
   "assistant's notes": "notes",
-  "assistant’s notes": "notes",
   "ivy's notes": "notes",
-  "ivy’s notes": "notes",
   material: "material",
   log: "log",
   outcome: "outcome",
@@ -193,15 +191,21 @@ const SECTION_KEYS: Record<string, string> = {
   why: "why",
 };
 
-export const sectionKey = (heading: string): string | undefined => SECTION_KEYS[heading.trim().toLowerCase()];
+const headingForm = (heading: string): string => heading.trim().toLowerCase().replace(/[’`]/g, "'");
 
-const legacyNotes = (heading: string): boolean => /^ivy['’]s notes$/i.test(heading.trim());
+export const sectionKey = (heading: string, assistantName?: string): string | undefined => {
+  const form = headingForm(heading);
+  if (assistantName && form === headingForm(`${assistantName}'s notes`)) return "notes";
+  return SECTION_KEYS[form];
+};
 
-function sectionMap(body: string): Parsed<Map<string, string>> {
+const legacyNotes = (heading: string): boolean => headingForm(heading) === "ivy's notes";
+
+function sectionMap(body: string, assistantName?: string): Parsed<Map<string, string>> {
   const map = new Map<string, string>();
   const seen = new Set<string>();
   for (const { heading, text } of sections(body, "##")) {
-    const key = sectionKey(heading);
+    const key = sectionKey(heading, assistantName);
     if (!key) continue;
     const spelling = key === "notes" && legacyNotes(heading) ? "notes:legacy" : key;
     if (seen.has(spelling)) return failed(`has the section "${heading}" twice`);
@@ -348,18 +352,18 @@ function parseFile<S extends z.ZodType>(path: string, text: string, schema: S): 
   return { ok: true, value: { id: id.value, front: front.data, body: split.value.body } };
 }
 
-function withQuestion(body: string): Parsed<{ map: Map<string, string>; question: string }> {
-  const map = sectionMap(body);
+function withQuestion(body: string, assistantName?: string): Parsed<{ map: Map<string, string>; question: string }> {
+  const map = sectionMap(body, assistantName);
   if (!map.ok) return map;
   const question = map.value.get("question") ?? "";
   if (!question) return failed('has no "## Question" section, or it is empty');
   return { ok: true, value: { map: map.value, question } };
 }
 
-export function parseThreadFile(path: string, text: string): Parsed<StudioThread> {
+export function parseThreadFile(path: string, text: string, assistantName?: string): Parsed<StudioThread> {
   const file = parseFile(path, text, ThreadFrontSchema);
   if (!file.ok) return file;
-  const body = withQuestion(file.value.body);
+  const body = withQuestion(file.value.body, assistantName);
   if (!body.ok) return body;
   const { map, question } = body.value;
   const notes = parseNotes(map.get("notes") ?? "");

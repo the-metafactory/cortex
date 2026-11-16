@@ -55,7 +55,7 @@ async function exists(path: string): Promise<boolean> {
 
 async function readView(input: Omit<StudioWriteInput, "act">): Promise<{ files: StudioFiles; view: StudioView }> {
   const { files, problems } = await readStudioFiles(input.options.dir);
-  return { files, view: buildStudioView(files, input.options, input.areas, problems) };
+  return { files, view: buildStudioView(files, input.options, input.areas, problems, input.assistantName) };
 }
 
 async function applyPlan(git: GitRunner, dir: string, plan: ActPlan, requestId: string): Promise<{ sha: string } | { error: string }> {
@@ -108,7 +108,7 @@ export async function runStudioTransaction(input: Omit<StudioWriteInput, "act">,
     const plan = await makePlan({ files, view, now: input.now ?? new Date(), assistantName: input.assistantName });
     if (isRefusal(plan)) return fail(plan.status, plan.error, plan.needsPark ? { needsPark: true } : {});
     for (const w of plan.writes) {
-      const parsed = w.path.startsWith("inbox/") ? parseCaptureFile(w.path, w.text) : parseThreadFile(w.path, w.text);
+      const parsed = w.path.startsWith("inbox/") ? parseCaptureFile(w.path, w.text) : parseThreadFile(w.path, w.text, input.assistantName);
       if (!parsed.ok) return fail(500, `The change would leave ${w.path} unreadable (${parsed.reason}); nothing was written.`);
     }
 
