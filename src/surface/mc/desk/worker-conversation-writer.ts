@@ -4,7 +4,7 @@ import type { DeskOptions } from "./compose";
 import type { WorkerHandoffOptions } from "../../../common/types/desk-workers";
 import { oneLine } from "./actions";
 import { spawnWithStdin, type WriterRunner } from "./create";
-import { ADD_TIMEOUT_MS, GRAPH_LABEL, graphAnswer, graphBody, graphMarker, graphReadbackById, recordGraphOperation, repositoryRefusal, withBodyFile } from "./graph-conversation-writer";
+import { ADD_TIMEOUT_MS, graphOperationLabel, graphAnswer, graphBody, graphMarker, graphReadbackById, recordGraphOperation, repositoryRefusal, withBodyFile } from "./graph-conversation-writer";
 import { expandWorkerCommand, lastWorkerJson, parseWorkerJson, workerAnswerMatches } from "./worker-handoff-contract";
 import { readWorkerRecord, handoffRowFor, recordWorkerRecord, recordWorkerState, readWorkerOperation, pendingWorkerStart, recordWorkerOperation, settleWorkerOperation, type WorkerOperation, type WorkerRecord } from "./worker-handoff-store";
 import { readWorkerStatus } from "./worker-handoff-status";
@@ -107,7 +107,7 @@ async function runWorkerCommand(deps: WorkerWriterDeps, argv: string[], timeoutM
   return await run(argv, "", timeoutMs);
 }
 
-function briefArgs(brief: Record<string, string>, marker: string): { head: string[]; tail: string[] } | CreateResult {
+function briefArgs(brief: Record<string, string>, marker: string, label: string): { head: string[]; tail: string[] } | CreateResult {
   const { parent = "", repository = "", title = "", checkpoint = "", budgetTokens = "", budgetMinutes = "", budgetInvocations, probes, dependencies } = brief;
   if (!/^[1-9]\d*$/.test(budgetTokens) || !/^[1-9]\d*$/.test(budgetMinutes)) return failed("Write the budget as positive whole tokens and minutes. Nothing was filed.");
   const probeList = (probes ?? "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -118,7 +118,7 @@ function briefArgs(brief: Record<string, string>, marker: string): { head: strin
   const blocked = (dependencies ?? "").split(/[\s,]+/).map(value => value.trim()).filter(Boolean);
   if ([parent, ...blocked].some(value => value.startsWith("-"))) return failed("The parent and dependencies must be node references, not options. Nothing was filed.");
   return {
-    head: ["graph", "add", parent, "--repo", repository, "--title", title, "--autonomy", "approve", "--kind", "build", "--label", GRAPH_LABEL, "--checkpoint", checkpoint],
+    head: ["graph", "add", parent, "--repo", repository, "--title", title, "--autonomy", "approve", "--kind", "build", "--label", label, "--checkpoint", checkpoint],
     tail: [
       "--budget-tokens", budgetTokens, "--budget-minutes", budgetMinutes,
       ...(budgetInvocations && /^[1-9]\d*$/.test(budgetInvocations) ? ["--budget-invocations", budgetInvocations] : []),
@@ -147,7 +147,7 @@ export function workBriefWriter(deps: WorkerWriterDeps): OwnerWriter {
     const body = (request.fields.body ?? "").trim();
     if (!body) return failed("Write the brief's scope and acceptance checks. Nothing was filed.");
     const marker = graphMarker(request.operationId);
-    const args = briefArgs(request.fields, marker);
+    const args = briefArgs(request.fields, marker, graphOperationLabel(deps.db, request.operationId));
     if ("state" in args) return args;
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before soma was called.");
     const run = deps.run ?? spawnWithStdin;
