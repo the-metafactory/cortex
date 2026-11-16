@@ -7,6 +7,7 @@ import { runCommand } from "../common/spawn";
 import { listCorrections, setCorrection } from "../desk/corrections";
 import {
   CLASSIFIER_KEY_ENV,
+  buildMessages,
   commandClassifier,
   MailClassifier,
   MAX_SUMMARY,
@@ -102,7 +103,7 @@ describe("the command form", () => {
     expect(answer).toEqual({ category: "bulk", reason: "A newsletter." });
     expect(calls[0]?.argv).toEqual(COMMAND.command);
     expect(calls[0]?.timeoutMs).toBe(75_000);
-    expect(JSON.parse(calls[0]?.stdin ?? "")).toEqual(REQUEST);
+    expect(JSON.parse(calls[0]?.stdin ?? "")).toEqual({ ...REQUEST, messages: buildMessages(REQUEST) });
     expect(calls[0]?.env?.[CLASSIFIER_KEY_ENV]).toBe("sk-test");
     expect(calls[0]?.argv.join(" ")).not.toContain("sk-test");
   });
