@@ -62,7 +62,7 @@ export const SecretRefSchema = z
  * if the string is not a well-formed `env:NAME` reference. Does not touch the
  * environment.
  */
-export function secretRefKeychainName(ref: string): string | undefined {
+function secretRefKeychainName(ref: string): string | undefined {
   return KEYCHAIN_REF_PATTERN.exec(ref)?.[1];
 }
 
@@ -103,7 +103,7 @@ export class SecretRefResolutionError extends Error {
  *
  * `env` is injectable for testing; defaults to `process.env`.
  */
-export interface ResolveSecretRefOptions {
+interface ResolveSecretRefOptions {
   platform?: string;
   security?: SurfaceSecretStoreOptions["security"];
   username?: string;
