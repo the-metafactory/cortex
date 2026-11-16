@@ -57,7 +57,10 @@ function noteCandidates(db: Database): Candidate[] {
   return listOpenNotes(db).map((note) => ({ kind: note.kind === "reminder" ? "desk-reminder" : "desk-note", id: String(note.id), title: firstLine(note.text), text: note.text, at: note.createdAt, query: {} }));
 }
 
-const studioUnreadable = (problems: readonly { path: string }[]): boolean => problems.some((problem) => problem.path === "." || problem.path.endsWith("/"));
+const MISSING_GIT_WARNING = "not a git working tree";
+
+const studioUnreadable = (problems: readonly { path: string; reason: string }[]): boolean =>
+  problems.some((problem) => (problem.path === "." && !problem.reason.includes(MISSING_GIT_WARNING)) || problem.path.endsWith("/"));
 
 async function studioCandidates(desk: DeskOptions): Promise<{ candidates: Candidate[]; unreadable: boolean }> {
   if (!desk.studio) return { candidates: [], unreadable: false };

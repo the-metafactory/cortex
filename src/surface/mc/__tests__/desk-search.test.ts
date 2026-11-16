@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { DEFAULT_SETTINGS, type AppState, type OutlineNode } from "../../../balance";
 import { DESK_API_VERSION, withDeskApiVersion } from "../../../desk-api/version";
 import type { DeskSearchResponse } from "../../../desk-api/wire/search";
@@ -120,6 +121,14 @@ describe("GET /api/desk/search", () => {
     }
     enabled = false;
     expect((await search("q=a")).status).toBe(503);
+  });
+
+  it("keeps Studio kinds available when the Studio directory has no .git", async () => {
+    await file("Remember the narwhal sonar idea.", toInbox);
+    rmSync(join(dir, ".git"), { recursive: true, force: true });
+    const result = await search("q=narwhal");
+    expect(result.body.unavailableKinds ?? []).toEqual([]);
+    expect(result.body.hits.map((hit) => hit.kind)).toEqual(["studio-capture"]);
   });
 
   it("lists the Studio kinds as unavailable and still answers the others when Studio is not configured", async () => {
