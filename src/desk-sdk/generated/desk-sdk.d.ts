@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.18.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.19.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",

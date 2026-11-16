@@ -5,7 +5,7 @@ This is the authoring contract for a Desk adapter package. It describes the `des
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
-SDK 1.18.0 adds `invitationReply`, `invitationRemove`, `invitationRestore` and `lookupInvitation` to the Mail execution bridge and exports the invitation contract from `./desk-sdk`.
+SDK 1.19.0 adds `invitationReply`, `invitationRemove`, `invitationRestore` and `lookupInvitation` to the Mail execution bridge and exports the invitation contract from `./desk-sdk`.
 
 SDK 1.17.0 adds the `report` and `lookupReport` Mail execution methods.
 
