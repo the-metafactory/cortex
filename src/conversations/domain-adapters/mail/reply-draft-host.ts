@@ -1,15 +1,16 @@
 import type { HostContext } from "../../authority";
 import { studioRequestId } from "../../conversation-ids";
 import type { CreateRequest, CreateResult, OwnerWriter, Policy } from "../../types";
-import { MAX_REPLY_CHARS, type ListedMailLookup } from "../../../surface/mc/desk/mail-actions";
+import { type ListedMailLookup } from "../../../surface/mc/desk/mail-actions";
 import type { OperationJournalStore } from "../operations/journal";
-import { buildApprovedSnapshot, ownerResultKit } from "../operations/owner-results";
+import { ownerResultKit } from "../operations/owner-results";
 import type { ApprovedSnapshot } from "../operations/types";
 import type { CapabilityDeclaration } from "../types";
 import type { MailApprovalInput, MailMoveAuthorityService } from "./move-host";
 import { mailAccountRef, mailMessageRef } from "./move-contract";
-import { MAIL_REPLY_DRAFT_CAPABILITY, mailReplyDraftScopeMatches } from "./reply-draft-policy";
+import { MAIL_REPLY_DRAFT_CAPABILITY } from "./reply-draft-policy";
 export { MAIL_REPLY_DRAFT_CAPABILITY } from "./reply-draft-policy";
+import { mailReplyDraftSnapshot as contractSnapshot } from "./reply-draft-contract";
 
 export interface MailReplyDraftConnection {
   adapterId: string;
@@ -26,9 +27,9 @@ export function mailReplyDraftSnapshot(request: CreateRequest, connection: MailR
   if (!connection.account || mail.account !== connection.account || mail.sourceId !== connection.sourceId) throw new Error("A reply draft can only be saved to the source and account of the mail being discussed.");
   const { operationId: _operationId, ...provenance } = request.provenance;
   const message = mailMessageRef(connection.adapterId, connection.connectionId, mail.id);
-  const snapshot = buildApprovedSnapshot({ provenance, adapterId: connection.adapterId, connectionId: connection.connectionId, capabilityId: MAIL_REPLY_DRAFT_CAPABILITY, inputSchemaRef: connection.capability.inputSchemaRef, outputSchemaRef: connection.capability.outputSchemaRef, errorSchemaRef: connection.capability.errorSchemaRef, input: { message, body: request.fields.body ?? "" }, target: message, destinations: [mailAccountRef(connection.adapterId, connection.connectionId, connection.account)], policy });
-  if (!mailReplyDraftScopeMatches(snapshot, connection.account) || (request.fields.body?.length ?? 0) > MAX_REPLY_CHARS) throw new Error("The reply text or Mail scope is invalid.");
-  return snapshot;
+  return contractSnapshot({ adapterId: connection.adapterId, connectionId: connection.connectionId,
+    account: mailAccountRef(connection.adapterId, connection.connectionId, connection.account), message,
+    body: request.fields.body ?? "", provenance, policy, capability: connection.capability });
 }
 
 export interface MailReplyDraftFacadeOptions {

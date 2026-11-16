@@ -23,6 +23,34 @@ function runSecurity(args: string[]): SecurityResult {
 
 const ARC_PACKAGE_NAMES = ["cortex", "Cortex"] as const;
 
+type KeychainLookup =
+  | { kind: "found"; value: string }
+  | { kind: "missing" }
+  | { kind: "failed" };
+
+function keychainServiceName(name: string, packageName = "cortex"): string {
+  return `ai.meta-factory.cortex.${packageName}.${name}`;
+}
+
+export function lookupKeychainItem(
+  name: string,
+  packageName: string,
+  options: Pick<SurfaceSecretStoreOptions, "security" | "username"> = {},
+): KeychainLookup {
+  let result: SecurityResult;
+  try {
+    result = (options.security ?? runSecurity)([
+      "find-generic-password", "-s", keychainServiceName(name, packageName),
+      "-a", options.username ?? userInfo().username, "-w",
+    ]);
+  } catch {
+    return { kind: "failed" };
+  }
+  if (result.status === 44) return { kind: "missing" };
+  if (result.status !== 0) return { kind: "failed" };
+  return { kind: "found", value: result.stdout.endsWith("\n") ? result.stdout.slice(0, -1) : result.stdout };
+}
+
 export const isSurfaceSecretName = (name: string): boolean => /^[A-Z0-9_]+$/.test(name);
 
 export function readSurfaceSecret(name: string, options: SurfaceSecretStoreOptions = {}): string | undefined {
@@ -45,13 +73,10 @@ export function readSurfaceSecret(name: string, options: SurfaceSecretStoreOptio
     }
     if ((options.platform ?? process.platform) !== "darwin") return undefined;
     for (const packageName of ARC_PACKAGE_NAMES) {
-      const result = (options.security ?? runSecurity)([
-        "find-generic-password", "-s", `ai.meta-factory.cortex.${packageName}.${name}`,
-        "-a", options.username ?? userInfo().username, "-w",
-      ]);
-      if (result.status === 44) continue;
-      if (result.status !== 0) throw new Error("Keychain read failed");
-      return result.stdout.endsWith("\n") ? result.stdout.slice(0, -1) : result.stdout;
+      const lookup = lookupKeychainItem(name, packageName, options);
+      if (lookup.kind === "missing") continue;
+      if (lookup.kind === "failed") throw new Error("Keychain read failed");
+      return lookup.value;
     }
     return undefined;
   } catch {

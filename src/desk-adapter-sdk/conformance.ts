@@ -9,6 +9,7 @@ import { executePackage } from "./conformance/run";
 export { DESK_ADAPTER_SDK_VERSION } from "../desk-sdk/version";
 export { CONFORMANCE_CONNECTION_ID } from "./conformance/connection";
 export type { MailConnectionBinding, MailReadSource, MailSourceItem, MailSourceListing } from "../conversations/domain-adapters/mail-read-source";
+export type { MailExecutionConnections, MailExecutionProvider } from "../conversations/domain-adapters/mail-execution-source";
 export { formatReport, type CapabilityReport, type ConformanceMailQuery, type ConformanceReport, type OwnerCalls, type ProbeKind, type Verdict } from "./conformance/report";
 export { FAILURE_SCENARIOS, formatFailureReport, runFailureScenarios, type CompanionReport, type FailureOptions, type FailureReport, type ScenarioName, type ScenarioReport, type ScenarioVerdict } from "./conformance/failures";
 
@@ -42,3 +43,7 @@ export async function runConformance(packageDir: string, options: string | Confo
     await rm(temp, { recursive: true, force: true });
   }
 }
+
+export { runMailActionScenario, type MailActionScenarioContext, type MailActionScenarioOptions, type MailActionScenarioReport, type MailActionScenarioStage, type MailActionScenarioStep } from "./conformance/mail-action";
+
+export type { ApprovedSnapshot, Json, Provenance } from "../conversations/domain-adapters/operations/types";

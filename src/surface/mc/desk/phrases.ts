@@ -113,7 +113,24 @@ export type DeskPhrase =
   | { code: "mail.put-away-person"; params: { person: string } }
   | { code: "correction.source"; params: { kind: DeskItemKind; source: string } }
   | { code: "mail.correction"; params: { subject: string | null; sender: string; action: string; learnedAction?: PredictedAction; category: string | null } }
-  | { code: "mail.sweep-category"; params: { category: string } };
+  | { code: "mail.sweep-category"; params: { category: string } }
+  | { code: "brief.gap-no-adapter"; params: { kind: string } }
+  | { code: "brief.gap-access-denied"; params: { kind: string } }
+  | { code: "brief.gap-read-failed"; params: { kind: string } }
+  | { code: "brief.gap-no-linked-material"; params: { kind: string } }
+  | { code: "brief.gap-relink-required" }
+  | { code: "brief.refresh-required" }
+  | { code: "brief.previous-unidentified" }
+  | { code: "brief.previous-identified" }
+  | { code: "brief.previous-unavailable" }
+  | { code: "brief.previous-set" }
+  | { code: "brief.previous-cleared" }
+  | { code: "brief.previous-self" }
+  | { code: "brief.previous-not-earlier" }
+  | { code: "brief.previous-target-unavailable" }
+  | { code: "brief.previous-invalid" }
+  | { code: "brief.meeting-gone" }
+  | { code: "brief.synthesis-not-configured" };
 
 export const DESK_ITEM_PHRASE_CODES = [
   "ranger.resume-queued", "ranger.blocked", "ranger.stopped", "ranger.approval-needed", "ranger.discussion-needed",
@@ -139,7 +156,15 @@ export const DESK_ACT_PHRASE_CODES = [
   "routine.approval", "routine.discarded", "studio.done", "studio.spar-queued", "ranger.action-done", "ranger.action-queued",
 ] as const satisfies readonly DeskPhrase["code"][];
 
+export const DESK_BRIEF_PHRASE_CODES = [
+  "brief.gap-no-adapter", "brief.gap-access-denied", "brief.gap-read-failed", "brief.gap-no-linked-material",
+  "brief.gap-relink-required", "brief.refresh-required", "brief.previous-unidentified", "brief.synthesis-not-configured",
+  "brief.previous-identified", "brief.previous-unavailable", "brief.previous-set", "brief.previous-cleared", "brief.previous-self",
+  "brief.previous-not-earlier", "brief.previous-target-unavailable", "brief.previous-invalid", "brief.meeting-gone",
+] as const satisfies readonly DeskPhrase["code"][];
+
 export const DESK_PHRASE_CODES = [
   ...DESK_ITEM_PHRASE_CODES,
   ...DESK_ACT_PHRASE_CODES,
+  ...DESK_BRIEF_PHRASE_CODES,
 ] as const satisfies readonly DeskPhrase["code"][];

@@ -40,6 +40,7 @@ export async function handleDeskAction(req: Request, runtime: DeskRuntime | unde
     const result = await (deps.run ?? spawnRanger)(plan.argv);
     if (result.code !== 0) return fail(502, `Ranger refused: ${oneLine(result.stderr || result.stdout, `exit code ${result.code}`)}`);
     if (plan.handledKey !== null) ledger.add(plan.handledKey, (deps.now ?? Date.now)());
+    runtime.decisions?.record({ operationKey: `${body.action}:${plan.handledKey ?? `${plan.claimKey}@${(deps.now ?? Date.now)()}`}`, itemKey: body.key, action: body.action, target: plan.subject, title: plan.subject.title, outcome: { state: "accepted" } });
     return Response.json({ ok: true, message: plan.done }, { headers: noStore });
   } catch (err) {
     return fail(502, `Could not run Ranger: ${err instanceof Error ? err.message : String(err)}`);

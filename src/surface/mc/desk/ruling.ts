@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Database } from "bun:sqlite";
 import { fetchIssueOrPr, isGitHubFetchError } from "../adapters/github/fetch";
 import { fetchGitlabIssue, gitlabIssueRef } from "../adapters/gitlab/fetch";
 import { modelJson, commandJson, isCommand, readApiKey, type CommandRunner, type KeyReader, type ModelConfig } from "./classify";
@@ -60,13 +61,33 @@ export const RULING_STATUS_RETRY_MS = 10 * 60_000;
 const statusLifetime = (refusal: string | null): number => refusal === NODE_UNREADABLE ? RULING_STATUS_RETRY_MS : RULING_STATUS_FRESH_MS;
 
 export class EscalationRulings {
-  private readonly cache = new Map<string, { at: number; refusal: string | null }>();
+  private readonly cache = new Map<string, { until: number; refusal: string | null }>();
   private refreshing: Promise<void> | null = null;
 
-  constructor(private readonly somaBin: string, private readonly run?: RangerRunner, private readonly clock = Date.now) {}
+  constructor(private readonly somaBin: string, private readonly run?: RangerRunner, private readonly clock = Date.now, private readonly db?: Database) {
+    this.prune();
+    const rows = this.persist(database => database.query<{ ref: string; expires_at: number; refusal: string | null }, [string, number]>("SELECT ref, expires_at, refusal FROM desk_escalation_statuses WHERE source = ? AND expires_at > ?").all(this.somaBin, this.clock())) ?? [];
+    for (const row of rows) this.cache.set(row.ref, { until: row.expires_at, refusal: row.refusal });
+  }
+
+  private persist<T>(operation: (db: Database) => T): T | undefined {
+    if (!this.db) return undefined;
+    try {
+      return operation(this.db);
+    } catch (error) {
+      console.error(`desk: escalation status persistence failed: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  }
+
+  private prune(): void {
+    const now = this.clock();
+    for (const [ref, cached] of this.cache) if (now >= cached.until) this.cache.delete(ref);
+    this.persist(database => database.run("DELETE FROM desk_escalation_statuses WHERE source = ? AND expires_at <= ?", [this.somaBin, now]));
+  }
 
   read(refs: string[]): ReadonlyMap<string, string | null> {
-    for (const [ref, cached] of this.cache) if (this.clock() - cached.at >= statusLifetime(cached.refusal)) this.cache.delete(ref);
+    this.prune();
     void this.warm(refs);
     return new Map(refs.map(ref => [ref, this.cache.get(ref)?.refusal ?? (this.cache.has(ref) ? null : "The graph node status is being checked. Answer on the issue.")]));
   }
@@ -75,7 +96,7 @@ export class EscalationRulings {
     if (this.refreshing) return this.refreshing.then(() => this.warm(refs));
     const stale = [...new Set(refs)].filter(ref => {
       const cached = this.cache.get(ref);
-      return !cached || this.clock() - cached.at >= statusLifetime(cached.refusal);
+      return !cached || this.clock() >= cached.until;
     });
     if (!stale.length) return Promise.resolve();
     this.refreshing = this.refresh(stale).finally(() => { this.refreshing = null; });
@@ -86,7 +107,10 @@ export class EscalationRulings {
     for (let offset = 0; offset < refs.length; offset += 4) {
       await Promise.all(refs.slice(offset, offset + 4).map(async ref => {
         const target = await escalationRulingTarget(this.somaBin, ref, this.run);
-        this.cache.set(ref, { at: this.clock(), refusal: typeof target === "string" ? target : null });
+        const refusal = typeof target === "string" ? target : null;
+        const until = this.clock() + statusLifetime(refusal);
+        this.cache.set(ref, { until, refusal });
+        this.persist(database => database.run("INSERT INTO desk_escalation_statuses (source, ref, expires_at, refusal) VALUES (?, ?, ?, ?) ON CONFLICT(source, ref) DO UPDATE SET expires_at = excluded.expires_at, refusal = excluded.refusal", [this.somaBin, ref, until, refusal]));
       }));
     }
   }

@@ -185,7 +185,7 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
       await saveOverseerRun(dir, audit);
       let stdout: string;
       try {
-        stdout = await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${evidence.thread}`, "--param", `trigger=${evidence.reason}`], dir);
+        stdout = await command([...config.ranger, "job", "enqueue", "assistant-think", "--param", `thread=${evidence.thread}`, "--param", `trigger=${evidence.reason}`], dir);
       } catch (error) {
         evidence.enqueue = "uncertain";
         throw error;

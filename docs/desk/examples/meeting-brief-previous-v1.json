@@ -1,0 +1,243 @@
+{
+  "fixtureVersion": 1,
+  "scope": "meeting-brief previous-meeting endpoint examples; not an API-wide wire version",
+  "cases": [
+    {
+      "name": "denied-identity",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief/previous",
+        "body": {
+          "event": "cal:cal:standup",
+          "previousEvent": "cal:cal:previous-week"
+        }
+      },
+      "status": 403,
+      "response": {
+        "error": "not_authorized",
+        "detail": "the authenticated principal is not in the mc.governance.principals allowlist for this Mission Control daemon."
+      }
+    },
+    {
+      "name": "denied-origin",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief/previous",
+        "body": {
+          "event": "cal:cal:standup",
+          "previousEvent": "cal:cal:previous-week"
+        }
+      },
+      "status": 403,
+      "response": {
+        "error": "forbidden_origin",
+        "detail": "the Origin header is outside the Mission Control allowlist — a mutating request from a foreign origin is refused (anti-CSRF / anti-rebinding)."
+      }
+    },
+    {
+      "name": "set-previous",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief/previous",
+        "body": {
+          "event": "cal:cal:standup",
+          "previousEvent": "cal:cal:previous-week"
+        }
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "event": "cal:cal:standup",
+        "previousEvent": "cal:cal:previous-week",
+        "relation": "explicit",
+        "message": "The previous meeting is set.",
+        "messagePhrase": {
+          "code": "brief.previous-set"
+        }
+      }
+    },
+    {
+      "name": "brief-identified",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief",
+        "body": {
+          "event": "cal:cal:standup"
+        }
+      },
+      "status": 200,
+      "response": {
+        "event": "cal:cal:standup",
+        "revision": "opaque-evidence-revision",
+        "preparedAt": "2026-11-04T09:00:00.000Z",
+        "facts": [],
+        "gaps": [
+          {
+            "id": "gap-0779d8f9062a10e0",
+            "reason": "no-linked-material",
+            "source": {
+              "kind": "meeting",
+              "adapter": null,
+              "owner": "desk-source-command",
+              "connection": "cal",
+              "item": "cal:cal:standup"
+            },
+            "phrase": {
+              "code": "brief.gap-no-linked-material",
+              "params": {
+                "kind": "meeting"
+              }
+            },
+            "message": "No meeting material is linked to this meeting."
+          }
+        ],
+        "previousMeeting": {
+          "state": "identified",
+          "phrase": {
+            "code": "brief.previous-identified"
+          },
+          "message": "The previous meeting was set explicitly.",
+          "event": "cal:cal:previous-week",
+          "relation": "explicit",
+          "facts": [
+            {
+              "id": "fact-6a9a57fdef5afcfc",
+              "text": "Note: Agreed: the venue is booked",
+              "sources": [
+                {
+                  "kind": "note",
+                  "adapter": null,
+                  "owner": "desk-notes",
+                  "item": "note:1",
+                  "excerpt": "Agreed: the venue is booked"
+                }
+              ]
+            }
+          ],
+          "gaps": []
+        },
+        "synthesis": {
+          "state": "unavailable",
+          "reason": "not-configured",
+          "phrase": {
+            "code": "brief.synthesis-not-configured"
+          },
+          "message": "No summary model is configured, so the evidence is shown as it is."
+        }
+      }
+    },
+    {
+      "name": "reject-self",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief/previous",
+        "body": {
+          "event": "cal:cal:standup",
+          "previousEvent": "cal:cal:standup"
+        }
+      },
+      "status": 409,
+      "response": {
+        "ok": false,
+        "error": "A meeting cannot be its own previous meeting.",
+        "messagePhrase": {
+          "code": "brief.previous-self"
+        }
+      }
+    },
+    {
+      "name": "reject-unknown-field",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief/previous",
+        "body": {
+          "event": "cal:cal:standup",
+          "previousEvent": "cal:cal:previous-week",
+          "description": "untrusted"
+        }
+      },
+      "status": 400,
+      "response": {
+        "ok": false,
+        "error": "Setting a previous meeting needs an event key and a previous event key, or null to clear it.",
+        "messagePhrase": {
+          "code": "brief.previous-invalid"
+        }
+      }
+    },
+    {
+      "name": "clear-previous",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief/previous",
+        "body": {
+          "event": "cal:cal:standup",
+          "previousEvent": null
+        }
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "event": "cal:cal:standup",
+        "previousEvent": null,
+        "relation": null,
+        "message": "No previous meeting is set.",
+        "messagePhrase": {
+          "code": "brief.previous-cleared"
+        }
+      }
+    },
+    {
+      "name": "brief-unidentified",
+      "request": {
+        "method": "POST",
+        "path": "/api/desk/meeting-brief",
+        "body": {
+          "event": "cal:cal:standup"
+        }
+      },
+      "status": 200,
+      "response": {
+        "event": "cal:cal:standup",
+        "revision": "opaque-evidence-revision",
+        "preparedAt": "2026-11-04T09:00:00.000Z",
+        "facts": [],
+        "gaps": [
+          {
+            "id": "gap-0779d8f9062a10e0",
+            "reason": "no-linked-material",
+            "source": {
+              "kind": "meeting",
+              "adapter": null,
+              "owner": "desk-source-command",
+              "connection": "cal",
+              "item": "cal:cal:standup"
+            },
+            "phrase": {
+              "code": "brief.gap-no-linked-material",
+              "params": {
+                "kind": "meeting"
+              }
+            },
+            "message": "No meeting material is linked to this meeting."
+          }
+        ],
+        "previousMeeting": {
+          "state": "unidentified",
+          "phrase": {
+            "code": "brief.previous-unidentified"
+          },
+          "message": "No previous meeting identified."
+        },
+        "synthesis": {
+          "state": "unavailable",
+          "reason": "not-configured",
+          "phrase": {
+            "code": "brief.synthesis-not-configured"
+          },
+          "message": "No summary model is configured, so the evidence is shown as it is."
+        }
+      }
+    }
+  ]
+}

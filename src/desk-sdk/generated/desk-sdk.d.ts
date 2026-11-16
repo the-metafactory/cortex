@@ -19,7 +19,386 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.11.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.14.0";
+declare const AUTH_VERDICTS: readonly [
+	"pass",
+	"fail",
+	"softfail",
+	"neutral",
+	"none",
+	"temperror",
+	"permerror",
+	"policy"
+];
+/** Headers a mail source may report. Untrusted: each field that does not fit is dropped on its own, never the mail. */
+export declare const MailHeadersSchema: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodObject<{
+	listId: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	listUnsubscribe: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	listUnsubscribePost: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	authResults: z.ZodCatch<z.ZodOptional<z.ZodObject<{
+		spf: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodEnum<{
+			pass: "pass";
+			fail: "fail";
+			softfail: "softfail";
+			neutral: "neutral";
+			none: "none";
+			temperror: "temperror";
+			permerror: "permerror";
+			policy: "policy";
+		}>>>>;
+		dkim: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodEnum<{
+			pass: "pass";
+			fail: "fail";
+			softfail: "softfail";
+			neutral: "neutral";
+			none: "none";
+			temperror: "temperror";
+			permerror: "permerror";
+			policy: "policy";
+		}>>>>;
+		dmarc: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodEnum<{
+			pass: "pass";
+			fail: "fail";
+			softfail: "softfail";
+			neutral: "neutral";
+			none: "none";
+			temperror: "temperror";
+			permerror: "permerror";
+			policy: "policy";
+		}>>>>;
+		dkimDomains: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<string[], unknown[]>>>>;
+		spfDomain: z.ZodCatch<z.ZodOptional<z.ZodString>>;
+	}, z.core.$strip>>>;
+	replyTo: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	inReplyTo: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	references: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<string[], unknown[]>>>>;
+}, z.core.$strip>, z.ZodTransform<MailHeaders | undefined, {
+	listId?: string | undefined;
+	listUnsubscribe?: string | undefined;
+	listUnsubscribePost?: string | undefined;
+	authResults?: {
+		spf?: "pass" | "fail" | "softfail" | "neutral" | "none" | "temperror" | "permerror" | "policy" | undefined;
+		dkim?: "pass" | "fail" | "softfail" | "neutral" | "none" | "temperror" | "permerror" | "policy" | undefined;
+		dmarc?: "pass" | "fail" | "softfail" | "neutral" | "none" | "temperror" | "permerror" | "policy" | undefined;
+		dkimDomains?: string[] | undefined;
+		spfDomain?: string | undefined;
+	} | undefined;
+	replyTo?: string | undefined;
+	inReplyTo?: string | undefined;
+	references?: string[] | undefined;
+}>>>>;
+export interface MailHeaders {
+	listId?: string;
+	listUnsubscribe?: string;
+	listUnsubscribePost?: string;
+	authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>> & {
+		dkimDomains?: string[];
+		spfDomain?: string;
+	};
+	replyTo?: string;
+	inReplyTo?: string;
+	references?: string[];
+}
+export declare const MailLinkSchema: z.ZodObject<{
+	text: z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>;
+	href: z.ZodString;
+}, z.core.$strip>;
+export interface MailLink {
+	text: string;
+	href: string;
+}
+/** A meeting request a mail carries (iTIP METHOD:REQUEST), as the mail source read it. Untrusted; a bad one is dropped alone. */
+export declare const MailInvitationSchema: z.ZodCatch<z.ZodOptional<z.ZodObject<{
+	method: z.ZodLiteral<"REQUEST">;
+	uid: z.ZodString;
+	sequence: z.ZodCatch<z.ZodNumber>;
+	summary: z.ZodCatch<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>;
+	start: z.ZodString;
+	end: z.ZodCatch<z.ZodOptional<z.ZodString>>;
+	allDay: z.ZodCatch<z.ZodOptional<z.ZodBoolean>>;
+	location: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	organizer: z.ZodObject<{
+		address: z.ZodPipe<z.ZodString, z.ZodString>;
+		name: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	}, z.core.$strip>;
+	attendee: z.ZodCatch<z.ZodOptional<z.ZodObject<{
+		address: z.ZodPipe<z.ZodString, z.ZodString>;
+		status: z.ZodCatch<z.ZodEnum<{
+			"NEEDS-ACTION": "NEEDS-ACTION";
+			ACCEPTED: "ACCEPTED";
+			DECLINED: "DECLINED";
+			TENTATIVE: "TENTATIVE";
+			DELEGATED: "DELEGATED";
+		}>>;
+		rsvp: z.ZodCatch<z.ZodOptional<z.ZodBoolean>>;
+	}, z.core.$strip>>>;
+	recurring: z.ZodCatch<z.ZodOptional<z.ZodBoolean>>;
+	attendees: z.ZodCatch<z.ZodNumber>;
+}, z.core.$strip>>>;
+export type MailInvitation = NonNullable<z.infer<typeof MailInvitationSchema>>;
+export declare const SourceMailSchema: z.ZodObject<{
+	kind: z.ZodLiteral<"mail">;
+	id: z.ZodString;
+	from: z.ZodObject<{
+		name: z.ZodOptional<z.ZodString>;
+		address: z.ZodString;
+	}, z.core.$strip>;
+	subject: z.ZodString;
+	receivedAt: z.ZodString;
+	dueAt: z.ZodCatch<z.ZodOptional<z.ZodString>>;
+	unread: z.ZodBoolean;
+	firstParagraph: z.ZodOptional<z.ZodString>;
+	url: z.ZodOptional<z.ZodString>;
+	account: z.ZodOptional<z.ZodString>;
+	headers: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodObject<{
+		listId: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		listUnsubscribe: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		listUnsubscribePost: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		authResults: z.ZodCatch<z.ZodOptional<z.ZodObject<{
+			spf: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodEnum<{
+				pass: "pass";
+				fail: "fail";
+				softfail: "softfail";
+				neutral: "neutral";
+				none: "none";
+				temperror: "temperror";
+				permerror: "permerror";
+				policy: "policy";
+			}>>>>;
+			dkim: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodEnum<{
+				pass: "pass";
+				fail: "fail";
+				softfail: "softfail";
+				neutral: "neutral";
+				none: "none";
+				temperror: "temperror";
+				permerror: "permerror";
+				policy: "policy";
+			}>>>>;
+			dmarc: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodEnum<{
+				pass: "pass";
+				fail: "fail";
+				softfail: "softfail";
+				neutral: "neutral";
+				none: "none";
+				temperror: "temperror";
+				permerror: "permerror";
+				policy: "policy";
+			}>>>>;
+			dkimDomains: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<string[], unknown[]>>>>;
+			spfDomain: z.ZodCatch<z.ZodOptional<z.ZodString>>;
+		}, z.core.$strip>>>;
+		replyTo: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		inReplyTo: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		references: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<string[], unknown[]>>>>;
+	}, z.core.$strip>, z.ZodTransform<MailHeaders | undefined, {
+		listId?: string | undefined;
+		listUnsubscribe?: string | undefined;
+		listUnsubscribePost?: string | undefined;
+		authResults?: {
+			spf?: "pass" | "fail" | "softfail" | "neutral" | "none" | "temperror" | "permerror" | "policy" | undefined;
+			dkim?: "pass" | "fail" | "softfail" | "neutral" | "none" | "temperror" | "permerror" | "policy" | undefined;
+			dmarc?: "pass" | "fail" | "softfail" | "neutral" | "none" | "temperror" | "permerror" | "policy" | undefined;
+			dkimDomains?: string[] | undefined;
+			spfDomain?: string | undefined;
+		} | undefined;
+		replyTo?: string | undefined;
+		inReplyTo?: string | undefined;
+		references?: string[] | undefined;
+	}>>>>;
+	links: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<MailLink[], unknown[]>>>>;
+	invitation: z.ZodCatch<z.ZodOptional<z.ZodObject<{
+		method: z.ZodLiteral<"REQUEST">;
+		uid: z.ZodString;
+		sequence: z.ZodCatch<z.ZodNumber>;
+		summary: z.ZodCatch<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>;
+		start: z.ZodString;
+		end: z.ZodCatch<z.ZodOptional<z.ZodString>>;
+		allDay: z.ZodCatch<z.ZodOptional<z.ZodBoolean>>;
+		location: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		organizer: z.ZodObject<{
+			address: z.ZodPipe<z.ZodString, z.ZodString>;
+			name: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		}, z.core.$strip>;
+		attendee: z.ZodCatch<z.ZodOptional<z.ZodObject<{
+			address: z.ZodPipe<z.ZodString, z.ZodString>;
+			status: z.ZodCatch<z.ZodEnum<{
+				"NEEDS-ACTION": "NEEDS-ACTION";
+				ACCEPTED: "ACCEPTED";
+				DECLINED: "DECLINED";
+				TENTATIVE: "TENTATIVE";
+				DELEGATED: "DELEGATED";
+			}>>;
+			rsvp: z.ZodCatch<z.ZodOptional<z.ZodBoolean>>;
+		}, z.core.$strip>>>;
+		recurring: z.ZodCatch<z.ZodOptional<z.ZodBoolean>>;
+		attendees: z.ZodCatch<z.ZodNumber>;
+	}, z.core.$strip>>>;
+}, z.core.$strip>;
+/**
+ * A calendar event. `organizer` and `attendees` are the meeting's people, read by the `mail.link-meeting` auto-link. Entries whose
+ * address does not parse are dropped, but the list still counts as given: an unreadable organizer becomes null, and an attendee
+ * value that is not an array, or a nonempty one with no readable entry, becomes empty, so the auto-link refuses every sender rather than none.
+ */
+export declare const SourceEventSchema: z.ZodObject<{
+	id: z.ZodString;
+	start: z.ZodString;
+	end: z.ZodOptional<z.ZodString>;
+	allDay: z.ZodOptional<z.ZodBoolean>;
+	title: z.ZodString;
+	calendar: z.ZodOptional<z.ZodString>;
+	calendarId: z.ZodOptional<z.ZodString>;
+	location: z.ZodOptional<z.ZodString>;
+	online: z.ZodOptional<z.ZodBoolean>;
+	url: z.ZodOptional<z.ZodString>;
+	availability: z.ZodOptional<z.ZodObject<{
+		status: z.ZodEnum<{
+			unknown: "unknown";
+			busy: "busy";
+			free: "free";
+		}>;
+		provenance: z.ZodString;
+	}, z.core.$strip>>;
+	organizer: z.ZodOptional<z.ZodPipe<z.ZodUnknown, z.ZodTransform<{
+		address: string;
+		name?: string | undefined;
+	} | null | undefined, unknown>>>;
+	attendees: z.ZodOptional<z.ZodPipe<z.ZodUnknown, z.ZodTransform<{
+		address: string;
+		name?: string | undefined;
+	}[] | undefined, unknown>>>;
+}, z.core.$strip>;
+/** A mail the account sent (cortex#2983): its recipients, its thread headers and the replies the source found. */
+export declare const SourceSentSchema: z.ZodObject<{
+	kind: z.ZodLiteral<"sent">;
+	id: z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>;
+	from: z.ZodObject<{
+		name: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		address: z.ZodPipe<z.ZodString, z.ZodString>;
+	}, z.core.$strip>;
+	to: z.ZodPipe<z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<{
+		address: string;
+		name?: string | undefined;
+	}[], unknown[]>>>>, z.ZodArray<z.ZodObject<{
+		name: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+		address: z.ZodPipe<z.ZodString, z.ZodString>;
+	}, z.core.$strip>>>;
+	subject: z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>;
+	sentAt: z.ZodString;
+	text: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodTransform<string, string>>>>;
+	url: z.ZodCatch<z.ZodOptional<z.ZodString>>;
+	account: z.ZodOptional<z.ZodString>;
+	inReplyTo: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodPipe<z.ZodString, z.ZodTransform<string, string>>, z.ZodString>>>;
+	references: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<string[], unknown[]>>>>;
+	replies: z.ZodCatch<z.ZodOptional<z.ZodPipe<z.ZodArray<z.ZodUnknown>, z.ZodTransform<{
+		id: string;
+		from: {
+			address: string;
+			name?: string | undefined;
+		};
+		at: string;
+	}[], unknown[]>>>>;
+}, z.core.$strip>;
+export type SourceEvent = z.infer<typeof SourceEventSchema>;
+export type SourceMail = z.infer<typeof SourceMailSchema>;
+export type SourceSent = z.infer<typeof SourceSentSchema>;
+export declare const SourceOutputSchema: z.ZodObject<{
+	events: z.ZodOptional<z.ZodUnknown>;
+	items: z.ZodOptional<z.ZodUnknown>;
+}, z.core.$loose>;
+declare const ParserPermissionsSchema: z.ZodObject<{
+	permitted: z.ZodArray<z.ZodEnum<{
+		codex: "codex";
+		pi: "pi";
+	}>>;
+}, z.core.$strict>;
+export type ParserPermissions = z.infer<typeof ParserPermissionsSchema>;
+declare const ASK_KINDS: readonly [
+	"reminder",
+	"note",
+	"capture",
+	"task",
+	"goal",
+	"calendar",
+	"routine",
+	"conversation"
+];
+export type AskKind = (typeof ASK_KINDS)[number];
+declare const FIELD_SCHEMAS: {
+	routine: z.ZodObject<{
+		proposalId: z.ZodUUID;
+	}, z.core.$strip>;
+	conversation: z.ZodObject<{
+		text: z.ZodString;
+		area: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>;
+	reminder: z.ZodObject<{
+		text: z.ZodString;
+		due: z.ZodString;
+	}, z.core.$strip>;
+	note: z.ZodObject<{
+		text: z.ZodString;
+	}, z.core.$strip>;
+	capture: z.ZodObject<{
+		text: z.ZodString;
+	}, z.core.$strip>;
+	task: z.ZodObject<{
+		title: z.ZodString;
+		details: z.ZodOptional<z.ZodString>;
+		map: z.ZodString;
+	}, z.core.$strip>;
+	goal: z.ZodObject<{
+		wording: z.ZodString;
+	}, z.core.$strip>;
+	calendar: z.ZodObject<{
+		title: z.ZodString;
+		start: z.ZodString;
+		end: z.ZodOptional<z.ZodString>;
+		allDay: z.ZodOptional<z.ZodBoolean>;
+		location: z.ZodOptional<z.ZodString>;
+		notes: z.ZodOptional<z.ZodString>;
+	}, z.core.$strip>;
+};
+export type AskFields = {
+	[K in AskKind]: z.infer<(typeof FIELD_SCHEMAS)[K]>;
+};
+export type AskCard = {
+	[K in AskKind]: {
+		kind: K;
+		fields: AskFields[K];
+	};
+}[AskKind];
+export interface AskMap {
+	ref: string;
+	label: string;
+}
+export interface ParserRequest {
+	text: string;
+	now: string;
+	timeZone: string;
+	kinds: AskKind[];
+	maps: AskMap[];
+	routing?: ParserPermissions;
+}
+export declare const ParserAnswerSchema: z.ZodObject<{
+	kind: z.ZodString;
+	fields: z.ZodOptional<z.ZodUnknown>;
+	reason: z.ZodOptional<z.ZodString>;
+	routing: z.ZodOptional<z.ZodUnknown>;
+}, z.core.$strip>;
+export declare const WriterAnswer: z.ZodObject<{
+	id: z.ZodString;
+	url: z.ZodOptional<z.ZodString>;
+	message: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+export declare const CloseAnswer: z.ZodObject<{
+	id: z.ZodString;
+	message: z.ZodOptional<z.ZodString>;
+}, z.core.$strip>;
+/** What the Desk writes to a writer command's stdin: the confirmed card plus the request id a retry reuses. */
+export type WriterRequest = AskCard & {
+	requestId: string;
+};
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -744,6 +1123,24 @@ export interface ObservationRequest {
 	continuation?: string;
 	limit: number;
 }
+export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe";
+export interface DeskMailExecutionConnection {
+	readonly version: number;
+	readonly methods: readonly DeskMailExecutionMethod[];
+}
+export interface DeskMailOperationContext {
+	readonly operationId: string;
+	readonly attemptId: string;
+	readonly ownerRequestId: string;
+	readonly snapshotDigest: string;
+	readonly snapshot: ApprovedSnapshot;
+}
+export interface DeskMailExecutionBridge {
+	connection(connection: DeskAdapterConnection): DeskMailExecutionConnection | null;
+	invoke(connection: DeskAdapterConnection, method: DeskMailExecutionMethod, input: unknown): Promise<unknown>;
+	lookupContext(connection: DeskAdapterConnection, request: LookupRequest): Promise<DeskMailOperationContext>;
+}
+declare const replySubject: (subject: string) => string;
 declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 	z.ZodObject<{
 		action: z.ZodLiteral<"unimportant">;
@@ -772,15 +1169,15 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 			canonicalId: z.ZodString;
 		}, z.core.$strict>;
 		said: z.ZodEnum<{
-			archive: "archive";
-			trash: "trash";
+			junk: "junk";
 			todo: "todo";
 			plan: "plan";
 			reply: "reply";
 			keep: "keep";
-			junk: "junk";
-			matters: "matters";
+			trash: "trash";
+			archive: "archive";
 			"not-bulk": "not-bulk";
+			matters: "matters";
 		}>;
 	}, z.core.$strict>,
 	z.ZodObject<{
@@ -803,8 +1200,8 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 		until: z.ZodDiscriminatedUnion<[
 			z.ZodObject<{
 				kind: z.ZodEnum<{
-					later: "later";
 					tomorrow: "tomorrow";
+					later: "later";
 					"next-week": "next-week";
 				}>;
 			}, z.core.$strict>,
@@ -944,6 +1341,58 @@ export declare function mailReportSnapshot(options: {
 	input: MailReportInput;
 	provenance: Provenance;
 }): ApprovedSnapshot;
+export declare const MAIL_MOVE_CAPABILITY = "mail.move";
+export declare const MAIL_TRASH_CAPABILITY = "mail.trash";
+export declare const MAIL_RESTORE_CAPABILITY = "mail.restore";
+export declare const MAIL_MOVE_CAPABILITIES: readonly [
+	"mail.move",
+	"mail.trash",
+	"mail.restore"
+];
+export type MailMoveAction = "move" | "trash" | "restore";
+declare const MAIL_MOVE_TARGETS: readonly [
+	"archive",
+	"junk"
+];
+export type MailMoveTarget = (typeof MAIL_MOVE_TARGETS)[number];
+/** The declaration a Mail adapter publishes for the move verbs. The Cortex runtime registers it as the contract a fixture binding or a real adapter must meet. */
+export declare function mailMoveDeclaration(adapterId: string, only?: readonly MailMoveAction[]): AdapterDeclaration;
+export declare const mailAccountRef: (adapterId: string, connectionId: string, account: string) => ObjectReference;
+export declare const mailMessageRef: (adapterId: string, connectionId: string, messageId: string) => ObjectReference;
+export type MailMoveInput = {
+	action: "move";
+	message: ObjectReference;
+	target: MailMoveTarget;
+} | {
+	action: "trash";
+	message: ObjectReference;
+} | {
+	action: "restore";
+	message: ObjectReference;
+	from: string;
+};
+export declare function mailMoveSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: ObjectReference;
+	input: MailMoveInput;
+	provenance: Provenance;
+	policy?: "local" | "cloud";
+}): ApprovedSnapshot;
+export declare const MAIL_REPLY_DRAFT_CAPABILITY = "mail.reply-draft.create";
+/** The existing reply-draft wire contract, shared by the host and external Mail adapters. */
+export declare function mailReplyDraftDeclaration(adapterId?: string): AdapterDeclaration;
+/** Builds the exact message/account approval shape without trimming the reply text. */
+export declare function mailReplyDraftSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: ObjectReference;
+	message: ObjectReference;
+	body: string;
+	provenance: Provenance;
+	policy?: "local" | "cloud";
+	capability?: CapabilityDeclaration;
+}): ApprovedSnapshot;
 /**
  * The call a package's module supplies for one query capability. The host passes the validated fetch request for
  * the capability and releases the result only after it parses as a `QueryPage`.
@@ -1017,6 +1466,10 @@ export interface DeskListedMail {
 	readonly receivedAt: string;
 	readonly unread: boolean;
 	readonly firstParagraph?: string;
+	readonly unsubscribe?: {
+		readonly oneClick: true;
+		readonly host: string;
+	};
 }
 /**
  * A connection's provider health. `fresh` means the source's last listing succeeded. `stale` means it failed
@@ -1055,6 +1508,7 @@ export interface DeskAdapterHost {
 	registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
 	readonly mail: DeskMailReadBridge;
 	readonly mailJudgements?: DeskMailJudgementBridge;
+	readonly mailExecution?: DeskMailExecutionBridge;
 }
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {
@@ -1067,5 +1521,10 @@ export type CreateDeskAdapter = (host: DeskAdapterHost) => DeskAdapterDefinition
 export interface DeskAdapterModule {
 	readonly createDeskAdapter: CreateDeskAdapter;
 }
+
+export {
+	FIELD_SCHEMAS as ParserFieldSchemas,
+	replySubject as mailReplySubject,
+};
 
 export {};

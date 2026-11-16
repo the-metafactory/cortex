@@ -54,11 +54,12 @@ function mailBindingFor(mail: MailReadSource | undefined, adapterId: string, con
 }
 
 // glossary-ignore: host, run
-interface ConnectionSeam { connectionId: string; plain: TrustedConnector; destinations: readonly ObjectReference[]; actionId?: string; mailBinding?: MailConnectionBinding }
+interface ConnectionSeam { connectionId: string; plain: TrustedConnector; destinations: readonly ObjectReference[]; actionId?: string; mailBinding?: MailConnectionBinding; historicalLookup?: boolean }
 
-async function openConnection(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, seam: ConnectionSeam): Promise<{ rig: ConformanceRig; recorded: Recorded }> {
+export async function openConformanceConnection(loader: DeskPackageLoader, candidate: DeskPackageCandidate, temp: string, seam: ConnectionSeam): Promise<{ rig: ConformanceRig; recorded: Recorded }> {
   const { adapterId, manifest } = candidate;
   const readIds = manifest.declaration.capabilities.filter(capability => capability.kind !== "action").map(capability => capability.capabilityId);
+  if (seam.historicalLookup && seam.actionId) readIds.push(seam.actionId);
   const { connector, recorded } = recordConnector(seam.plain);
   const rig = await openConformanceRig({
     dir: temp, registry: loader.registry(), connector, adapterId, connectionId: seam.connectionId, readBindings: manifest.readBindings, readCapabilityIds: readIds,
@@ -89,7 +90,7 @@ async function readMailConnection(loader: DeskPackageLoader, candidate: DeskPack
   sample.destinations.push(...(await listDestinations({ registry: loader.registry(), manifest, sample, plain, adapterId, connectionId })).destinations);
   let opened;
   try {
-    opened = await openConnection(loader, candidate, temp, { connectionId, plain, destinations: sample.destinations, mailBinding });
+    opened = await openConformanceConnection(loader, candidate, temp, { connectionId, plain, destinations: sample.destinations, mailBinding });
   } catch (error) {
     return refusedAll(refusalOf(error));
   }
@@ -145,7 +146,7 @@ export async function exercise(loader: DeskPackageLoader, candidate: DeskPackage
     }
     let opened;
     try {
-      opened = await openConnection(loader, candidate, temp, { connectionId: CONFORMANCE_CONNECTION_ID, plain, destinations, ...(actionId === undefined ? {} : { actionId }), ...(mailBinding ? { mailBinding } : {}) });
+      opened = await openConformanceConnection(loader, candidate, temp, { connectionId: CONFORMANCE_CONNECTION_ID, plain, destinations, ...(actionId === undefined ? {} : { actionId }), ...(mailBinding ? { mailBinding } : {}) });
     } catch (error) {
       const { code, detail } = refusalOf(error);
       capabilities.push(refused(actionId ?? adapterId, "action", code, detail));

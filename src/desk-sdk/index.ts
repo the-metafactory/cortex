@@ -1,9 +1,13 @@
 // glossary-ignore: host, run, message, body
 export { DESK_ADAPTER_SDK_VERSION } from "./version";
+export * from "./command-contract";
 import type { CancelRequest, DispatchRequest, LookupRequest, OwnerResult, OwnerSupport, ReadbackRequest } from "../conversations/domain-adapters/operations/types";
 import type { ObservationRequest } from "../conversations/domain-adapters/reads/observation-types";
 import type { QueryFetchRequest } from "../conversations/domain-adapters/reads/query-types";
 import type { AdapterDeclaration } from "../conversations/domain-adapters/types";
+import type { DeskMailExecutionBridge } from "./mail-execution";
+export type { DeskMailExecutionBridge, DeskMailExecutionConnection, DeskMailExecutionMethod, DeskMailOperationContext } from "./mail-execution";
+export { replySubject as mailReplySubject } from "../conversations/domain-adapters/mail/reply-subject";
 export type {
   AdapterDeclaration,
   BoundaryError,
@@ -92,6 +96,7 @@ export interface DeskListedMail {
   readonly receivedAt: string;
   readonly unread: boolean;
   readonly firstParagraph?: string;
+  readonly unsubscribe?: { readonly oneClick: true; readonly host: string };
 }
 
 /**
@@ -140,6 +145,7 @@ export interface DeskAdapterHost {
   registerConnector(capabilityId: string, createConnector: DeskConnectorFactory): void;
   readonly mail: DeskMailReadBridge;
   readonly mailJudgements?: DeskMailJudgementBridge;
+  readonly mailExecution?: DeskMailExecutionBridge;
 }
 
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
@@ -155,3 +161,9 @@ export type CreateDeskAdapter = (host: DeskAdapterHost) => DeskAdapterDefinition
 export interface DeskAdapterModule {
   readonly createDeskAdapter: CreateDeskAdapter;
 }
+
+export { MAIL_MOVE_CAPABILITY, MAIL_TRASH_CAPABILITY, MAIL_RESTORE_CAPABILITY, MAIL_MOVE_CAPABILITIES, mailMoveDeclaration, mailMoveSnapshot, mailAccountRef, mailMessageRef } from "../conversations/domain-adapters/mail/move-contract";
+export type { MailMoveAction, MailMoveInput, MailMoveTarget } from "../conversations/domain-adapters/mail/move-contract";
+export { MAIL_REPLY_DRAFT_CAPABILITY } from "../conversations/domain-adapters/mail/reply-draft-contract";
+export { mailReplyDraftDeclaration, mailReplyDraftSnapshot } from "../conversations/domain-adapters/mail/reply-draft-contract";
+export type { ApprovedSnapshot, Provenance } from "../conversations/domain-adapters/operations/types";

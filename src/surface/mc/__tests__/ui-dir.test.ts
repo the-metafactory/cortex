@@ -1,49 +1,39 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import { connect } from "node:net";
 import { stringify } from "yaml";
 import { loadConfigWithAgents } from "../../../common/config/loader";
 import { dispatchConfig } from "../../../cli/cortex/commands/config";
-import { DEFAULT_CONFIG, loadConfig } from "../config";
-import { initDatabase } from "../db/init";
+import { loadConfig } from "../config";
 import { startMissionControl } from "../embed";
-import { DASHBOARD_DIST, startServer, type ServerContext } from "../server";
+import { DASHBOARD_DIST } from "../server";
 import type { Config } from "../types";
+import { createStaticConsoleRig, statusLine, type StaticConsoleRig } from "./static-console-rig";
 
 describe("Mission Control mc.ui.dir", () => {
-  let dir: string;
-  let ui: string;
-  let db: ReturnType<typeof initDatabase>;
-  let servers: ServerContext[];
   const html = "<!doctype html><title>External UI</title>\n";
   const script = "globalThis.externalUi = true;\n";
+  let rig: StaticConsoleRig;
+  let dir: string;
+  let ui: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "mc-ui-dir-"));
-    ui = join(dir, "ui");
-    mkdirSync(ui);
-    writeFileSync(join(ui, "index.html"), html);
-    writeFileSync(join(ui, "app.js"), script);
-    db = initDatabase(join(dir, "mc.db"));
-    servers = [];
+    rig = createStaticConsoleRig("mc-ui-dir-", { index: html, script });
+    dir = rig.dir;
+    ui = rig.ui;
   });
 
   afterEach(() => {
-    for (const server of servers) server.stop(true);
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
+    rig.cleanup();
   });
 
   function serve(config: Partial<Config> = {}): string {
-    const server = startServer({ ...DEFAULT_CONFIG, port: 0, ...config }, db);
-    servers.push(server);
-    return `http://127.0.0.1:${server.port}`;
+    return rig.serve(config);
   }
 
   function stackConfig(uiDir: string): string {
-    const path = join(dir, "stack.yaml");
+    const path = join(rig.dir, "stack.yaml");
     writeFileSync(path, stringify({
       principal: { id: "example" },
       stack: { id: "example/test" },
@@ -54,9 +44,12 @@ describe("Mission Control mc.ui.dir", () => {
     return path;
   }
 
-  test.skipIf(!existsSync(join(DASHBOARD_DIST, "index.html")))("preserves the bundled Desk shell and asset bytes without mc.ui.dir", async () => {
+  test.skipIf(!existsSync(join(DASHBOARD_DIST, "index.html")))("preserves the bundled Desk shell and asset bytes at /mc/ without mc.ui.dir", async () => {
     const base = serve();
-    for (const path of ["/", "/index.html"]) {
+    const redirect = await fetch(`${base}/`, { redirect: "manual" });
+    expect(redirect.status).toBe(302);
+    expect(redirect.headers.get("location")).toBe("/mc/");
+    for (const path of ["/mc/", "/mc/index.html", "/index.html"]) {
       const response = await fetch(base + path);
       expect(response.status).toBe(200);
       expect(await response.arrayBuffer()).toEqual(await Bun.file(join(DASHBOARD_DIST, "index.html")).arrayBuffer());
@@ -69,9 +62,14 @@ describe("Mission Control mc.ui.dir", () => {
   });
 
   test("serves configured files and gives both shell paths the Desk CSP", async () => {
-    const bundled = serve();
+    const dashboardDist = join(dir, "dashboard");
+    mkdirSync(dashboardDist);
+    writeFileSync(join(dashboardDist, "index.html"), "<!doctype html><title>Bundled console</title>\n");
+    const bundled = rig.serve({}, { dashboardDist });
     const base = serve({ ui: { dir: ui } });
-    const expectedCsp = (await fetch(`${bundled}/index.html`)).headers.get("content-security-policy")?.replaceAll(bundled, base);
+    const bundledResponse = await fetch(`${bundled}/index.html`);
+    expect(bundledResponse.status).toBe(200);
+    const expectedCsp = bundledResponse.headers.get("content-security-policy")?.replaceAll(bundled, base);
     for (const path of ["/", "/index.html"]) {
       const response = await fetch(base + path);
       expect(response.status).toBe(200);
@@ -126,16 +124,8 @@ describe("Mission Control mc.ui.dir", () => {
   test("a raw HTTP parent path cannot read a file beside the UI directory", async () => {
     writeFileSync(join(dir, "secret.js"), "private");
     const base = serve({ ui: { dir: ui } });
-    const response = await new Promise<string>((resolve, reject) => {
-      let data = "";
-      const socket = connect(Number(new URL(base).port), "127.0.0.1", () => {
-        socket.write(`GET /../secret.js HTTP/1.1\r\nHost: ${new URL(base).host}\r\nConnection: close\r\n\r\n`);
-      });
-      socket.on("data", chunk => { data += String(chunk); });
-      socket.on("end", () => resolve(data));
-      socket.on("error", reject);
-    });
-    expect(response).toStartWith("HTTP/1.1 404");
+    const response = await rig.rawResponse(base, "/../secret.js");
+    expect(statusLine(response)).toStartWith("HTTP/1.1 404");
     expect(response).not.toContain("private");
   });
 
