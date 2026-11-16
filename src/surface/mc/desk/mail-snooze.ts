@@ -5,6 +5,7 @@ import { logMailDecision, mailFeatures } from "./mail-log";
 import { snoozeAt, snoozeWhen, type SnoozeChoice } from "./mail-snooze-schema";
 import type { SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
+import { parentsOf } from "./mail-waiting";
 import { sightEvent, type EventFacts, type FollowedEvent } from "./event-follow";
 import type { DeferredItem, DeskItem } from "./types";
 import type { DeskPhrase } from "./phrases";
@@ -40,6 +41,8 @@ export type SnoozeEvent = FollowedEvent;
 
 export interface WakeFacts extends EventFacts {
   wrote: (person: string, since: number, except: string) => { name?: string; subject?: string } | null;
+  threadReply: (messageId: string, since: number) => { name?: string; subject?: string } | null;
+  urgentNow: ReadonlySet<string>;
 }
 
 export type WakeDecision =
@@ -53,10 +56,29 @@ const SNOOZE_KEEP_DAYS = 400;
 
 const quoted = (title: string): string => `“${title}”`;
 
-/** Whether a snooze is over, over fixture-able facts: the time passed, the meeting ended or can no longer happen, or the person wrote after the snooze. */
-export function wakeOf(row: SnoozeRow, facts: WakeFacts, now: number): WakeDecision {
+const TIME_CAME = "the time you chose came";
+export const URGENT_NOW_REASON = "it is urgent now";
+
+/** Whether a deferral is over early: the item is rated urgency now, or a mail's thread got a message from someone else. */
+function earlyWake(row: SnoozeRow, facts: WakeFacts, key: string, mailRow: boolean): WakeDecision | null {
+  if (facts.urgentNow.has(key)) return { kind: "back", reason: URGENT_NOW_REASON };
+  if (!mailRow) return null;
+  const wrote = facts.threadReply(row.messageId, row.createdAt);
+  if (!wrote) return null;
+  const who = wrote.name ?? row.sender;
+  return { kind: "back", reason: `${who} wrote again: ${quoted(wrote.subject ?? row.subject)}` };
+}
+
+/** Whether a snooze is over, over fixture-able facts: the time passed, the meeting ended or can no longer happen, the person wrote after the snooze, or it ended early (see earlyWake). `key` is the Desk item key; a mail row's is its message id. */
+export function wakeOf(row: SnoozeRow, facts: WakeFacts, now: number, key: string | null = null): WakeDecision {
   if (row.kind === "hidden") return { kind: "wait" };
-  if (row.kind === "time") return row.untilAt !== null && now >= row.untilAt ? { kind: "back", reason: "the time you chose came" } : { kind: "wait" };
+  const decision = scheduledWake(row, facts, now);
+  if (decision.kind === "back") return decision;
+  return earlyWake(row, facts, key ?? `mail:${row.messageId}`, key === null) ?? decision;
+}
+
+function scheduledWake(row: SnoozeRow, facts: WakeFacts, now: number): WakeDecision {
+  if (row.kind === "time") return row.untilAt !== null && now >= row.untilAt ? { kind: "back", reason: TIME_CAME } : { kind: "wait" };
   if (row.kind === "person") {
     if (!row.person) return { kind: "back", reason: "the snooze named no person" };
     const wrote = facts.wrote(row.person, row.createdAt, row.messageId);
@@ -78,7 +100,7 @@ export function wakeOf(row: SnoozeRow, facts: WakeFacts, now: number): WakeDecis
 
 /** The line a returned card leads with. A time snooze names the time it was snoozed until. */
 export function backLine(row: Pick<SnoozeRow, "kind" | "untilAt" | "reason">, now: number): string {
-  const reason = row.kind === "time" && row.untilAt !== null ? `you snoozed it until ${snoozeWhen(row.untilAt, now)}` : row.reason ?? "its snooze ended";
+  const reason = row.kind === "time" && row.untilAt !== null && (row.reason === null || row.reason === TIME_CAME) ? `you snoozed it until ${snoozeWhen(row.untilAt, now)}` : row.reason ?? "its snooze ended";
   return `Back because ${reason}.`;
 }
 
@@ -104,9 +126,25 @@ export function readingEvents(readings: readonly SourceReading[]): Map<string, S
 }
 
 /** The facts the wake evaluation reads from the readings, the calendar coverage and the reply index. */
-export function snoozeFacts(db: Database, readings: readonly SourceReading[], availability: CalendarAvailability | undefined): WakeFacts {
+export function snoozeFacts(db: Database, readings: readonly SourceReading[], availability: CalendarAvailability | undefined, urgentNow: ReadonlySet<string> = new Set()): WakeFacts {
   const mail = readings.filter((r) => r.error === null).flatMap((r) => r.mail);
+  const own = new Set(readings.flatMap((r) => (r.sent ?? []).map((s) => s.from.address.toLowerCase())));
+  const isOwn = (address: string): boolean => own.has(address.toLowerCase());
   return {
+    urgentNow,
+    threadReply: (messageId, since) => {
+      const source = mail.find((m) => m.id === messageId);
+      const thread = new Set([messageId, ...(source ? parentsOf(source.headers?.inReplyTo, source.headers?.references) : [])]);
+      const listed = mail
+        .filter((m) => m.id !== messageId && !isOwn(m.from.address) && Date.parse(m.receivedAt) >= since && parentsOf(m.headers?.inReplyTo, m.headers?.references).some((p) => thread.has(p)))
+        .sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))[0];
+      if (listed) return { ...(listed.from.name ? { name: listed.from.name } : {}), subject: listed.subject };
+      const threaded = db
+        .query<{ sender: string }, [string, number, string]>("SELECT sender FROM desk_mail_thread WHERE parent_id = ? AND at >= ? AND reply_id != ? ORDER BY at")
+        .all(messageId, since, messageId)
+        .find((r) => !isOwn(r.sender));
+      return threaded ? {} : null;
+    },
     events: readingEvents(readings),
     covered: (key, at) => (availability?.sources ?? []).some((s) => s.kind === "calendar" && key.startsWith(`cal:${s.id}:`) && s.from <= at && at < s.to),
     wrote: (person, since, except) => {
@@ -302,4 +340,18 @@ export function deferredMail(db: Database, now: number): DeferredItem[] {
     .filter((row) => row.kind !== "hidden")
     .sort((a, b) => (a.untilAt ?? Infinity) - (b.untilAt ?? Infinity) || a.createdAt - b.createdAt)
     .map((row) => ({ key: `mail:${row.messageId}`, title: row.subject, until: row.kind === "time" && row.untilAt !== null ? `until ${snoozeWhen(row.untilAt, now)}` : row.label }));
+}
+
+/** Ids of snoozed mail that waits for its time, meeting or person; hidden mail never returns. */
+export function waitingMailIds(db: Database): Set<string> {
+  return new Set(readSnoozes(db, "snoozed").filter((r) => r.kind !== "hidden").map((r) => r.messageId));
+}
+
+/** A mail that returned from a snooze interrupts only when it is rated urgency now. */
+export function quietSnoozeReturns(items: DeskItem[], returned: ReadonlyMap<string, SnoozeBack>): DeskItem[] {
+  return items.map((item) => {
+    if (item.kind !== "mail" || item.urgency === "now" || !item.interrupt || !returned.has(item.key.replace(/^mail:/, ""))) return item;
+    const { interrupt: _interrupt, interruptRequested: _requested, ...rest } = item;
+    return rest;
+  });
 }

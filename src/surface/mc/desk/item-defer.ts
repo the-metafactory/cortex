@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { backLine, resolveSnoozeChoice, wakeOf, type SnoozeChoice, type SnoozeEvent, type SnoozeRow, type WakeFacts } from "./mail-snooze";
+import { URGENT_NOW_REASON, backLine, resolveSnoozeChoice, wakeOf, type SnoozeChoice, type SnoozeEvent, type SnoozeRow, type WakeFacts } from "./mail-snooze";
 import { snoozeWhen } from "./mail-snooze-schema";
 import { DAY_MS } from "./time";
 import type { DeferredItem, DeskItem, DeskItemKind } from "./types";
@@ -50,6 +50,7 @@ interface Raw {
   back_at: number | null;
   reason: string | null;
   created_at: number;
+  urgent_at_defer: number;
 }
 
 const wakeRowOf = (r: Raw): SnoozeRow => ({
@@ -71,11 +72,11 @@ export function deferItem(db: Database, item: DeskItem, choice: Exclude<SnoozeCh
   if (typeof resolved === "string") return { ok: false, status: 409, error: resolved };
   const wait: DeferWait = resolved.kind === "meeting" ? "meeting" : "time";
   db.query(
-    `INSERT INTO desk_item_defers (item_key, kind, title, wait, until_at, event_key, event_title, event_start, label, state, back_at, reason, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'snoozed', NULL, NULL, ?)
+    `INSERT INTO desk_item_defers (item_key, kind, title, wait, until_at, event_key, event_title, event_start, label, state, back_at, reason, created_at, urgent_at_defer)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'snoozed', NULL, NULL, ?, ?)
      ON CONFLICT(item_key) DO UPDATE SET kind = excluded.kind, title = excluded.title, wait = excluded.wait, until_at = excluded.until_at, event_key = excluded.event_key,
-       event_title = excluded.event_title, event_start = excluded.event_start, label = excluded.label, state = 'snoozed', back_at = NULL, reason = NULL, created_at = excluded.created_at`,
-  ).run(item.key, item.kind, item.title.slice(0, 300), wait, resolved.untilAt, resolved.eventKey, resolved.eventTitle, resolved.eventStart, resolved.label, ctx.now);
+       event_title = excluded.event_title, event_start = excluded.event_start, label = excluded.label, state = 'snoozed', back_at = NULL, reason = NULL, created_at = excluded.created_at, urgent_at_defer = excluded.urgent_at_defer`,
+  ).run(item.key, item.kind, item.title.slice(0, 300), wait, resolved.untilAt, resolved.eventKey, resolved.eventTitle, resolved.eventStart, resolved.label, ctx.now, item.urgency === "now" ? 1 : 0);
   return { ok: true, message: `Put away “${item.title}” ${resolved.label}.`, until: resolved.label, untilIso: resolved.untilAt === null ? null : new Date(resolved.untilAt).toISOString() };
 }
 
@@ -90,7 +91,7 @@ export function cancelItemDefer(db: Database, key: string): { message: string } 
 function wakeItemDefers(db: Database, facts: WakeFacts, produced: ReadonlySet<string>, unreadable: ReadonlySet<DeskItemKind>, now: number): void {
   db.transaction(() => {
     for (const row of readRows(db, "snoozed")) {
-      const decision = wakeOf(wakeRowOf(row), facts, now);
+      const decision = wakeOf(wakeRowOf(row), row.urgent_at_defer === 1 ? { ...facts, urgentNow: new Set() } : facts, now, row.item_key);
       if (decision.kind === "back") db.query("UPDATE desk_item_defers SET state = 'back', back_at = ?, reason = ? WHERE item_key = ? AND state = 'snoozed'").run(now, decision.reason, row.item_key);
       else if (decision.kind === "moved") db.query("UPDATE desk_item_defers SET event_title = ?, event_start = ?, until_at = ?, label = ? WHERE item_key = ?").run(decision.event.title, decision.event.at, decision.event.end, `until “${decision.event.title}” ends`, row.item_key);
     }
@@ -102,17 +103,20 @@ function wakeItemDefers(db: Database, facts: WakeFacts, produced: ReadonlySet<st
   })();
 }
 
-/** Applies deferrals to the produced items (a deferral whose kind is in `unreadable` survives an absent item, since its source failed to answer): a waiting item leaves, a returned one leads with why for a day at urgency today or higher, never as an interruption. */
+/** Applies deferrals to the produced items (a deferral whose kind is in `unreadable` survives an absent item, since its source failed to answer): a waiting item leaves, a returned one leads with why for a day at urgency today or higher, and is an interruption only when it returned because it is rated urgency now. */
 export function applyItemDefers(db: Database, items: DeskItem[], facts: WakeFacts, now: number, unreadable: ReadonlySet<DeskItemKind> = new Set()): DeskItem[] {
   const produced = new Set(items.map((item) => item.key));
-  wakeItemDefers(db, facts, produced, unreadable, now);
+  const rated: WakeFacts = { ...facts, urgentNow: new Set([...facts.urgentNow, ...items.filter((item) => item.urgency === "now").map((item) => item.key)]) };
+  wakeItemDefers(db, rated, produced, unreadable, now);
   const waiting = new Set(readRows(db, "snoozed").map((r) => r.item_key));
   const back = new Map(readRows(db, "back").flatMap((r): [string, { line: string; at: number }][] => (r.back_at !== null && now - r.back_at < BACK_SHOWN_MS ? [[r.item_key, { line: backLine(wakeRowOf(r), now), at: r.back_at }]] : [])));
+  const urgentReturns = new Set(readRows(db, "back").filter((r) => r.reason === URGENT_NOW_REASON).map((r) => r.item_key));
   return items.filter((item) => !waiting.has(item.key)).map((item) => {
     const returned = back.get(item.key);
     if (!returned) return item;
+    if (item.urgency === "now" && urgentReturns.has(item.key)) return { ...item, why: `${returned.line} ${item.why}`, back: returned };
     const { interrupt: _interrupt, interruptRequested: _requested, ...rest } = item;
-    return { ...rest, urgency: item.urgency === "now" ? "now" : "today", why: `${returned.line} ${item.why}`, back: returned };
+    return { ...rest, urgency: "today", why: `${returned.line} ${item.why}`, back: returned };
   });
 }
 

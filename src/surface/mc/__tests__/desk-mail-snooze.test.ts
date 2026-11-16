@@ -40,7 +40,7 @@ const row = (over: Partial<SnoozeRow>): SnoozeRow => ({
   messageId: "m1", sourceId: "work-mail", sender: "priya@example.org", subject: "Venue quote", kind: "time", untilAt: null, eventKey: null, eventTitle: null, eventStart: null,
   person: null, personName: null, label: "", state: "snoozed", backAt: null, reason: null, createdAt: NOW, ...over,
 });
-const facts = (over: Partial<WakeFacts> = {}): WakeFacts => ({ events: new Map(), covered: () => false, wrote: () => null, ...over });
+const facts = (over: Partial<WakeFacts> = {}): WakeFacts => ({ events: new Map(), covered: () => false, wrote: () => null, threadReply: () => null, urgentNow: new Set(), ...over });
 
 describe("wake evaluation over fixture readings", () => {
   it("wakes a time snooze when the time comes", () => {

@@ -38,7 +38,7 @@ import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { applyItemDefers, deferredItems } from "./item-defer";
-import { backSnoozes, deferredMail, hiddenMail, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
+import { backSnoozes, deferredMail as deferredMailList, hiddenMail, quietSnoozeReturns, snoozeFacts, wakeSnoozes, waitingMailIds, withSnoozeBack } from "./mail-snooze";
 import { AUTO_LINK_DONE, backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
@@ -422,7 +422,15 @@ export async function composeDesk(
     ...(rangerResult && rangerResult.error !== null ? (["decision", "grilling"] as const) : []),
     ...(rulesRead.ok ? [] : (["mail-rule"] as const)),
   ]);
-  const corrected = applyItemDefers(db, applyCorrections(quietAdapterInterrupts([...markInterrupts([
+  const interruptContext = { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) };
+  const deferredIds = waitingMailIds(db);
+  const deferredReadings = readings.flatMap((r) => r.mail.filter((m) => deferredIds.has(m.id)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const ratedDeferred = deferredReadings.length > 0 ? markInterrupts(mailItems({ ...mailItemOptions(deferredReadings), invitations: new Map() }), rules, readDeliveries(db), now, interruptContext) : [];
+  const urgentIds = new Set(ratedDeferred.filter((item) => item.urgency === "now").map((item) => mailIdOf(item.key)));
+  const urgentWoken = new Set(wakeSnoozes(db, { ...wakeFacts, urgentNow: new Set([...urgentIds].map((id) => `mail:${id}`)) }, now));
+  const urgentBack = backSnoozes(db, now);
+  const urgentCards = ratedDeferred.filter((item) => urgentWoken.has(mailIdOf(item.key))).map((item) => withSnoozeBack(item, urgentBack.get(mailIdOf(item.key))));
+  const corrected = applyItemDefers(db, applyCorrections(quietAdapterInterrupts([...quietSnoozeReturns(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ ...mailItemOptions(withoutAnsweredRead(mail, answers)), invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
@@ -435,7 +443,7 @@ export async function composeDesk(
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantName),
     ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
-  ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections), wakeFacts, now, unreadableDeferKinds);
+  ], rules, readDeliveries(db), now, interruptContext), backSnoozes(db, now)), ...urgentCards], availability, now), activeCorrections), wakeFacts, now, unreadableDeferKinds);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
@@ -468,7 +476,7 @@ export async function composeDesk(
     topN: myDay.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items: dayItems,
-    deferred: [...deferredMail(db, now), ...deferredItems(db, now)],
+    deferred: [...deferredMailList(db, now), ...deferredItems(db, now)],
     today: [
       ...buildToday(ranger, dayItems, desk.areas, now),
       ...todayCalendar,

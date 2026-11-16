@@ -97,7 +97,7 @@ interface Address {
 const counterparts = (s: SourceSent): Address[] => s.to.filter((r) => r.address !== s.from.address && !AUTOMATED.test(r.address));
 
 const MESSAGE_ID = /<([^<>\s]{1,512})>/g;
-const parentsOf = (inReplyTo: string | undefined, references: readonly string[] | undefined): string[] => {
+export const parentsOf = (inReplyTo: string | undefined, references: readonly string[] | undefined): string[] => {
   const fromHeader = inReplyTo ? [...inReplyTo.matchAll(MESSAGE_ID)].flatMap((m) => (m[1] ? [m[1]] : [])) : [];
   const bare = inReplyTo && fromHeader.length === 0 && /^[^\s<>]+$/.test(inReplyTo) ? [inReplyTo] : [];
   return [...new Set([...fromHeader, ...bare, ...(references ?? [])])];
