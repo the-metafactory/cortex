@@ -66,6 +66,9 @@ export type DeskPhrase =
   | { code: "mail.snooze-cancelled" }
   | { code: "mail.hidden" }
   | { code: "mail.hide-undone" }
+  | { code: "mail.put-back"; params: { nextAt: string } }
+  | { code: "mail.put-back-undone" }
+  | { code: "mail.put-back-next-round" }
   | { code: "mail.kept" }
   | { code: "mail.unsubscribed"; params: { host?: string; status?: number } }
   | { code: "mail.unsubscribe-rule-archived" }
@@ -154,6 +157,7 @@ export const DESK_ACT_PHRASE_CODES = [
   "mail.studio-proposed", "create.done", "create.kept", "autonomy.set", "handoff.done", "routine.saved", "routine.paused",
   "routine.resumed", "routine.removed", "routine.installed", "routine.denied", "routine.approved", "routine.auto",
   "routine.approval", "routine.discarded", "studio.done", "studio.spar-queued", "ranger.action-done", "ranger.action-queued",
+  "mail.put-back", "mail.put-back-undone", "mail.put-back-next-round",
 ] as const satisfies readonly DeskPhrase["code"][];
 
 export const DESK_BRIEF_PHRASE_CODES = [

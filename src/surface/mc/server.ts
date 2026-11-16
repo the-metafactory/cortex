@@ -94,6 +94,7 @@ import { DESK_CONTRACT_PATH, deskContract, withDeskApiVersion } from "../../desk
 import { handleDeskAdapterAction } from "./api/desk-adapter";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
+import { DESK_MAIL_ROUND_PATH, handleDeskMailRound } from "./api/desk-mail-round";
 import { withActPhrase } from "./desk/act-result";
 import { handleDeskTaskHandoff } from "./api/desk-task-handoff";
 import type { TaskDispatchBus } from "./desk/task-handoff";
@@ -450,7 +451,7 @@ export function startServer(
 
       if (url.pathname.startsWith("/api/")) {
         if (req.method === "GET" && /^\/api\/conversations\/[^/]+\/stream$/.test(url.pathname)) server.timeout(req, 0);
-        if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail", DESK_OUTLINE_ASK_PATH].includes(url.pathname)) server.timeout(req, 180);
+        if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail", DESK_MAIL_ROUND_PATH, DESK_OUTLINE_ASK_PATH].includes(url.pathname)) server.timeout(req, 180);
         if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines", "/api/desk/routine-capability", "/api/desk/routine-editor"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
           server.timeout(req, 0);
@@ -707,6 +708,8 @@ async function handleApi(
   if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db, graphScope ? { graphScope } : {});
 
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk, desk?.now ? { now: desk.now } : {});
+
+  if (pathname === DESK_MAIL_ROUND_PATH) return handleDeskMailRound(req, db, desk, vigil, desk?.now ? { now: desk.now } : {});
 
   if (pathname === "/api/desk/task-handoff") return handleDeskTaskHandoff(req, db, desk);
   if (pathname === "/api/desk/links") return handleDeskLinks(req, db, desk);

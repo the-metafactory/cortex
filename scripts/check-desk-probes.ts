@@ -161,6 +161,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-mail-judgements.ts",
   "probe-desk-mail-junk.ts",
   "probe-desk-mail-round.ts",
+  "probe-desk-mail-round-putback.ts",
   "probe-desk-mail-sweep.ts",
   "probe-desk-mail-unattended-loops.ts",
   "probe-desk-mail-report.ts",

@@ -21,6 +21,7 @@ import { LINKS_SQL } from "../desk/links-schema";
 import { MEETING_BRIEF_SQL } from "../desk/meeting-brief-schema";
 import { WORKER_HANDOFF_SQL } from "../desk/worker-handoff-store";
 import { TASK_HANDOFF_SQL } from "../desk/task-handoff-schema";
+import { MAIL_ROUND_COLUMNS, MAIL_ROUND_SQL } from "../desk/mail-round-schema";
 
 const sqlList = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(",");
 
@@ -185,6 +186,7 @@ export const TABLE_NAMES = [
   "desk_worker_handoffs",
   "desk_mail_rounds",
   "desk_mail_round_queue",
+  "desk_mail_round_operations",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -219,7 +221,8 @@ export const SCHEMA_SQL: string[] = [
   "CREATE TABLE IF NOT EXISTS desk_mail_rounds (id TEXT PRIMARY KEY, revision INTEGER NOT NULL, opened_at INTEGER NOT NULL, scheduled_for INTEGER NOT NULL, status TEXT NOT NULL CHECK(status IN ('open','finished')), finished_at INTEGER, groups TEXT NOT NULL CHECK(json_valid(groups)), members TEXT NOT NULL CHECK(json_valid(members)))",
   "CREATE UNIQUE INDEX IF NOT EXISTS desk_mail_round_open ON desk_mail_rounds (status) WHERE status = 'open'",
   "CREATE INDEX IF NOT EXISTS desk_mail_round_finished ON desk_mail_rounds (status, finished_at)",
-  "CREATE TABLE IF NOT EXISTS desk_mail_round_queue (mail_key TEXT PRIMARY KEY, source_id TEXT NOT NULL, account TEXT, message_id TEXT NOT NULL, mail TEXT NOT NULL CHECK(json_valid(mail)), queued_at INTEGER NOT NULL, position INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS desk_mail_round_queue (mail_key TEXT PRIMARY KEY, source_id TEXT NOT NULL, account TEXT, message_id TEXT NOT NULL, mail TEXT NOT NULL CHECK(json_valid(mail)), queued_at INTEGER NOT NULL, position INTEGER NOT NULL, put_back INTEGER NOT NULL DEFAULT 0)",
+  ...MAIL_ROUND_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_capability_installs (
@@ -1264,6 +1267,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   { table: "desk_mail_moves", column: "correction_id", ddl: "ALTER TABLE desk_mail_moves ADD COLUMN correction_id INTEGER" },
   ...HANDOFF_COLUMNS,
   ...RULE_TARGET_COLUMNS,
+  ...MAIL_ROUND_COLUMNS,
 ];
 
 /**
