@@ -14,7 +14,7 @@ import { MAIL_ROUND_ACTIONS, MAIL_ROUND_GROUP_KINDS, MAIL_ROUND_UNDO_OUTCOMES } 
 import { OUTLINE_REPEAT_FIELDS, OUTLINE_REPEAT_MODES, OUTLINE_REPEAT_UNITS, OUTLINE_TIME_FIELDS } from "../surface/mc/desk/balance-command";
 import { DEFAULT_MAIL_ROUND_SLOTS } from "../common/types/desk-mail-rounds";
 
-export const DESK_API_VERSION = "1.3.0";
+export const DESK_API_VERSION = "1.4.0";
 const DESK_API_VERSION_HEADER = "x-desk-api-version";
 export const DESK_CONTRACT_PATH = "/api/desk/contract";
 
