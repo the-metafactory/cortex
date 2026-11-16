@@ -61,7 +61,7 @@ interface ProposalCardProps {
   choices?: ProposalChoice[];
 }
 
-export interface ProposalChoice {
+interface ProposalChoice {
   label: string;
   problem?: string;
   onChoose: () => void;
