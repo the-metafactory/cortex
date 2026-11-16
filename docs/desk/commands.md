@@ -336,3 +336,12 @@ The ntfy endpoint receives the notification text and optional action link. Use a
 A `goals.check.<goal>.command` receives its configured argv and environment, without JSON stdin. Exit 0 reports that the check ran. Nonzero exit displays its last stderr or stdout line. The command publishes the resulting goal reading to Vigil through its own mechanism; stdout is not parsed as a source reading. The Desk waits up to five minutes for a newer Vigil reading before allowing another check.
 
 `goals.somaBin` is the Soma executable. Cortex invokes `goal list` to read statuses and `goal set-status <goal> paused` to pause an active goal. These are Soma CLI contracts rather than replaceable JSON commands.
+
+## Rules an adapter applies for Cortex
+
+Two rules are part of the Desk SDK contract. An adapter applies them on Cortex's behalf, and `@the-metafactory/cortex/desk-sdk` exports the reference rule or the vectors for each, with `runDeskRuleVectors` to check an adapter's own implementation against them.
+
+- **Whether an invitation is open** (`invitationOpen(invitation, answeredSequence, now)`). An invitation is open when it is not answered at the same or a newer SEQUENCE and is not over. It is over at its end, or at its start when it has no end. A recurring invitation is never over.
+- **Which mails reply to a sent mail** (`repliesTo`). A candidate is a reply when it names the sent mail's id in In-Reply-To or References, has a different id, and comes from a different address. A sent mail has at most 10 replies, oldest first.
+
+A sent mail's `text` is its body before the first quote, attribution, forwarded header or signature line. The patterns that find those lines stay with the adapter.
