@@ -34,7 +34,7 @@ import { AHEAD_DAYS, TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
-import { backSnoozes, hiddenMail, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
+import { backSnoozes, deferredMail, hiddenMail, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
 import { AUTO_LINK_DONE, backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
@@ -456,6 +456,7 @@ export async function composeDesk(
     topN: myDay.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items: dayItems,
+    deferred: deferredMail(db, now),
     today: [
       ...buildToday(ranger, dayItems, desk.areas, now),
       ...todayCalendar,

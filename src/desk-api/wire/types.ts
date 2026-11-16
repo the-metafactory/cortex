@@ -222,6 +222,12 @@ export interface DeskGoal {
   state: "on-track" | "at-risk" | "off-track" | "stale" | "unknown";
 }
 
+export interface DeferredItem {
+  key: string;
+  title: string;
+  until: string;
+}
+
 export interface DeskView {
   timeZone: string;
   calendarAvailability?: CalendarAvailability;
@@ -242,6 +248,7 @@ export interface DeskView {
   topN: number;
   areas: DeskArea[];
   items: DeskItem[];
+  deferred: DeferredItem[];
   today: DeskEvent[];
   ahead: DeskEvent[];
   vips: { address: string; label: string | null }[];

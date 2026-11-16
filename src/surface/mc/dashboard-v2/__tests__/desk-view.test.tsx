@@ -39,6 +39,7 @@ const view: DeskViewModel = {
   topN: 3,
   areas: [{ id: "work", label: "Work", color: "#2563eb" }],
   items: [1, 2, 3, 4, 5].map((n) => item(n)),
+  deferred: [],
   today: [{ key: "ranger:run:example/app#7", at: NOW - 3_600_000, title: 'An agent is working on "Add export"', area: "work", kind: "agent" }],
   agents: { line: "1 agent working, 0 waiting on you", working: [{ title: "Add export", note: "review", since: NOW - 3_600_000 }], waiting: 0 },
   goals: [{ id: "G1", text: "Ship one release a week", state: "off-track" }],

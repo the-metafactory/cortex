@@ -6,7 +6,7 @@ import { snoozeAt, snoozeWhen, type SnoozeChoice } from "./mail-snooze-schema";
 import type { SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
 import { sightEvent, type EventFacts, type FollowedEvent } from "./event-follow";
-import type { DeskItem } from "./types";
+import type { DeferredItem, DeskItem } from "./types";
 import type { DeskPhrase } from "./phrases";
 
 export { SNOOZE_MORNING_HOUR, SNOOZE_SQL, SNOOZE_TIMES, snoozeAt, snoozeWhen, type SnoozeChoice, type SnoozeTime } from "./mail-snooze-schema";
@@ -295,4 +295,11 @@ export function undoHide(db: Database, messageId: string): { ok: true; message: 
 
 export function hiddenMail(db: Database): HiddenMail[] {
   return readSnoozes(db, "snoozed").filter((r) => r.kind === "hidden").map((r) => ({ key: `mail:${r.messageId}`, subject: r.subject, sender: r.sender, at: r.createdAt }));
+}
+
+export function deferredMail(db: Database, now: number): DeferredItem[] {
+  return readSnoozes(db, "snoozed")
+    .filter((row) => row.kind !== "hidden")
+    .sort((a, b) => (a.untilAt ?? Infinity) - (b.untilAt ?? Infinity) || a.createdAt - b.createdAt)
+    .map((row) => ({ key: `mail:${row.messageId}`, title: row.subject, until: row.kind === "time" && row.untilAt !== null ? `until ${snoozeWhen(row.untilAt, now)}` : row.label }));
 }
