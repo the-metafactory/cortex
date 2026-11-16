@@ -12,6 +12,12 @@ let rig: MailRoundRig;
 
 const reply = (id: string, from: string, over = {}) => roundMail(id, NOW + 60_000, { from: { name: "Priya Shah", address: from }, subject: "Re: Venue quote", headers: { inReplyTo: "early-fixture" }, ...over });
 
+async function expectStillDeferredWith(extra: unknown[]): Promise<void> {
+  rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), ...extra] as never });
+  rig.setNow(NOW + 120_000);
+  expect((await rig.refresh()).deferred.some((entry) => entry.key === KEY)).toBe(true);
+}
+
 beforeEach(async () => {
   rig = await openMailRoundRig(NOW, { mailDigest: undefined, mailInvitations: undefined });
   rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" })] });
@@ -49,19 +55,14 @@ describe("an item put away returns early", () => {
   });
 
   it("ignores a message from the principal's own address", async () => {
-    const own = reply("reply-own", "me@example.org");
-    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), own, SENT_BY_ME] });
-    rig.setNow(NOW + 120_000);
-    expect((await rig.refresh()).deferred.some((entry) => entry.key === KEY)).toBe(true);
+    await expectStillDeferredWith([reply("reply-own", "me@example.org"), SENT_BY_ME]);
   });
 
   it("still ignores the principal's own address once the sent history is empty", async () => {
     rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), SENT_BY_ME] });
     rig.setNow(NOW + 60_000);
     await rig.refresh();
-    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), reply("reply-own", "me@example.org")] });
-    rig.setNow(NOW + 120_000);
-    expect((await rig.refresh()).deferred.some((entry) => entry.key === KEY)).toBe(true);
+    await expectStillDeferredWith([reply("reply-own", "me@example.org")]);
   });
 
   it("keeps a mail away that was already urgency now when it was put away", async () => {
