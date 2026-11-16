@@ -9,11 +9,14 @@ import { DEFAULT_CONFIG } from "../../config";
 import type { DeskOptions } from "../../desk/compose";
 import type { DeskView } from "../../desk/types";
 import type { SourceEvent, SourceMail } from "../../desk/sources/command";
+import type { CalendarCoverage, SourceCapabilities } from "../../desk/calendar-contract";
 
 export interface RoundState {
   mail: SourceMail[];
   events?: SourceEvent[];
   fail?: boolean;
+  capabilities?: SourceCapabilities;
+  calendarCoverage?: Partial<CalendarCoverage> | null;
 }
 
 export interface MailRoundRig {
@@ -80,10 +83,11 @@ export async function openMailRoundRig(now: number, overrides: Partial<DeskOptio
     ...overrides,
   };
   const writeState = (): void => {
+    const capabilities = state.capabilities ?? ["calendar", "attention"];
     writeFileSync(statePath, state.fail ? "not json" : JSON.stringify({
-      capabilities: ["calendar", "attention"],
-      calendarCoverage: { from: new Date(clock - 30 * DAY_MS).toISOString(), to: new Date(clock + 30 * DAY_MS).toISOString(), calendars: [{ id: "primary", name: "Work" }], status: "complete", provenance: "mail round fixture" },
-      events: state.events ?? [],
+      capabilities,
+      ...(state.calendarCoverage === null ? {} : { calendarCoverage: { from: new Date(clock - 30 * DAY_MS).toISOString(), to: new Date(clock + 30 * DAY_MS).toISOString(), calendars: [{ id: "primary", name: "Work" }], status: "complete", provenance: "mail round fixture", ...state.calendarCoverage } }),
+      ...(capabilities.includes("calendar") ? { events: state.events ?? [] } : {}),
       items: state.mail,
     }));
   };

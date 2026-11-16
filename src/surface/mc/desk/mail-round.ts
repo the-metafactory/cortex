@@ -64,6 +64,18 @@ interface MailRoundInput {
 interface EffectiveSlot {
   scheduled: number;
   effective: number;
+  unavailable: string[];
+}
+
+interface RoundSchedule {
+  past: EffectiveSlot[];
+  next: EffectiveSlot;
+  dueAt: number | undefined;
+}
+
+interface FinishedRound {
+  openedAt: number;
+  finishedAt: number;
 }
 
 interface StoredGroup {
@@ -129,7 +141,7 @@ interface Candidates {
 
 interface ReconcileResult {
   open: StoredRound | null;
-  justFinished: StoredRound | null;
+  finished: FinishedRound | null;
 }
 
 const MAX_SHIFT_STEPS = 64;
@@ -146,16 +158,22 @@ function localSlot(now: number, dayOffset: number, at: string): number {
   return new Date(day.getFullYear(), day.getMonth(), day.getDate() + dayOffset, hh ?? 0, mm ?? 0, 0, 0).getTime();
 }
 
-function shiftPastMeetings(scheduled: number, events: CalendarAvailability["events"]): number {
+function shiftPastMeetings(scheduled: number, availability: CalendarAvailability): EffectiveSlot {
   let at = scheduled;
-  for (let step = 0; step < MAX_SHIFT_STEPS; step += 1) {
+  const calendars = new Map(availability.sources.flatMap(source => source.kind === "calendar" ? [[source.id, source]] : []));
+  const events = availability.events.filter(event => calendars.get(event.source)?.calendars.includes(event.calendarId));
+  for (let step = 0; step <= MAX_SHIFT_STEPS; step += 1) {
+    const unavailable = availability.sources.flatMap(source => source.kind === "unknown" || (source.kind === "calendar" && (source.from > scheduled || source.to <= at)) ? [source.id] : []);
+    if (unavailable.length > 0) return { scheduled, effective: at, unavailable };
+    const incomplete = events.filter(event => event.availability.status !== "free" && event.at <= at && (event.end === undefined || event.end <= event.at));
+    if (incomplete.length > 0) return { scheduled, effective: at, unavailable: [...new Set(incomplete.map(event => event.source))] };
     const overlapping = events.filter((event) => (event.availability.status === "busy" || event.availability.status === "unknown") && event.end !== undefined && event.end > event.at && event.at <= at && at < event.end);
-    if (overlapping.length === 0) return at;
+    if (overlapping.length === 0) return { scheduled, effective: at, unavailable: [] };
+    if (step === MAX_SHIFT_STEPS) break;
     const next = Math.max(...overlapping.map((event) => event.end ?? at));
-    if (next <= at) return at;
     at = next;
   }
-  return at;
+  return { scheduled, effective: at, unavailable: [...calendars.keys()] };
 }
 
 function effectiveSlots(now: number, slots: readonly string[], availability: CalendarAvailability, from: number, to: number): EffectiveSlot[] {
@@ -163,7 +181,7 @@ function effectiveSlots(now: number, slots: readonly string[], availability: Cal
   for (let offset = from; offset <= to; offset += 1) {
     for (const at of slots) {
       const scheduled = localSlot(now, offset, at);
-      out.push({ scheduled, effective: shiftPastMeetings(scheduled, availability.events) });
+      out.push(shiftPastMeetings(scheduled, availability));
     }
   }
   return out.sort((a, b) => a.effective - b.effective || a.scheduled - b.scheduled);
@@ -172,19 +190,14 @@ function effectiveSlots(now: number, slots: readonly string[], availability: Cal
 const configuredSlots = (slots: readonly string[] | undefined): readonly string[] =>
   slots && slots.length > 0 ? slots : DEFAULT_MAIL_ROUND_SLOTS;
 
-function latestEffectiveSlot(now: number, slots: readonly string[], availability: CalendarAvailability): number | undefined {
-  return effectiveSlots(now, slots, availability, -DAYS_BEFORE, 0)
-    .filter((slot) => slot.effective <= now)
-    .at(-1)?.effective;
-}
-
-function nextEffectiveSlot(now: number, slots: readonly string[], availability: CalendarAvailability): number {
+function roundSchedule(now: number, slots: readonly string[], availability: CalendarAvailability): RoundSchedule {
   const next = effectiveSlots(now, slots, availability, 0, DAYS_AFTER).find((slot) => slot.effective > now);
-  return next?.effective ?? now;
+  const past = effectiveSlots(now, slots, availability, -DAYS_BEFORE, 0).filter(slot => slot.effective <= now);
+  return { past, next: next ?? { scheduled: now, effective: now, unavailable: [] }, dueAt: past.filter(slot => slot.unavailable.length === 0).at(-1)?.effective };
 }
 
-function slotPassed(from: number, now: number, slots: readonly string[], availability: CalendarAvailability): boolean {
-  return effectiveSlots(now, slots, availability, -DAYS_BEFORE, 0).some((slot) => slot.effective > from && slot.effective <= now);
+function slotPassed(finished: FinishedRound, schedule: RoundSchedule): boolean {
+  return schedule.past.some(slot => slot.unavailable.length === 0 && slot.effective > finished.openedAt && slot.effective <= finished.finishedAt);
 }
 
 function parseStored<T>(value: string, fallback: T): T {
@@ -224,6 +237,10 @@ function readQueue(db: Database): QueueRow[] {
 
 function readOpenRow(db: Database): RoundRow | undefined {
   return db.query<RoundRow, []>("SELECT id, revision, opened_at, scheduled_for, groups, members FROM desk_mail_rounds WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1").get() ?? undefined;
+}
+
+function readFinishedRound(db: Database): FinishedRound | null {
+  return db.query<FinishedRound, []>("SELECT opened_at AS openedAt, finished_at AS finishedAt FROM desk_mail_rounds WHERE status = 'finished' ORDER BY finished_at DESC, opened_at DESC LIMIT 1").get();
 }
 
 function storedRound(row: RoundRow): StoredRound {
@@ -326,13 +343,13 @@ function reconcileOpen(db: Database, open: StoredRound, candidates: Candidates, 
   });
   if (refreshed.length === 0) {
     finishRound(db, open.id, now);
-    return { open: null, justFinished: open };
+    return { open: null, finished: { openedAt: open.openedAt, finishedAt: now } };
   }
   const groups = filterGroups(open.groups, refreshed);
   const changed = refreshed.length !== open.members.length || !sameJson(open.groups, groups);
   const next: StoredRound = { ...open, revision: changed ? open.revision + 1 : open.revision, groups, members: refreshed };
   if (changed || !sameJson(open.members, refreshed)) writeRound(db, next);
-  return { open: next, justFinished: null };
+  return { open: next, finished: null };
 }
 
 function pruneQueue(db: Database, open: StoredRound | null, candidates: Candidates, succeeded: ReadonlySet<string>): void {
@@ -358,32 +375,40 @@ function enqueueCandidates(db: Database, open: StoredRound | null, candidates: C
   return readQueue(db);
 }
 
-function successorRows(queued: readonly QueueRow[], justFinished: StoredRound | null, dueAt: number | undefined, input: MailRoundInput, slots: readonly string[]): QueueRow[] {
-  if (!justFinished) return queued.filter((row) => dueAt !== undefined && row.queued_at <= dueAt);
-  return slotPassed(justFinished.openedAt, input.now, slots, input.availability) ? [...queued] : [];
+function successorRows(queued: readonly QueueRow[], finished: FinishedRound | null, schedule: RoundSchedule): QueueRow[] {
+  const { dueAt } = schedule;
+  const catchUp = finished !== null && slotPassed(finished, schedule);
+  return queued.filter(row => (dueAt !== undefined && (!finished || dueAt > finished.finishedAt) && row.queued_at <= dueAt) || (catchUp && row.queued_at <= finished.finishedAt));
 }
 
-function openSuccessor(db: Database, input: MailRoundInput, slots: readonly string[], candidates: Candidates, queued: readonly QueueRow[], justFinished: StoredRound | null): StoredRound | null {
-  const dueAt = latestEffectiveSlot(input.now, slots, input.availability);
-  const rows = successorRows(queued, justFinished, dueAt, input, slots).filter((row) => !input.interrupting.has(row.mail_key));
+function openSuccessor(db: Database, input: MailRoundInput, schedule: RoundSchedule, candidates: Candidates, queued: readonly QueueRow[], finished: FinishedRound | null): StoredRound | null {
+  const { dueAt } = schedule;
+  const rows = successorRows(queued, finished, schedule).filter((row) => !input.interrupting.has(row.mail_key));
   return rows.length === 0 ? null : createRound(db, rows, input, candidates, dueAt ?? input.now);
+}
+
+function unavailableCalendar(input: MailRoundInput, schedule: RoundSchedule, queued: readonly QueueRow[], finished: FinishedRound | null): string[] {
+  const relevant = schedule.past.filter(slot => queued.some(row => row.queued_at <= slot.effective) || (finished !== null && slot.effective > finished.openedAt && slot.effective <= finished.finishedAt)).at(-1);
+  return [...new Set([...input.availability.sources.filter(source => source.kind === "unknown").map(source => source.id), ...schedule.next.unavailable, ...(relevant?.unavailable ?? [])])];
 }
 
 export function readMailRound(db: Database, input: MailRoundInput): MailRoundView {
   return db.transaction(() => {
     const slots = configuredSlots(input.slots);
+    const schedule = roundSchedule(input.now, slots, input.availability);
     const candidates = candidatesOf(input);
     const succeeded = new Set(input.readings.filter((reading) => reading.error === null).map((reading) => reading.id));
     pruneFinishedRounds(db, input.now);
     const row = readOpenRow(db);
-    const reconciled = row ? reconcileOpen(db, storedRound(row), candidates, succeeded, input.now) : { open: null, justFinished: null };
+    const reconciled = row ? reconcileOpen(db, storedRound(row), candidates, succeeded, input.now) : { open: null, finished: null };
+    const finished = reconciled.finished ?? (reconciled.open ? null : readFinishedRound(db));
     pruneQueue(db, reconciled.open, candidates, succeeded);
     const queued = enqueueCandidates(db, reconciled.open, candidates, succeeded, input.now);
-    const open = reconciled.open ?? openSuccessor(db, input, slots, candidates, queued, reconciled.justFinished);
+    const open = reconciled.open ?? openSuccessor(db, input, schedule, candidates, queued, finished);
     const unavailable: MailRoundUnavailable = {
       mail: input.readings.filter((reading) => reading.error !== null).map((reading) => reading.id),
-      calendar: input.availability.sources.filter((source) => source.kind === "unknown").map((source) => source.id),
+      calendar: unavailableCalendar(input, schedule, queued, finished),
     };
-    return viewOf(open, readQueue(db).length, nextEffectiveSlot(input.now, slots, input.availability), unavailable);
+    return viewOf(open, readQueue(db).length, schedule.next.effective, unavailable);
   })();
 }
