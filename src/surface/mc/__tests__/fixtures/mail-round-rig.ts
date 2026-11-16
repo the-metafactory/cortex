@@ -102,8 +102,17 @@ export async function openMailRoundRig(now: number, overrides: Partial<DeskOptio
       await fetch(`${rig.baseUrl()}/api/desk`);
       const started = Date.now();
       while (reads() === before && Date.now() - started < 2000) await Bun.sleep(10);
-      await Bun.sleep(10);
-      return (await (await fetch(`${rig.baseUrl()}/api/desk`)).json()) as DeskView;
+      const read = async (): Promise<string> => (await fetch(`${rig.baseUrl()}/api/desk`)).text();
+      let previous = "";
+      let stable = 0;
+      const settling = Date.now();
+      while (stable < 3 && Date.now() - settling < 3000) {
+        await Bun.sleep(25);
+        const current = await read();
+        stable = current === previous ? stable + 1 : 0;
+        previous = current;
+      }
+      return JSON.parse(previous) as DeskView;
     },
     post: async (body) => fetch(`${rig.baseUrl()}/api/desk/mail`, { method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body) }),
     reopen: () => {
