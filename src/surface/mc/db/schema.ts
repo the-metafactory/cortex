@@ -1039,6 +1039,8 @@ export interface ColumnAddMigration {
 }
 
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
+  { table: "desk_mail_snoozes", column: "urgent_at_defer", ddl: "ALTER TABLE desk_mail_snoozes ADD COLUMN urgent_at_defer INTEGER" },
+  { table: "desk_item_defers", column: "urgent_at_defer", ddl: "ALTER TABLE desk_item_defers ADD COLUMN urgent_at_defer INTEGER NOT NULL DEFAULT 0" },
   { table: "desk_mail_judgement_operations", column: "created_at", ddl: "ALTER TABLE desk_mail_judgement_operations ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0", post: [
     "UPDATE desk_mail_judgement_operations SET created_at = COALESCE(CAST(strftime('%s', json_extract(result_json, '$.evidence.observedAt')) AS INTEGER) * 1000, 0) WHERE created_at = 0",
     "CREATE INDEX IF NOT EXISTS desk_mail_judgement_created_at ON desk_mail_judgement_operations(created_at)",

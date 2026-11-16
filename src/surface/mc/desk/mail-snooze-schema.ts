@@ -15,9 +15,11 @@ export const SNOOZE_SQL = [
     state TEXT NOT NULL,
     back_at INTEGER,
     reason TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    urgent_at_defer INTEGER
   )`,
   "CREATE INDEX IF NOT EXISTS desk_mail_snoozes_state ON desk_mail_snoozes (state, created_at)",
+  "CREATE TABLE IF NOT EXISTS desk_own_addresses (address TEXT PRIMARY KEY)",
 ];
 
 export const SNOOZE_TIMES = ["later", "tomorrow", "next-week"] as const;
