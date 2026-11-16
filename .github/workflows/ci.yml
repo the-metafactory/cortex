@@ -216,7 +216,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       - name: bun run test on the declared minimum
-        run: bun run test
+        run: bun scripts/check.ts test
 
   # ──────────────────────────────────────────────────────────────────
   # Surface-SDK .d.ts drift guard (cortex#1950). The shippable, self-contained

@@ -14,7 +14,7 @@ const CHECK_STEP = /^bun scripts\/check\.ts ([a-z-]+)$/;
 
 describe("CI runs exactly the gates `bun run check` runs", () => {
   test("every CI gate step names a gate, and every CI gate runs in CI", () => {
-    const inCi = runLines.flatMap((line) => CHECK_STEP.exec(line)?.[1] ?? []);
+    const inCi = [...new Set(runLines.flatMap((line) => CHECK_STEP.exec(line)?.[1] ?? []))];
     const ciGates = GATES.filter((g) => !g.localOnly).map((g) => g.name);
     expect(inCi.slice().sort()).toEqual(ciGates.slice().sort());
   });
