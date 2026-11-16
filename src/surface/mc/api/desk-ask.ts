@@ -2,7 +2,7 @@ import { parserPermissions } from "../desk/parser-permissions";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { PARSER_KINDS, conversationFields, conversationOffer, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, rowProposal, toProposal, validateCard, type AskFields, type DeskProposal, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
+import { ASK_KINDS, conversationFields, conversationOffer, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, rowProposal, toProposal, validateCard, type AskFields, type DeskProposal, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
 import { CONVERSATION_NOT_WRITTEN, createFromCard, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
 import { ParserPermissionsSchema } from "../../../common/types/desk-parser";
 import { parserRoutingNotice } from "../desk/parser-routing";
@@ -84,7 +84,7 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   let result: ParseResult | RulesResult | null = explicitCapture(text);
   let via: "parser" | "rules" = "rules";
   if (!result && ask?.parser.length) {
-    const request = { text, now: new Date(now).toISOString(), timeZone: deps.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, kinds: [...PARSER_KINDS], maps, ...(routing ? { routing } : {}) };
+    const request = { text, now: new Date(now).toISOString(), timeZone: deps.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, kinds: ASK_KINDS.filter((kind) => kind !== "row"), maps, ...(routing ? { routing } : {}) };
     result = await parseWithCommand(ask.parser, request, deps.runParser ?? parserFrom(spawnWithStdin), ask.timeoutSeconds * 1000);
     if (result) via = "parser";
   }

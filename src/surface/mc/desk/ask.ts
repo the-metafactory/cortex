@@ -306,8 +306,6 @@ export function toProposal(kind: AskKind, fields: Record<string, unknown>, writa
   };
 }
 
-export const PARSER_KINDS: readonly AskKind[] = ASK_KINDS.filter((kind) => kind !== "row");
-
 const ROW_WRITABLE: ReadonlySet<AskKind> = new Set(["row"]);
 
 export function rowProposal(row: RowRepeat, area: string | undefined): DeskProposal {
