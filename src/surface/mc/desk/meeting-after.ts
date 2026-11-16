@@ -1,5 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { refuse, type ActResult } from "./act-result";
+import { calendarEvents } from "./calendar-events";
+import { calendarKey, calendarSetting, listCalendars } from "./calendars";
+import type { SourceReading } from "./sources/command";
 import { clock, DAY_MS, startOfDay } from "./time";
 import type { DeskEvent, DeskItem } from "./types";
 
@@ -18,11 +21,20 @@ export const MEETING_AFTER_SQL = [
   "CREATE INDEX IF NOT EXISTS desk_meeting_dismissals_keep ON desk_meeting_dismissals (keep_until)",
 ];
 
-const meetingAfterKey = (eventKey: string): string => `${MEETING_AFTER_KIND}:${eventKey}`;
+const occurrenceKey = (event: DeskEvent): string => `${event.key}@${event.at}`;
+const meetingAfterKey = (event: DeskEvent): string => `${MEETING_AFTER_KIND}:${occurrenceKey(event)}`;
 
 export function readMeetingDismissals(db: Database, now: number): Set<string> {
-  db.run("DELETE FROM desk_meeting_dismissals WHERE keep_until < ?", [now]);
-  return new Set(db.query<{ event_key: string }, []>("SELECT event_key FROM desk_meeting_dismissals").all().map((row) => row.event_key));
+  return new Set(db.query<{ event_key: string }, [number]>("SELECT event_key FROM desk_meeting_dismissals WHERE keep_until >= ?").all(now).map((row) => row.event_key));
+}
+
+export function afterMeetingEvents(db: Database, readings: readonly SourceReading[], now: number): DeskEvent[] {
+  const settings = new Map(listCalendars(db).map((calendar) => [calendarKey(calendar.source, calendar.name, calendar.calendarId), calendar]));
+  const events = readings
+    .flatMap((reading) => reading.events.map((event) => ({ ...event, area: reading.area, sourceId: reading.id })))
+    .flatMap((event) => { const setting = calendarSetting(settings, event); return setting?.enabled ? [{ ...event, calendar: setting.name, color: setting.color }] : []; });
+  const sod = startOfDay(now);
+  return calendarEvents(events, sod, sod + DAY_MS);
 }
 
 interface AfterMeetingCandidate {
@@ -41,12 +53,12 @@ function candidates(events: readonly DeskEvent[], now: number): AfterMeetingCand
   return events
     .flatMap((e): AfterMeetingCandidate[] => {
       if (e.kind !== "meeting" || e.end === undefined || e.end > now || e.end < today || now - e.end >= AFTER_MEETING_WINDOW_MS) return [];
-      const eventKey = e.key;
+      const eventKey = occurrenceKey(e);
       return [{
         eventKey,
         end: e.end,
         item: {
-          key: meetingAfterKey(eventKey),
+          key: meetingAfterKey(e),
           kind: MEETING_AFTER_KIND,
           source: e.source ?? "calendar",
           area: e.area,
@@ -59,10 +71,10 @@ function candidates(events: readonly DeskEvent[], now: number): AfterMeetingCand
           detail: {
             summary: e.title,
             history: [`Ended ${clock(e.end)}${e.note ? `, ${e.note}` : ""}`],
-            refs: [eventKey],
+            refs: [e.key],
             links: [],
           },
-          eventKey,
+          eventKey: e.key,
           since: e.at,
         },
       }];
@@ -77,6 +89,7 @@ export function afterMeetingItems(events: readonly DeskEvent[], dismissed: Reado
 export function dismissAfterMeeting(db: Database, events: readonly DeskEvent[], key: string, now: number): ActResult {
   const found = candidates(events, now).find((c) => c.item.key === key);
   if (!found) return refuse(400, "The Desk has no after-meeting card with this key.");
+  db.run("DELETE FROM desk_meeting_dismissals WHERE keep_until < ?", [now]);
   db.run(
     `INSERT INTO desk_meeting_dismissals (event_key, item_key, dismissed_at, keep_until) VALUES (?, ?, ?, ?)
       ON CONFLICT(event_key) DO UPDATE SET item_key = excluded.item_key, dismissed_at = excluded.dismissed_at, keep_until = excluded.keep_until`,

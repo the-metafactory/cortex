@@ -5,9 +5,10 @@ import { runWithTemporaryHome } from "./probe-temp-home";
 async function probe(): Promise<void> {
   const now = roundAt(16, 16, 10);
   const rig = await openMailRoundRig(now, { mailDigest: undefined, mailInvitations: undefined });
-  const key = "meeting-after:cal:round-source:just-ended";
+  const start = roundAt(16, 15, 40);
+  const key = `meeting-after:cal:round-source:just-ended@${start}`;
   try {
-    rig.setState({ mail: [], events: [roundEvent("just-ended", roundAt(16, 15, 40), roundAt(16, 16, 5))] });
+    rig.setState({ mail: [], events: [roundEvent("just-ended", start, roundAt(16, 16, 5))] });
     await rig.get();
     const read = async () => (await (await fetch(`${rig.baseUrl()}/api/desk`)).json()) as Awaited<ReturnType<typeof rig.get>>;
     const before = await read();

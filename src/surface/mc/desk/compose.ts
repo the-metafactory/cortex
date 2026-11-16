@@ -22,7 +22,7 @@ import { readDecisions, type DecisionStore } from "./decisions";
 import { DAY_MS, deskTimeZone, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceMail, type SourceReading } from "./sources/command";
 import { calendarEvents, type CalendarEvent } from "./calendar-events";
-import { afterMeetingItems, readMeetingDismissals } from "./meeting-after";
+import { afterMeetingEvents, afterMeetingItems, readMeetingDismissals } from "./meeting-after";
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
 import { suspicionContext } from "./mail-suspicion";
@@ -422,7 +422,7 @@ export async function composeDesk(
     ...mailItems({ ...mailItemOptions(withoutAnsweredRead(mail, answers)), invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
     ...meetingItems(deskCalendar, now, rules.meetingMinutes),
-    ...afterMeetingItems(calendarEvents(events, sod, sod + DAY_MS), meetingDismissals, now),
+    ...afterMeetingItems(afterMeetingEvents(db, readings, now), meetingDismissals, now),
     ...ruleCards,
     ...dmarcCards,
     ...waitingCards,

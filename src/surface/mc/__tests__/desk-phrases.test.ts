@@ -197,7 +197,7 @@ test("GET /api/desk serves every why phrase code beside its original sentence or
   view = await read();
   check(view, `reminder:${reminder.id}`, `You asked to be reminded today at ${clock(NOW - 60_000)}.`, { code: "reminder.due", params: { dueAt: iso(NOW - 60_000) } });
   check(view, `meeting:cal:fixture:review@${NOW + 5 * 60_000}`, "It starts in 5 minutes.", { code: "meeting.soon", params: { startsAt: meetingStart } });
-  check(view, "meeting-after:cal:fixture:ended", "It ended 5 minutes ago.", { code: "meeting.ended", params: { endedAt: iso(NOW - 5 * 60_000) } });
+  check(view, `meeting-after:cal:fixture:ended@${NOW - 10 * 60_000}`, "It ended 5 minutes ago.", { code: "meeting.ended", params: { endedAt: iso(NOW - 5 * 60_000) } });
   check(view, "mail:received", `It arrived today at ${clock(EARLIER)}.`, { code: "mail.received", params: { receivedAt: iso(EARLIER) } });
   expectWhyContent(check(view, "mail:possible", `It may be about "Budget review" today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-possible", params: { meetingStart } }), { meetingTitle: "Budget review" });
   expectWhyContent(check(view, "mail:linked", `${CLASSIFIER_REASON}. The meeting is today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-linked", params: { meetingStart } }), { reason: CLASSIFIER_REASON, meetingTitle: "Budget review" });

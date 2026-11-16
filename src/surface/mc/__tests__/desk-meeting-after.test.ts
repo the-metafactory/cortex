@@ -6,11 +6,21 @@ import { openMailRoundRig, postDeskJson, roundAt, roundEvent, type MailRoundRig 
 const NOW = roundAt(16, 16, 10);
 
 const SOURCE = "round-source";
-const key = (id: string): string => `meeting-after:cal:${SOURCE}:${id}`;
+const START = {
+  old: roundAt(16, 10, 0),
+  boundary: roundAt(16, 14, 40),
+  a: roundAt(16, 15, 50),
+  b: roundAt(16, 16, 2),
+  yesterday: roundAt(15, 20),
+  later: roundAt(17, 17, 0),
+} as const;
+const key = (id: keyof typeof START): string => `meeting-after:cal:${SOURCE}:${id}@${START[id]}`;
 
 let rig: MailRoundRig;
 
 const afterMeeting = (view: DeskView): DeskView["items"] => view.items.filter((item) => item.kind === "meeting-after");
+
+const dismissalCount = (): number | undefined => rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_meeting_dismissals").get()?.n;
 
 const dismiss = (body: unknown): Promise<Response> => postDeskJson(rig.baseUrl(), "/api/desk/action", body);
 
@@ -19,11 +29,11 @@ beforeEach(async () => {
   rig.setState({
     mail: [],
     events: [
-      roundEvent("old", roundAt(16, 10, 0), roundAt(16, 11, 0)),
-      roundEvent("boundary", roundAt(16, 14, 40), roundAt(16, 15, 10)),
-      roundEvent("a", roundAt(16, 15, 50), roundAt(16, 16, 5)),
-      roundEvent("b", roundAt(16, 16, 2), roundAt(16, 16, 9)),
-      roundEvent("yesterday", roundAt(15, 20), roundAt(15, 21)),
+      roundEvent("old", START.old, roundAt(16, 11, 0)),
+      roundEvent("boundary", START.boundary, roundAt(16, 15, 10)),
+      roundEvent("a", START.a, roundAt(16, 16, 5)),
+      roundEvent("b", START.b, roundAt(16, 16, 9)),
+      roundEvent("yesterday", START.yesterday, roundAt(15, 21)),
     ],
   });
   await rig.get();
@@ -54,6 +64,22 @@ describe("Desk after-meeting card", () => {
     expect(afterMeeting(view).some((item) => item.key === key("yesterday"))).toBe(false);
   });
 
+  it("lists two occurrences of one recurring meeting as two cards, and dismissing one keeps the other", async () => {
+    rig.setNow(NOW + 31_000);
+    rig.setState({
+      mail: [],
+      events: [roundEvent("recurring", roundAt(16, 15, 10), roundAt(16, 15, 30)), roundEvent("recurring", roundAt(16, 15, 40), roundAt(16, 15, 50))],
+    });
+    const cards = afterMeeting(await rig.refresh());
+    expect(cards.map((item) => item.key)).toEqual([
+      `meeting-after:cal:${SOURCE}:recurring@${roundAt(16, 15, 40)}`,
+      `meeting-after:cal:${SOURCE}:recurring@${roundAt(16, 15, 10)}`,
+    ]);
+    expect((await dismiss({ action: "meeting.dismiss", key: cards[0]!.key })).status).toBe(200);
+    expect(afterMeeting(await rig.get()).map((item) => item.key)).toEqual([`meeting-after:cal:${SOURCE}:recurring@${roundAt(16, 15, 10)}`]);
+    expect(dismissalCount()).toBe(1);
+  });
+
   it("keeps a dismissed card away for every client that reads the Desk", async () => {
     const response = await dismiss({ action: "meeting.dismiss", key: key("b") });
     expect(response.status).toBe(200);
@@ -62,7 +88,7 @@ describe("Desk after-meeting card", () => {
     expect((await dismiss({ action: "meeting.dismiss", key: key("b") })).status).toBe(200);
     rig.reopen();
     expect(afterMeeting(await rig.get()).map((item) => item.key)).toEqual([key("a")]);
-    expect(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_meeting_dismissals").get()?.n).toBe(1);
+    expect(dismissalCount()).toBe(1);
   });
 
   it("refuses a dismiss for a key that is not a current after-meeting card and stores nothing", async () => {
@@ -76,17 +102,22 @@ describe("Desk after-meeting card", () => {
       expect(response.status).toBe(400);
       expect((await response.json()).error).toBe("A meeting-after item key is required.");
     }
-    expect(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_meeting_dismissals").get()?.n).toBe(0);
+    expect(dismissalCount()).toBe(0);
     expect(afterMeeting(await rig.get())).toHaveLength(2);
   });
 
-  it("drops a dismissal once the meeting is older than a day", async () => {
+  it("stops showing a dismissed card once the meeting is older than a day, and drops the row on the next dismissal", async () => {
     expect((await dismiss({ action: "meeting.dismiss", key: key("a") })).status).toBe(200);
     rig.setNow(roundAt(17, 6, 10));
     expect(afterMeeting(await rig.get())).toEqual([]);
-    expect(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_meeting_dismissals").get()?.n).toBe(1);
-    rig.setNow(NOW + 25 * 60 * 60 * 1000);
+    expect(dismissalCount()).toBe(1);
+    rig.setNow(roundAt(17, 17, 10));
     expect(afterMeeting(await rig.get())).toEqual([]);
-    expect(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_meeting_dismissals").get()?.n).toBe(0);
+    expect(dismissalCount()).toBe(1);
+    rig.setState({ mail: [], events: [roundEvent("later", START.later, roundAt(17, 17, 5))] });
+    expect(afterMeeting(await rig.refresh()).map((item) => item.key)).toEqual([key("later")]);
+    expect((await dismiss({ action: "meeting.dismiss", key: key("later") })).status).toBe(200);
+    expect(dismissalCount()).toBe(1);
+    expect(afterMeeting(await rig.get())).toEqual([]);
   });
 });

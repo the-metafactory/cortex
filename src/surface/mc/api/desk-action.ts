@@ -1,9 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { answer } from "../desk/act-result";
-import { calendarEvents } from "../desk/calendar-events";
-import { dismissAfterMeeting, MEETING_AFTER_KIND, MEETING_DISMISS_ACTION } from "../desk/meeting-after";
-import { DAY_MS, startOfDay } from "../desk/time";
+import { afterMeetingEvents, dismissAfterMeeting, MEETING_AFTER_KIND, MEETING_DISMISS_ACTION } from "../desk/meeting-after";
 import { isPromotable, PROMOTABLE_LABELS, setGrant } from "../desk/autonomy";
 import { isRangerAction, oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner } from "../desk/actions";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
@@ -61,8 +59,7 @@ function dismissMeetingCard(key: unknown, runtime: DeskRuntime | undefined, deps
   if (!deps.db) return fail(503, "The Desk store is not available on this stack.");
   const now = (deps.now ?? runtime.now ?? Date.now)();
   const readings = runtime.sourceCache?.cached() ?? [];
-  const events = readings.flatMap((reading) => reading.events.map((event) => ({ ...event, area: reading.area, sourceId: reading.id })));
-  return answer(dismissAfterMeeting(deps.db, calendarEvents(events, startOfDay(now), startOfDay(now) + DAY_MS), key, now));
+  return answer(dismissAfterMeeting(deps.db, afterMeetingEvents(deps.db, readings, now), key, now));
 }
 
 /**
