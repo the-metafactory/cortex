@@ -2,7 +2,7 @@ import type { LoginView } from "../../../../conversations/codex-auth-contract";
 import { getJson, postJson } from "./api";
 
 export type { LoginView };
-const BASE = "/api/conversations/codex-auth-contract";
+const BASE = "/api/conversations/codex-auth";
 
 export const readLogin = (): Promise<{ login: LoginView | null }> => getJson(`${BASE}/login`);
 export const startLogin = (): Promise<{ login: LoginView }> => postJson(`${BASE}/login`, {});
