@@ -98,6 +98,7 @@ import { handleDeskTaskHandoff } from "./api/desk-task-handoff";
 import type { TaskDispatchBus } from "./desk/task-handoff";
 import { handleDeskLinks } from "./api/desk-links";
 import { DESK_MEETING_BRIEF_PATH, handleDeskMeetingBrief } from "./api/desk-meeting-brief";
+import { DESK_MEETING_PREVIOUS_PATH, handleDeskMeetingPrevious } from "./api/desk-meeting-previous";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
 import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
 import { handleDeskBalanceSurfaces } from "./api/desk-balance-surfaces";
@@ -639,7 +640,7 @@ async function handleApi(
   if (pathname === DESK_ADAPTER_ASSET_PATH || pathname.startsWith(`${DESK_ADAPTER_ASSET_PATH}/`)) return handleDeskAdapterAssets(req, url, guard, adapterAssets);
 
   const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
-  const deskBriefRead = pathname === DESK_MEETING_BRIEF_PATH;
+  const deskBriefRead = pathname === DESK_MEETING_BRIEF_PATH || pathname === DESK_MEETING_PREVIOUS_PATH;
   if (deskFlowsRead || deskBriefRead || (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname))) {
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
@@ -703,6 +704,7 @@ async function handleApi(
   if (pathname === "/api/desk/task-handoff") return handleDeskTaskHandoff(req, db, desk);
   if (pathname === "/api/desk/links") return handleDeskLinks(req, db, desk);
   if (pathname === DESK_MEETING_BRIEF_PATH) return handleDeskMeetingBrief(req, db, desk);
+  if (pathname === DESK_MEETING_PREVIOUS_PATH) return handleDeskMeetingPrevious(req, db, desk);
 
   if (pathname === "/api/desk/mail/rules") return handleDeskMailRules(req, db, desk);
 

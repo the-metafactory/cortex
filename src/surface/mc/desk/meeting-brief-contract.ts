@@ -1,6 +1,7 @@
 import type { DeskPhrase } from "./phrases";
 
 export const DESK_MEETING_BRIEF_PATH = "/api/desk/meeting-brief";
+export const DESK_MEETING_PREVIOUS_PATH = "/api/desk/meeting-brief/previous";
 
 export type BriefSourceKind = "mail" | "task" | "thread" | "note" | "meeting";
 
@@ -38,6 +39,19 @@ export interface BriefPreviousMeeting {
   state: (typeof BRIEF_PREVIOUS_MEETING_STATES)[number];
   phrase: DeskPhrase;
   message: string;
+  event?: string;
+  relation?: "explicit";
+  facts?: BriefFact[];
+  gaps?: BriefGap[];
+}
+
+export interface PreviousMeetingRelationship {
+  ok: true;
+  event: string;
+  previousEvent: string | null;
+  relation: "explicit" | null;
+  message: string;
+  messagePhrase: DeskPhrase;
 }
 
 export interface BriefSynthesis {
@@ -70,6 +84,14 @@ export const PREVIOUS_MEETING_UNIDENTIFIED: BriefPreviousMeeting = {
   phrase: { code: "brief.previous-unidentified" },
   message: "No previous meeting identified.",
 };
+
+export const previousIdentified = (event: string, facts: BriefFact[], gaps: BriefGap[]): BriefPreviousMeeting => ({
+  state: "identified", phrase: { code: "brief.previous-identified" }, message: "The previous meeting was set explicitly.", event, relation: "explicit", facts, gaps,
+});
+
+export const previousUnavailable = (event: string): BriefPreviousMeeting => ({
+  state: "unavailable", phrase: { code: "brief.previous-unavailable" }, message: "The previous meeting that was set can no longer be read.", event, relation: "explicit",
+});
 
 export const SYNTHESIS_NOT_CONFIGURED: BriefSynthesis = {
   state: "unavailable",
