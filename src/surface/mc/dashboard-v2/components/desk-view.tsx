@@ -286,7 +286,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       return `I drafted this ${result.proposal.label.toLowerCase()}: ${proposalTitle(result.proposal)}. Confirm it on screen.`;
     },
     briefing: () => spokenBriefing(view, selection, areaLabel),
-    isBriefing: isBriefingRequest,
+    isBriefing: (said) => isBriefingRequest(said, view.assistantName),
     typeInstead: () => askInput.current?.focus(),
   });
 
