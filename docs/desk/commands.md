@@ -267,6 +267,10 @@ A classifier command receives:
 
 `meetings` contains timed meetings in the next 14 days. `corrections` contains at most 10 recorded mail-ranking corrections. Mail and event text is untrusted data. A configured API key is passed in `DESK_CLASSIFIER_KEY`, not in argv.
 
+The request also includes `messages`, an array of `{ "role": "system" | "user", "content": "..." }` objects built by Cortex, identical to the endpoint classifier's chat input. This field is additive; the existing request fields remain available. The `system` entry contains Cortex's classification prompt and categories; the `user` entry contains the classification input as JSON. A research command uses `messages` unchanged and may add instructions only for its own tools. It must not replace Cortex's triage prompt or redefine its categories or sender rules. <!-- glossary-ignore: user -->
+
+Cortex saves mail from an unimportant sender as `bulk` before calling either classifier form. It matches an address or a domain written as `@domain`, case-insensitively. A sender who is also a VIP still goes to the classifier.
+
 The command exits 0 and prints one object:
 
 ```json
@@ -338,3 +342,12 @@ The ntfy endpoint receives the notification text and optional action link. Use a
 A `goals.check.<goal>.command` receives its configured argv and environment, without JSON stdin. Exit 0 reports that the check ran. Nonzero exit displays its last stderr or stdout line. The command publishes the resulting goal reading to Vigil through its own mechanism; stdout is not parsed as a source reading. The Desk waits up to five minutes for a newer Vigil reading before allowing another check.
 
 `goals.somaBin` is the Soma executable. Cortex invokes `goal list` to read statuses and `goal set-status <goal> paused` to pause an active goal. These are Soma CLI contracts rather than replaceable JSON commands.
+
+## Rules an adapter applies for Cortex
+
+Two rules are part of the Desk SDK contract. An adapter applies them on Cortex's behalf, and `@the-metafactory/cortex/desk-sdk` exports the reference rule or the vectors for each, with `runDeskRuleVectors` to check an adapter's own implementation against them.
+
+- **Whether an invitation is open** (`invitationOpen(invitation, answeredSequence, now)`). An invitation is open when it is not answered at the same or a newer SEQUENCE and is not over. It is over at its end, or at its start when it has no end. A recurring invitation is never over.
+- **Which mails reply to a sent mail** (`repliesTo`). A candidate is a reply when it names the sent mail's id in In-Reply-To or References, has a different id, and comes from a different address. A sent mail has at most 10 replies, oldest first.
+
+A sent mail's `text` is its body before the first quote, attribution, forwarded header or signature line. The patterns that find those lines stay with the adapter.
