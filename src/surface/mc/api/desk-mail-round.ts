@@ -1,12 +1,14 @@
 import { z } from "zod";
 import type { Database } from "bun:sqlite";
 import { failResponse } from "../desk/act-result";
+import { calendarAvailability } from "../desk/calendar-availability";
+import { listCalendars } from "../desk/calendars";
 import type { DeskRuntime } from "../desk/compose";
 import { mailRoundAnswerView, putBackMailRound, undoMailRoundPutBack, type MailRoundUndoOutcome, type MailRoundView } from "../desk/mail-round";
 import type { DeskPhrase } from "../desk/phrases";
 import { fail, noStore } from "./desk-mail";
 
-export const DESK_MAIL_ROUND_PATH = "/api/desk/mail/round";
+export const DESK_MAIL_ROUND_PATH = "/api/desk/mail/round"; // glossary-ignore: path
 
 const ROUND_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
@@ -35,7 +37,10 @@ export async function handleDeskMailRound(req: Request, db: Database, runtime: D
   const body = parsed.data;
   if (body.action === "put-back" && !body.key.startsWith("mail:")) return fail(400, "A mail key starts with mail:.");
   const now = (runtime.now ?? Date.now)();
-  const roundView = (): MailRoundView => mailRoundAnswerView(db, { now, slots: desk.mailRounds?.slots, readings: runtime.sourceCache?.cached() ?? [] });
+  const readings = runtime.sourceCache?.cached() ?? [];
+  const read = new Set(readings.map((reading) => reading.id));
+  const availability = calendarAvailability({ sources: desk.sources.filter((source) => read.has(source.id)), readings, calendars: listCalendars(db), now });
+  const roundView = (): MailRoundView => mailRoundAnswerView(db, { now, slots: desk.mailRounds?.slots, availability, readings });
   if (body.action === "put-back") {
     const put = putBackMailRound(db, { roundId: body.roundId, revision: body.revision, key: body.key, requestId: body.requestId, now });
     if (!put.ok) return failResponse(put.status, put.error);

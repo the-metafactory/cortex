@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import type { DeskView } from "../src/surface/mc/desk/types";
-import { openMailRoundRig, putBackBody, queuedMails, readAnswer, roundAt, roundKeys, roundMail, roundSideEffects, roundStatuses, type MailRoundRig } from "../src/surface/mc/__tests__/fixtures/mail-round-rig";
+import { openMailRoundRig, putBackPayload, queuedMails, readAnswer, roundAt, roundKeys, roundMail, roundSideEffects, roundStatuses, type MailRoundRig } from "../src/surface/mc/__tests__/fixtures/mail-round-rig";
 
 const rig: MailRoundRig = await openMailRoundRig(roundAt(9, 8), { mailDigest: undefined, mailInvitations: undefined });
 
 const putBack = (round: NonNullable<DeskView["mailRound"]>, key: string, requestId: string): Promise<Response> =>
-  rig.postRound(putBackBody(round, key, requestId));
+  rig.postRound(putBackPayload(round, key, requestId));
 const undo = async (token: string | undefined, requestId: string): Promise<Response> => rig.postRound({ action: "undo", token, requestId });
 
 try {

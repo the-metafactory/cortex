@@ -3,7 +3,7 @@ import { McSchema } from "../../../common/types/config";
 import { DEFAULT_MAIL_ROUND_SLOTS } from "../../../common/types/desk-mail-rounds";
 import { saveClassification } from "../desk/classify";
 import { addVip } from "../desk/vips";
-import { openMailRoundRig, putBackBody, readAnswer, roundAt, roundEvent, roundMail, type MailRoundRig } from "./fixtures/mail-round-rig";
+import { openMailRoundRig, putBackPayload, readAnswer, roundAt, roundEvent, roundMail, type MailRoundRig } from "./fixtures/mail-round-rig";
 
 const iso = (day: number, hour: number, minute = 0): string => new Date(roundAt(day, hour, minute)).toISOString();
 
@@ -88,7 +88,7 @@ describe("a durable scheduled mail round", () => {
     rig = await oneMailRound();
     const round = (await rig.get()).mailRound;
     expect(round?.due).toBe(true);
-    expect((await readAnswer(await rig.postRound(putBackBody(round!, "mail:a", "req-prune-a")))).ok).toBe(true);
+    expect((await readAnswer(await rig.postRound(putBackPayload(round!, "mail:a", "req-prune-a")))).ok).toBe(true);
     await rig.get();
     const count = (sql: string): number | undefined => rig?.database().query<{ n: number }, []>(sql).get()?.n;
     const finished = (): number | undefined => count("SELECT COUNT(*) AS n FROM desk_mail_rounds WHERE status = 'finished'");

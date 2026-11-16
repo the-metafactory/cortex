@@ -552,13 +552,14 @@ function pruneRoundOperations(db: Database, roundIds: readonly string[]): void {
   for (const roundId of roundIds) db.query("DELETE FROM desk_mail_round_operations WHERE round_id = ?").run(roundId);
 }
 
-const NO_MEETINGS: CalendarAvailability = { sources: [], events: [] };
-
-export function mailRoundAnswerView(db: Database, args: { now: number; slots?: readonly string[]; readings: readonly { id: string; error: string | null }[] }): MailRoundView {
-  const failed = args.readings.filter((reading) => reading.error !== null).map((reading) => reading.id);
+export function mailRoundAnswerView(db: Database, args: { now: number; slots?: readonly string[]; availability: CalendarAvailability; readings: readonly { id: string; error: string | null }[] }): MailRoundView {
   const row = readOpenRow(db);
   const slots = configuredSlots(args.slots);
-  return viewOf(row ? storedRound(row) : null, readQueue(db).length, nextEffectiveSlot(args.now, slots, NO_MEETINGS), { mail: failed, calendar: failed });
+  const unavailable: MailRoundUnavailable = {
+    mail: args.readings.filter((reading) => reading.error !== null).map((reading) => reading.id),
+    calendar: args.availability.sources.filter((source) => source.kind === "unknown").map((source) => source.id),
+  };
+  return viewOf(row ? storedRound(row) : null, readQueue(db).length, nextEffectiveSlot(args.now, slots, args.availability), unavailable);
 }
 
 export function readMailRound(db: Database, input: MailRoundInput): MailRoundView {

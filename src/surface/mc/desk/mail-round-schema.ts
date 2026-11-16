@@ -11,14 +11,9 @@ export const MAIL_ROUND_SQL: string[] = [
     created_at INTEGER NOT NULL
   )`,
   "CREATE UNIQUE INDEX IF NOT EXISTS desk_mail_round_operation_token ON desk_mail_round_operations(token) WHERE kind = 'put-back'",
+  "CREATE INDEX IF NOT EXISTS desk_mail_round_operation_round ON desk_mail_round_operations(round_id)",
 ];
 
 export const MAIL_ROUND_COLUMNS = [
   { table: "desk_mail_round_queue", column: "put_back", ddl: "ALTER TABLE desk_mail_round_queue ADD COLUMN put_back INTEGER NOT NULL DEFAULT 0" },
-  {
-    table: "desk_mail_round_operations",
-    column: "round_id",
-    ddl: "ALTER TABLE desk_mail_round_operations ADD COLUMN round_id TEXT",
-    post: ["CREATE INDEX IF NOT EXISTS desk_mail_round_operation_round ON desk_mail_round_operations(round_id)"],
-  },
 ];

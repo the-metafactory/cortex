@@ -81,7 +81,7 @@ interface RoundAnswer {
 
 export const readAnswer = async (response: Response): Promise<RoundAnswer> => (await response.json()) as RoundAnswer;
 
-export const putBackBody = (round: { id: string | null; revision: number }, key: string, requestId: string): Record<string, unknown> => ({
+export const putBackPayload = (round: { id: string | null; revision: number }, key: string, requestId: string): Record<string, unknown> => ({
   action: "put-back",
   roundId: round.id,
   revision: round.revision,
