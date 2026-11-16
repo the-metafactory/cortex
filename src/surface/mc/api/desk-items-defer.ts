@@ -38,8 +38,7 @@ export async function handleDeskItemsDefer(req: Request, db: Database, runtime: 
   const listed = resolveListedMail(readings, body.key);
   if (!listed.ok) return failResponse(listed.reason === "unlisted" ? 400 : 409, listed.error);
   const now = (runtime.now ?? Date.now)();
-  const desk = runtime.options;
-  const rated = desk ? (await composeCurrentDay(db, runtime, desk, vigil, now)).items.find((entry) => entry.key === body.key) : undefined;
+  const rated = (await composeCurrentDay(db, runtime, runtime.options, vigil, now)).items.find((entry) => entry.key === body.key);
   return answer(snoozeMail(db, listed.mail, body.until, { now, readings, ...(rated ? { urgentAtDefer: rated.urgency === "now" } : {}) }));
 }
 

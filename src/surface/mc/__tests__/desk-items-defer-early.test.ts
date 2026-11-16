@@ -6,6 +6,7 @@ const NOW = roundAt(16, 10);
 const EMPTY_ROW: SnoozeRow = { messageId: "m1", sourceId: null, sender: "priya@example.org", subject: "Venue quote", kind: "time", untilAt: null, eventKey: null, eventTitle: null, eventStart: null, person: null, personName: null, label: "", state: "snoozed", backAt: null, reason: null, createdAt: 0 };
 const NO_FACTS: WakeFacts = { events: new Map(), covered: () => false, wrote: () => null, threadReply: () => null, urgentNow: new Set() };
 const KEY = "mail:early-fixture";
+const SENT_BY_ME = { kind: "sent", id: "sent-1", from: { address: "me@example.org" }, to: [{ address: "priya@example.org" }], subject: "Re", sentAt: new Date(NOW).toISOString() } as never;
 
 let rig: MailRoundRig;
 
@@ -49,14 +50,13 @@ describe("an item put away returns early", () => {
 
   it("ignores a message from the principal's own address", async () => {
     const own = reply("reply-own", "me@example.org");
-    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), own, { kind: "sent", id: "sent-1", from: { address: "me@example.org" }, to: [{ address: "priya@example.org" }], subject: "Re", sentAt: new Date(NOW).toISOString() } as never] });
+    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), own, SENT_BY_ME] });
     rig.setNow(NOW + 120_000);
     expect((await rig.refresh()).deferred.some((entry) => entry.key === KEY)).toBe(true);
   });
 
   it("still ignores the principal's own address once the sent history is empty", async () => {
-    const sent = { kind: "sent", id: "sent-1", from: { address: "me@example.org" }, to: [{ address: "priya@example.org" }], subject: "Re", sentAt: new Date(NOW).toISOString() } as never;
-    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), sent] });
+    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), SENT_BY_ME] });
     rig.setNow(NOW + 60_000);
     await rig.refresh();
     rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), reply("reply-own", "me@example.org")] });
