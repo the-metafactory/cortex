@@ -345,6 +345,14 @@ pi gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM
 
 `pi.tools` can only narrow the read-only tools `soma_context`, `read`, `grep`, `find` and `ls`. Cortex passes them as an explicit `--tools` allowlist, so write, edit, shell, web, task and routing tools, and any tool installed later, stay unavailable. A turn on a cloud lane gets no file read or search. Every tool call and its result is recorded in the conversation. A call to a tool outside the allowlist is recorded as refused when pi answers that the tool was not found; any other result stops the turn with an error.
 
+### Expired Codex sign-in
+
+When a turn on a `openai-codex` lane fails with an expired-token error, Cortex refreshes the stored credential through Pi's own auth route (`Models.getAuth` with a long required validity, under Pi's credential-file lock) and retries the turn once on the same provider and model. It retries only when the turn has released no text and run no tool. Concurrent failures share one refresh. Cortex never copies a refresh token and never selects another engine.
+
+If the refresh is rejected, or the retry fails again, the conversation shows "Codex needs a new sign-in." with **Reconnect Codex**. The button starts Pi's own sign-in flow on the host; you open the link, paste the code if Pi asks for one, and then use **Retry** on the kept message. **Cancel sign-in** leaves the message untouched. Only this stack's principal can start, answer or cancel a sign-in. Credentials stay in Pi's `auth.json` (in `PI_CODING_AGENT_DIR`, else `~/.pi/agent`) and never reach the browser, the conversation record or logs.
+
+To check recovery against a throwaway store, set `PI_CODING_AGENT_DIR` to an empty directory for the probe stack, or run `bun scripts/desk-codex-recovery-run.ts <probe-dir>` once and sign in when asked. The script refuses the production Pi directory.
+
 pi keeps one session per conversation and lane under the stack's conversation directory (`pi-sessions`). If that session is missing, or the lane or engine changed, the next turn starts a new session with the earlier exchange from the conversation record, and the record shows that the context was reconstructed.
 
 ### Conversation tools

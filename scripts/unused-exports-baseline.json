@@ -294,7 +294,7 @@
   "src/conversations/host.ts": 6,
   "src/conversations/lock.ts": 3,
   "src/conversations/model.ts": 4,
-  "src/conversations/pi.ts": 3,
+  "src/conversations/pi.ts": 2,
   "src/conversations/tools/adapter-communication-connector.ts": 1,
   "src/conversations/tools/capabilities.ts": 4,
   "src/conversations/tools/communications.ts": 4,

@@ -2,6 +2,7 @@ import { sseResponse } from "./sse";
 import { z } from "zod";
 import type { ConversationResponse, ConversationResponseUpdate } from "../../../conversations/types";
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
+import type { CodexAuth } from "../../../conversations/codex-auth";
 import type { DiscordConversations } from "../../../conversations/discord";
 import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
 import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, ObjectRefSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
@@ -9,7 +10,7 @@ import { applyStudioOutcome, AskStartSchema, ImportSchema, startFromAsk, isImpor
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
 
-export type ConversationAccess = (() => HostStatus | null) & { discord?: () => DiscordConversations | null };
+export type ConversationAccess = (() => HostStatus | null) & { discord?: () => DiscordConversations | null; codexAuth?: () => CodexAuth | null };
 
 export const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 export const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
@@ -98,6 +99,7 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (!parsed.success) return fail(400, "The import request is not valid.");
       return reply(200, { ok: true, conversation: await importStudioSession(host, studio, parsed.data.sessionId, auth.principal) });
     }
+    if (url.pathname.startsWith("/api/conversations/codex-auth")) return await handleCodexAuth(req, url, access?.codexAuth?.() ?? null);
     const discord = access?.discord?.() ?? null;
     if (url.pathname === "/api/conversations/discord/check") {
       if (req.method !== "POST") return notAllowed("POST");
@@ -261,4 +263,42 @@ async function responseStream(host: ConversationHost, id: string, signal: AbortS
       await send(`event: response\ndata: ${JSON.stringify(update)}\n\n`);
     }, close);
   });
+}
+
+const LoginInputSchema = z.object({ id: z.string().min(1).max(64), answer: z.string().min(1).max(4096) }).strict();
+const LoginCancelSchema = z.object({ id: z.string().min(1).max(64) }).strict();
+const NO_CODEX_AUTH = "Codex sign-in is not set up on this stack.";
+
+async function handleCodexAuth(req: Request, url: URL, auth: CodexAuth | null): Promise<Response> {
+  if (!auth) return fail(503, NO_CODEX_AUTH);
+  const route = url.pathname.slice("/api/conversations/codex-auth".length);
+  if (route === "") {
+    if (req.method !== "GET") return notAllowed("GET");
+    return reply(200, { ok: true, login: auth.loginState() });
+  }
+  if (route === "/refresh") {
+    if (req.method !== "POST") return notAllowed("POST");
+    const outcome = await auth.refresh(req.signal);
+    return reply(200, outcome.ok ? { ok: true, refreshed: true } : { ok: true, refreshed: false, reason: outcome.reason });
+  }
+  if (route === "/login") {
+    if (req.method === "GET") return reply(200, { ok: true, login: auth.loginState() });
+    if (req.method !== "POST") return notAllowed("GET, POST");
+    return reply(200, { ok: true, login: auth.startLogin() });
+  }
+  if (route === "/login/input") {
+    if (req.method !== "POST") return notAllowed("POST");
+    const parsed = LoginInputSchema.safeParse(await body(req));
+    if (!parsed.success) return fail(400, "Send the sign-in id and the answer.");
+    const login = auth.answer(parsed.data.id, parsed.data.answer);
+    return login ? reply(200, { ok: true, login }) : fail(409, "The sign-in is not waiting for an answer.");
+  }
+  if (route === "/login/cancel") {
+    if (req.method !== "POST") return notAllowed("POST");
+    const parsed = LoginCancelSchema.safeParse(await body(req));
+    if (!parsed.success) return fail(400, "Send the sign-in id.");
+    const login = auth.cancel(parsed.data.id);
+    return login ? reply(200, { ok: true, login }) : fail(404, "There is no such sign-in.");
+  }
+  return fail(404, "Unknown conversation route.");
 }
