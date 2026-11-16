@@ -16,10 +16,12 @@ const post = async <T>(path: string, body: unknown, fetchImpl: FetchLike): Promi
   return { ok: false, text: line || `The request failed (HTTP ${res.status}).`, ...(parsed?.uncertain === true ? { uncertain: true as const } : {}) };
 };
 
-export async function askDesk(text: string, fetchImpl: FetchLike = fetch, area?: string): Promise<{ ok: true; proposal: DeskProposal } | { ok: false; text: string }> {
-  const r = await post<{ proposal: DeskProposal }>("/api/desk/ask", { text, ...(area ? { area } : {}) }, fetchImpl);
-  return r.ok ? { ok: true, proposal: r.body.proposal } : r;
+export async function askDesk(text: string, fetchImpl: FetchLike = fetch, area?: string, choice?: "routine"): Promise<{ ok: true; proposal: DeskProposal; proposals?: DeskProposal[] } | { ok: false; text: string }> {
+  const r = await post<{ proposal: DeskProposal; proposals?: DeskProposal[] }>("/api/desk/ask", { text, ...(area ? { area } : {}), ...(choice ? { choice } : {}) }, fetchImpl);
+  return r.ok ? { ok: true, proposal: r.body.proposal, ...(r.body.proposals ? { proposals: r.body.proposals } : {}) } : r;
 }
+
+export const ROW_NEEDS_AREA = "Choose an area for this row first. Nothing was created.";
 
 export async function createFromProposal(
   requestId: string,
@@ -27,6 +29,7 @@ export async function createFromProposal(
   fields: Record<string, unknown>,
   fetchImpl: FetchLike = fetch,
 ): Promise<{ ok: boolean; text: string; uncertain?: true }> {
+  if (kind === "row" && (typeof fields.area !== "string" || !fields.area)) return { ok: false, text: ROW_NEEDS_AREA };
   const r = await post<{ message?: string }>("/api/desk/create", { requestId, kind, fields }, fetchImpl);
   return r.ok ? { ok: true, text: r.body.message ?? "Done." } : r;
 }

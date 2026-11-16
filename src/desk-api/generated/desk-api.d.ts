@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.4.0";
+export declare const DESK_API_VERSION = "1.5.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -1278,7 +1278,8 @@ declare const ASK_KINDS: readonly [
 	"goal",
 	"calendar",
 	"routine",
-	"conversation"
+	"conversation",
+	"row"
 ];
 export type AskKind = (typeof ASK_KINDS)[number];
 export interface DeskProposal {

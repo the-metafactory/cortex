@@ -275,7 +275,7 @@ process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stri
     };
     try {
       for (const area of ["work", "unknown", ""]) {
-        const ask = await handleDeskAsk(new Request("http://localhost/api/desk/ask", { method: "POST", body: JSON.stringify({ text: "every morning at 8 read a fixed value", area }) }), runtime, { runRoutine: run }, db);
+        const ask = await handleDeskAsk(new Request("http://localhost/api/desk/ask", { method: "POST", body: JSON.stringify({ text: "every morning at 8 read a fixed value", area, choice: "routine" }) }), runtime, { runRoutine: run }, db);
         expect(ask.status).toBe(area === "work" ? 409 : 400);
         if (area === "work") expect(await ask.text()).toContain("provider restriction");
         const edit = await handleDeskRoutineEditor(new Request("http://localhost/api/desk/routine-editor", { method: "POST", body: JSON.stringify({ id: detail.id, revision: detail.revision, action: "propose", text: "use three attempts", area }) }), runtime, run);
@@ -289,7 +289,7 @@ process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stri
         const allowed = { ...runtime, options: { ...options, areas: [...options.areas, { id: "personal", label: "Personal", color: "", repos: [], goals: [], policy: "cloud" as const }, { id: "default-policy", label: "Default", color: "", repos: [], goals: [] }] } };
         const edit = await handleDeskRoutineEditor(new Request("http://localhost/api/desk/routine-editor", { method: "POST", body: JSON.stringify({ id: detail.id, revision: detail.revision, action: "propose", text: "use three attempts", area }) }), allowed, run);
         expect(edit.status).toBe(200);
-        const ask = await handleDeskAsk(new Request("http://localhost/api/desk/ask", { method: "POST", body: JSON.stringify({ text: "every morning at 8 read a fixed value", area }) }), allowed, { runRoutine: run }, db);
+        const ask = await handleDeskAsk(new Request("http://localhost/api/desk/ask", { method: "POST", body: JSON.stringify({ text: "every morning at 8 read a fixed value", area, choice: "routine" }) }), allowed, { runRoutine: run }, db);
         expect(ask.status).toBe(200);
       }
       expect(modelCalls).toBe(6);

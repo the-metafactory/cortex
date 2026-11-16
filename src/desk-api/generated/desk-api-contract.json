@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -276,6 +276,7 @@
     "FIELD_SCHEMAS: note",
     "FIELD_SCHEMAS: reminder",
     "FIELD_SCHEMAS: routine",
+    "FIELD_SCHEMAS: row",
     "FIELD_SCHEMAS: task",
     "HANDOFF_KEY_PREFIX: \"assistant:\"",
     "MAIL_ROUND_ACTIONS: \"put-back\"",
