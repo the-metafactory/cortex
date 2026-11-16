@@ -232,3 +232,51 @@ describe("resolveSecretRef — call-time resolution only", () => {
     expect(SECRET_REF_PATTERN.test("env:X")).toBe(true);
   });
 });
+
+describe("resolveSecretRef — keychain: references", () => {
+  const darwin = { platform: "darwin", username: "tester" };
+
+  test("reads the item with service ai.meta-factory.cortex.cortex.NAME and the current user", () => {
+    const calls: string[][] = [];
+    const value = resolveSecretRef("keychain:ANTHROPIC_API_KEY", {}, {
+      ...darwin,
+      security: (args) => {
+        calls.push(args);
+        return { status: 0, stdout: "sk-test-value\n" };
+      },
+    });
+    expect(value).toBe("sk-test-value");
+    expect(calls[0]).toEqual([
+      "find-generic-password", "-s", "ai.meta-factory.cortex.cortex.ANTHROPIC_API_KEY",
+      "-a", "tester", "-w",
+    ]);
+  });
+
+  test("a missing item (exit 44) fails naming the reference and the creating command, without a value", () => {
+    let message = "";
+    try {
+      resolveSecretRef("keychain:MISSING_KEY", {}, { ...darwin, security: () => ({ status: 44, stdout: "" }) });
+    } catch (err) {
+      expect(err).toBeInstanceOf(SecretRefResolutionError);
+      message = (err as Error).message;
+    }
+    expect(message).toContain("keychain:MISSING_KEY");
+    expect(message).toContain("security add-generic-password -s ai.meta-factory.cortex.cortex.MISSING_KEY");
+  });
+
+  test("a failed Keychain read throws SecretRefResolutionError", () => {
+    expect(() =>
+      resolveSecretRef("keychain:K", {}, { ...darwin, security: () => ({ status: 1, stdout: "secret-leak" }) }),
+    ).toThrow(SecretRefResolutionError);
+  });
+
+  test("a non-macOS host is refused as macOS-only", () => {
+    expect(() => resolveSecretRef("keychain:K", {}, { platform: "linux" })).toThrow(/macOS-only/);
+  });
+
+  test("the schema accepts keychain:NAME on macOS and rejects it elsewhere", () => {
+    const parsed = SecretRefSchema.safeParse("keychain:ANTHROPIC_API_KEY");
+    expect(parsed.success).toBe(process.platform === "darwin");
+    expect(SecretRefSchema.safeParse("keychain:").success).toBe(false);
+  });
+});

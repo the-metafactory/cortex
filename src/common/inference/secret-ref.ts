@@ -23,6 +23,7 @@
 // reference keeps the value OFF the object entirely (D6 / the redaction AC).
 
 import { z } from "zod/v4";
+import { lookupKeychainItem, type SurfaceSecretStoreOptions } from "../config/surface-secret-store";
 
 /**
  * A secret reference is exactly `env:NAME`, where NAME is a conventional
@@ -34,29 +35,37 @@ import { z } from "zod/v4";
  */
 export const SECRET_REF_PATTERN = /^env:([A-Za-z_][A-Za-z0-9_]*)$/;
 
+const KEYCHAIN_REF_PATTERN = /^keychain:([A-Z0-9_]+)$/;
+
+const KEYCHAIN_MACOS_ONLY_MESSAGE =
+  "`keychain:` secret references are macOS-only; use `env:NAME` on this host";
+
 /**
- * Zod schema for a secret reference. Validates the `env:NAME` SHAPE only — it
- * does NOT read the environment, so parsing a config never resolves (and never
- * captures) a secret value. A non-`env:` literal is REJECTED with a descriptive
- * message pointing the principal at the reference convention.
+ * Zod schema for a secret reference: `env:NAME` or `keychain:NAME`. Validates
+ * the SHAPE only; it never reads the environment or the Keychain. A
+ * `keychain:` reference is rejected on a non-macOS host.
  */
 export const SecretRefSchema = z
   .string()
   .regex(
-    SECRET_REF_PATTERN,
-    "must be a secret reference of the form `env:NAME` (e.g. `env:ANTHROPIC_API_KEY`), " +
-      "never a literal secret — the value is resolved from that environment variable at " +
+    new RegExp(`${SECRET_REF_PATTERN.source}|${KEYCHAIN_REF_PATTERN.source}`),
+    "must be a secret reference of the form `env:NAME` (e.g. `env:ANTHROPIC_API_KEY`) or " +
+      "`keychain:NAME` (macOS Keychain), never a literal secret — the value is resolved at " +
       "call time and never stored in config",
-  );
-
-/** A validated `env:NAME` secret reference. */
-export type SecretRef = z.infer<typeof SecretRefSchema>;
+  )
+  .refine((ref) => !KEYCHAIN_REF_PATTERN.test(ref) || process.platform === "darwin", {
+    message: KEYCHAIN_MACOS_ONLY_MESSAGE,
+  });
 
 /**
  * Extract the environment-variable NAME from a secret reference, or `undefined`
  * if the string is not a well-formed `env:NAME` reference. Does not touch the
  * environment.
  */
+export function secretRefKeychainName(ref: string): string | undefined {
+  return KEYCHAIN_REF_PATTERN.exec(ref)?.[1];
+}
+
 export function secretRefEnvVar(ref: string): string | undefined {
   return SECRET_REF_PATTERN.exec(ref)?.[1];
 }
@@ -70,9 +79,9 @@ export function secretRefEnvVar(ref: string): string | undefined {
 export class SecretRefResolutionError extends Error {
   public readonly envVar: string;
 
-  constructor(envVar: string) {
+  constructor(envVar: string, message?: string) {
     super(
-      `inference: secret reference env:${envVar} could not be resolved — ` +
+      message ?? `inference: secret reference env:${envVar} could not be resolved — ` +
         `environment variable ${envVar} is unset or empty. Export ${envVar} in the ` +
         `cortex daemon's environment before it issues a model request. The value is ` +
         `resolved at call time and never stored in config.`,
@@ -94,10 +103,35 @@ export class SecretRefResolutionError extends Error {
  *
  * `env` is injectable for testing; defaults to `process.env`.
  */
+export interface ResolveSecretRefOptions {
+  platform?: string;
+  security?: SurfaceSecretStoreOptions["security"];
+  username?: string;
+}
+
+function resolveKeychainRef(name: string, options: ResolveSecretRefOptions): string {
+  const ref = `keychain:${name}`;
+  if ((options.platform ?? process.platform) !== "darwin") {
+    throw new SecretRefResolutionError(name, `inference: ${ref} — ${KEYCHAIN_MACOS_ONLY_MESSAGE}.`);
+  }
+  const lookup = lookupKeychainItem(name, "cortex", options);
+  if (lookup.kind === "found" && lookup.value.trim() !== "") return lookup.value;
+  const service = `ai.meta-factory.cortex.cortex.${name}`;
+  const reason = lookup.kind === "failed" ? "the Keychain read failed" : "no such Keychain item exists";
+  throw new SecretRefResolutionError(
+    name,
+    `inference: secret reference ${ref} could not be resolved — ${reason}. Create it with: ` +
+      `security add-generic-password -s ${service} -a "$USER" -w`,
+  );
+}
+
 export function resolveSecretRef(
   ref: string,
   env: Record<string, string | undefined> = process.env,
+  options: ResolveSecretRefOptions = {},
 ): string {
+  const keychainName = secretRefKeychainName(ref);
+  if (keychainName !== undefined) return resolveKeychainRef(keychainName, options);
   const envVar = secretRefEnvVar(ref);
   if (envVar === undefined) {
     throw new SecretRefResolutionError(ref);
