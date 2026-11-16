@@ -20,7 +20,7 @@ export const CLOSE_RETRY_MS = 10 * 60_000;
 export const MAX_CLOSE_TRIES = 12;
 const MAX_ERROR = 300;
 
-const CloseAnswer = z.object({ id: z.string().min(1), message: z.string().max(300).optional() });
+export const CloseAnswer = z.object({ id: z.string().min(1), message: z.string().max(300).optional() });
 const UNREADABLE = "The task closer answered in a form the Desk cannot read.";
 const DECIDED = "state IN ('approved', 'discarded')";
 

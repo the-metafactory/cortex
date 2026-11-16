@@ -7,6 +7,18 @@ export interface Recurrence {
     count?: number;
     until?: string;
     timesDone?: number;
+    mode?: RecurrenceMode;
+    anchor?: string;
+    occurrence?: string;
+}
+export type RecurrenceMode = "calendar" | "completion";
+export interface RecurrenceOutcome {
+    taskId: NodeId;
+    planned: string;
+    status: "completed" | "missed" | "skipped";
+    completedOn?: string;
+    skippedOn?: string;
+    recordedOn: string;
 }
 export interface OutlineNode {
     id: NodeId;
@@ -96,4 +108,5 @@ export interface AppState {
     dayState: DayState | null;
     history: SchedHistory;
     contexts?: ContextDef[];
+    outcomes?: RecurrenceOutcome[];
 }

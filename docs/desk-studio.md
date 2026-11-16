@@ -211,7 +211,7 @@ Goals, events and people link to their `href` when the material or the event has
 
 | act | fields | writes |
 | --- | --- | --- |
-| `spar` | `thread`, `mode` | enqueues native `ivy-think`; its eventual note is a separate git commit |
+| `spar` | `thread`, `mode` | enqueues native `assistant-think`; its eventual note is a separate git commit |
 | `respond` | `thread`, `text` | a Responses entry; clears "(name) waits on you" |
 | `keep`, `dismiss` | `thread`, `note` (the note's heading time) | the note's `status:`; keeping a `stand` also replaces "Where I stand" |
 | `park` | `thread` | `state: parked` |
@@ -256,7 +256,7 @@ Every successful filing appears in Done for you, with the reason and Undo. Undo 
 
 ## Sparring and Think now
 
-On an open thread, Think now, Grill me, Argue the other side, Red team and First principles enqueue Ranger's configured `ivy-think` job. Each persona adds a “What would X say?” button. A thread's personas are the names in `mc.desk.studio.personas` (optional, at most 20 names of up to 100 characters), then the thread's people: its People group under Relates to, that is material items of kind `person`, `people` or `contact` and kept person relations, in material order. At most 10 thread people are offered; a name over 100 characters or with a line break is not, and a name that is also configured appears once. Open relation proposals and free text never add a persona. `GET /api/desk/studio` serves each thread's list as `personas: [{ "name": "Nico", "from": "thread" }]`, with `from` `config` or `thread`. The Desk uses the existing `mc.desk.ranger.bin` and optional `config` settings. Ranger's Studio directory must match this Studio.
+On an open thread, Think now, Grill me, Argue the other side, Red team and First principles enqueue Ranger's configured `assistant-think` job. The stack's Ranger config must define a job named `assistant-think`; without it, sparring is refused with "Ranger did not confirm this request". A stack whose Ranger config defines that job as `ivy-think` renames it there before this deploys. Each persona adds a “What would X say?” button. A thread's personas are the names in `mc.desk.studio.personas` (optional, at most 20 names of up to 100 characters), then the thread's people: its People group under Relates to, that is material items of kind `person`, `people` or `contact` and kept person relations, in material order. At most 10 thread people are offered; a name over 100 characters or with a line break is not, and a name that is also configured appears once. Open relation proposals and free text never add a persona. `GET /api/desk/studio` serves each thread's list as `personas: [{ "name": "Nico", "from": "thread" }]`, with `from` `config` or `thread`. The Desk uses the existing `mc.desk.ranger.bin` and optional `config` settings. Ranger's Studio directory must match this Studio.
 
 The `spar` modes are `think`, `grill`, `other-side`, `red-team`, `first-principles` and `persona:<name>`, where the name is one of the thread's personas; any other name is refused with 400. Every request carries its explicit mode and the trigger `You asked: <mode>`. An explicit mode bypasses the automatic once-per-thread daily limit. It still consumes the native daily budget for the thread's strictest model policy; started failed attempts also count. Budgets reset at midnight UTC. When the budget is spent, buttons explain why they are disabled. A request already queued remains queued with Ranger's deferral reason.
 

@@ -10,6 +10,7 @@ export const WRITER_KINDS = ["calendar", "task", "goal", "note", "reminder"] as 
 export type WriterKind = (typeof WRITER_KINDS)[number];
 export type DeskWriters = Partial<Record<WriterKind, string[]>>;
 export type DeskWriterOwners = Partial<Record<WriterKind, string>>;
+export interface DeskWriterLabels { note?: { objects: string; noun: string; fallback: string } }
 const KEPT_ON_DESK: readonly AskKind[] = ["reminder", "note"];
 
 export function writableKinds(writers: DeskWriters, studio = false): Set<AskKind> {
@@ -24,7 +25,7 @@ export interface WriterResult {
 
 export type WriterRunner = (argv: string[], stdin: string, timeoutMs: number) => Promise<WriterResult>;
 
-const WriterAnswer = z.object({
+export const WriterAnswer = z.object({
   id: z.string().trim().min(1),
   url: z.string().regex(/^https?:/i).optional(),
   message: z.string().max(300).optional(),

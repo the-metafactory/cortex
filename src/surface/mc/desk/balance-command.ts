@@ -24,6 +24,7 @@ export const BalanceCommandSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("outline-move"), revision, id, parent: id, index: z.number().int().nonnegative().optional() }),
   z.object({ op: z.literal("outline-file"), revision, id, parent: id }),
   z.object({ op: z.literal("outline-complete"), revision, id, confirm: z.literal(true) }),
+  z.object({ op: z.literal("outline-skip"), revision, id, confirm: z.literal(true) }),
   z.object({ op: z.literal("outline-reopen"), revision, id, confirm: z.literal(true) }),
   z.object({ op: z.literal("outline-remove"), revision, id, confirm: z.literal(true) }),
 ]);

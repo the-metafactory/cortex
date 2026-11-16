@@ -9,7 +9,7 @@ const FIXTURES = join(ROOT, "src/conversations/domain-adapters/__tests__/fixture
 const GREENHOUSE = join(FIXTURES, "greenhouse");
 const CONSUMER_TIMEOUT_MS = 15_000;
 const TYPECHECK_TIMEOUT_MS = 60_000;
-const CONSUMERS = ["run.ts", "run-mail.ts"] as const;
+const CONSUMERS = ["run.ts", "run-mail.ts", "run-mail-action.ts"] as const;
 /** `run.ts` runs the capability and failure checks; `run-mail.ts` runs the synthetic `tideway` Mail read package with listed mail on three connections. */
 export type ConformanceConsumer = (typeof CONSUMERS)[number];
 
@@ -57,8 +57,9 @@ export async function probeConformanceExport(fixtureDir = GREENHOUSE, consumer: 
 
 if (import.meta.main) {
   const mail = process.argv.includes("--mail");
+  const action = process.argv.includes("--mail-action");
   const fixture = process.argv.slice(2).find(arg => !arg.startsWith("--"));
-  const result = process.argv[2] === "--typecheck" ? await checkConformanceExportTypes() : await probeConformanceExport(fixture, mail ? "run-mail.ts" : "run.ts");
+  const result = process.argv[2] === "--typecheck" ? await checkConformanceExportTypes() : await probeConformanceExport(fixture, action ? "run-mail-action.ts" : mail ? "run-mail.ts" : "run.ts");
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   process.exit(result.exitCode);

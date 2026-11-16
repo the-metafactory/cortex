@@ -5011,6 +5011,7 @@ export async function startCortex(
           },
           somaBin: config.mc.desk.soma.bin ? expandTilde(config.mc.desk.soma.bin) : "",
           areas: config.mc.desk.areas,
+          conversationProjects: config.mc.desk.conversations?.tools?.projects,
           ...(config.mc.desk.studio ? { studio: resolveStudio(config.mc.desk.studio, expandTilde) } : {}),
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,

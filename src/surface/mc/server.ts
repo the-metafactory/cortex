@@ -97,6 +97,7 @@ import { withActPhrase } from "./desk/act-result";
 import { handleDeskTaskHandoff } from "./api/desk-task-handoff";
 import type { TaskDispatchBus } from "./desk/task-handoff";
 import { handleDeskLinks } from "./api/desk-links";
+import { DESK_MEETING_BRIEF_PATH, handleDeskMeetingBrief } from "./api/desk-meeting-brief";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
 import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
 import { handleDeskBalanceSurfaces } from "./api/desk-balance-surfaces";
@@ -136,10 +137,12 @@ import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { DESK_OUTLINE_ASK_PATH, handleDeskOutlineAsk } from "./api/desk-outline-ask";
+import { DESK_OUTLINE_HISTORY_PATH, handleDeskOutlineHistory } from "./api/desk-outline-history";
 import { handleConversations, importedSessions, type ConversationAccess } from "./api/conversations";
 import { conversationWebPrincipal } from "../../conversations/discord-dm";
 import { conversationSources } from "./desk/conversation-sources";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
+import { DecisionStore } from "./desk/decisions";
 import { EscalationRulings, RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
 import { DigestFlagger } from "./desk/mail-digest";
 import { WaitingClassifier } from "./desk/mail-waiting";
@@ -198,7 +201,31 @@ export const DASHBOARD_DIST = join(
   "dashboard-v2"
 );
 
-const DASHBOARD_ASSET_EXT = /^\/[\w.-]+\.(js|css|svg|png|jpe?g|gif|webp|ico|map|woff2?)$/;
+const DASHBOARD_ASSET_EXT = /^[\w.-]+\.(js|css|svg|png|jpe?g|gif|webp|ico|map|woff2?)$/;
+
+const CONSOLE_PATH = "/mc";
+
+function dashboardAssetName(pathname: string, prefix: string): string | undefined {
+  const name = pathname.slice(prefix.length);
+  if (name.length === 0 || name.includes("..")) return undefined;
+  return DASHBOARD_ASSET_EXT.test(name) ? name : undefined;
+}
+
+function dashboardShellResponse(path: string, origin: string): Response {
+  return new Response(Bun.file(path), {
+    headers: { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(origin) },
+  });
+}
+
+async function bundledAssetResponse(root: string, name: string): Promise<Response> {
+  const file = Bun.file(join(root, name));
+  if (!(await file.exists())) return new Response("Not Found", { status: 404 });
+  return new Response(file);
+}
+
+function consoleRedirect(search: string): Response {
+  return new Response(null, { status: 302, headers: { location: `${CONSOLE_PATH}/${search}` } });
+}
 
 async function externalUiResponse(root: string, name: string, headers?: HeadersInit): Promise<Response> {
   try {
@@ -263,6 +290,7 @@ export interface MissionControlViews {
 
 export interface StartServerOptions extends MissionControlViews {
   processManager?: ProcessManager;
+  dashboardDist?: string;
   degraded?: DegradedInfo;
   spawn?: SpawnFn;
   notify?: MaybeNotifyDeps;
@@ -278,6 +306,7 @@ export function startServer(
   options: StartServerOptions = {}
 ): ServerContext {
   const uiDirectory = config.ui ? resolveUiDirectory(config.ui.dir) : undefined;
+  const dashboardDist = options.dashboardDist ?? DASHBOARD_DIST;
   if ([options.drafts, options.graphDrafts, options.balanceDrafts, options.flowDrafts].filter(Boolean).length > 1) throw new Error("Configure only one of drafts, graphDrafts, balanceDrafts or flowDrafts");
   const editor = options.graphDrafts
     ? deskGraphDraftEditor(options.graphDrafts.host, options.graphDrafts.deps, options.graphDrafts.options)
@@ -299,7 +328,7 @@ export function startServer(
   } : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
   const routineCapabilities = () => localRoutineCapabilities(options.agentPresence?.() ?? null);
-  const deskRuntime: DeskRuntime = { conversations: () => options.conversations?.()?.state === "ready", routineCapabilities, ...(options.deskDispatch ? { dispatch: options.deskDispatch } : {}), waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(routineCapabilities), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(options.desk?.somaBin ? { escalationRulings: new EscalationRulings(options.desk.somaBin) } : {}), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.mailClassifier?.local ? { localMailClassifier: new MailClassifier(options.desk.mailClassifier.local, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes, assistantNameOf(options.desk), sourceBoundary(options.desk)), undefined, taskCloser(options.desk.ask, spawnWithStdin)) } : {}) };
+  const deskRuntime: DeskRuntime = { conversations: () => options.conversations?.()?.state === "ready", routineCapabilities, ...(options.deskDispatch ? { dispatch: options.deskDispatch } : {}), waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(routineCapabilities), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), decisions: new DecisionStore(db), ...(options.desk?.somaBin ? { escalationRulings: new EscalationRulings(options.desk.somaBin, undefined, Date.now, db) } : {}), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.mailClassifier?.local ? { localMailClassifier: new MailClassifier(options.desk.mailClassifier.local, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes, assistantNameOf(options.desk), sourceBoundary(options.desk)), undefined, taskCloser(options.desk.ask, spawnWithStdin)) } : {}) };
   const conversationHost = options.conversations?.();
   if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, ...(options.lifecycles ? { lifecycles: options.lifecycles } : {}), desk: () => deskRuntime.options, deskItems: () => currentDayItems(db, deskRuntime, deskVigil(options)), listedMail: key => findListedMail(deskRuntime.sourceCache?.cached() ?? [], key), lookupMail: key => resolveListedMail(deskRuntime.sourceCache?.cached() ?? [], key), ledger: deskRuntime.ledger }));
   const maxClients = config.ws.maxClients;
@@ -449,23 +478,35 @@ export function startServer(
         ));
       }
 
-      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-        const shellHeaders = { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) };
-        if (uiDirectory) return externalUiResponse(uiDirectory, "index.html", shellHeaders);
-        return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
-          headers: shellHeaders,
-        });
+      if (req.method === "GET" && (url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/`)) {
+        if (url.pathname === CONSOLE_PATH) return consoleRedirect(url.search);
+        return dashboardShellResponse(join(dashboardDist, "index.html"), url.origin);
       }
 
-      if (req.method === "GET" && url.pathname.startsWith("/wake/")) return wakeAssetResponse(url.pathname, DASHBOARD_DIST, url.searchParams.get("sha256"));
+      if (req.method === "GET" && url.pathname === `${CONSOLE_PATH}/index.html`) {
+        return dashboardShellResponse(join(dashboardDist, "index.html"), url.origin);
+      }
 
-      if (req.method === "GET" && DASHBOARD_ASSET_EXT.test(url.pathname)) {
-        const rel = url.pathname.slice(1);
-        if (rel.includes("..") || rel.length === 0) {
-          return new Response("Not Found", { status: 404 });
+      if (req.method === "GET" && url.pathname.startsWith(`${CONSOLE_PATH}/`)) {
+        const name = dashboardAssetName(url.pathname, `${CONSOLE_PATH}/`);
+        if (name === undefined) return new Response("Not Found", { status: 404 });
+        return bundledAssetResponse(dashboardDist, name);
+      }
+
+      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+        if (uiDirectory) return externalUiResponse(uiDirectory, "index.html", { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) });
+        if (url.pathname === "/") return consoleRedirect(url.search);
+        return dashboardShellResponse(join(dashboardDist, "index.html"), url.origin);
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/wake/")) return wakeAssetResponse(url.pathname, dashboardDist, url.searchParams.get("sha256"));
+
+      if (req.method === "GET") {
+        const name = dashboardAssetName(url.pathname, "/");
+        if (name !== undefined) {
+          if (uiDirectory) return externalUiResponse(uiDirectory, name);
+          return bundledAssetResponse(dashboardDist, name);
         }
-        if (uiDirectory) return externalUiResponse(uiDirectory, rel);
-        return new Response(Bun.file(join(DASHBOARD_DIST, rel)));
       }
 
       return new Response("Not Found", { status: 404 });
@@ -598,11 +639,12 @@ async function handleApi(
   if (pathname === DESK_ADAPTER_ASSET_PATH || pathname.startsWith(`${DESK_ADAPTER_ASSET_PATH}/`)) return handleDeskAdapterAssets(req, url, guard, adapterAssets);
 
   const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
-  if (deskFlowsRead || (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname))) {
+  const deskBriefRead = pathname === DESK_MEETING_BRIEF_PATH;
+  if (deskFlowsRead || deskBriefRead || (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname))) {
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
   }
-  if (deskFlowsRead || isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
+  if (deskFlowsRead || deskBriefRead || isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
     const authResult = await enforceMutationAuth(req, guard);
     if (authResult instanceof Response) return authResult;
   }
@@ -660,6 +702,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/task-handoff") return handleDeskTaskHandoff(req, db, desk);
   if (pathname === "/api/desk/links") return handleDeskLinks(req, db, desk);
+  if (pathname === DESK_MEETING_BRIEF_PATH) return handleDeskMeetingBrief(req, db, desk);
 
   if (pathname === "/api/desk/mail/rules") return handleDeskMailRules(req, db, desk);
 
@@ -711,6 +754,7 @@ async function handleApi(
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
   if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk, { imported: importedSessions(conversations) });
   if (pathname === DESK_OUTLINE_ASK_PATH) return handleDeskOutlineAsk(req, db, desk);
+  if (pathname === DESK_OUTLINE_HISTORY_PATH) return handleDeskOutlineHistory(req, db, desk);
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
