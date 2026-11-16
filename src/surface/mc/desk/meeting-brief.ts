@@ -11,6 +11,7 @@ import type { StudioView } from "./studio/view";
 import { readBalanceNode } from "./work-readers";
 import { withSyncedBalance } from "./studio-my-day";
 import type { SourceReading } from "./sources/command";
+import { sourceBoundary, type LocalSources } from "./source-boundary";
 import {
   gapWording, previousIdentified, previousUnavailable, PREVIOUS_MEETING_UNIDENTIFIED, SYNTHESIS_NOT_CONFIGURED,
   type BriefFact, type BriefPreviousMeeting, type BriefGap, type BriefGapReason, type BriefSourceIdentity, type BriefSourceRef, type MeetingBrief,
@@ -30,7 +31,7 @@ const REVISION_VERSION = 2;
 type UnreadableReason = Exclude<BriefGapReason, "no-linked-material">;
 
 export type BriefRead =
-  | { ok: true; identity: BriefSourceIdentity; text: string; excerpt: string; link?: string; fingerprint: string }
+  | { ok: true; identity: BriefSourceIdentity; text: string; excerpt: string; link?: string; fingerprint: string; local?: boolean }
   | { ok: false; reason: UnreadableReason; identity: BriefSourceIdentity; needsRelink?: true };
 
 type BriefReader = (row: LinkRow) => BriefRead | Promise<BriefRead>;
@@ -39,6 +40,7 @@ export type BriefReaders = Record<LinkRow["fromKind"], BriefReader>;
 
 export interface BriefDeps {
   now?: () => number;
+  synthesisModel?: import("./meeting-brief-synthesis").SynthesisModel;
   readers?: Partial<BriefReaders>;
 }
 
@@ -52,7 +54,7 @@ const unreadable = (reason: UnreadableReason, identity: BriefSourceIdentity): Br
 
 const mailIdentity = (item: string, connection?: string): BriefSourceIdentity => ({ kind: "mail", adapter: null, owner: "desk-source-command", item, ...(connection ? { connection } : {}) });
 
-function readMail(row: LinkRow, readings: readonly SourceReading[], configured: readonly string[]): BriefRead {
+function readMail(row: LinkRow, readings: readonly SourceReading[], configured: readonly string[], boundary: LocalSources): BriefRead {
   const account = row.mail?.account ?? null;
   const item = row.fromKey;
   const connection = row.mail?.sourceId;
@@ -66,7 +68,7 @@ function readMail(row: LinkRow, readings: readonly SourceReading[], configured: 
     const { mail, reading } = hit;
     const excerpt = clip(mail.firstParagraph ?? mail.subject);
     return {
-      ok: true, identity: mailIdentity(item, reading.id), text: `Mail from ${mail.from.name ?? mail.from.address}: ${clip(mail.subject)}`, excerpt,
+      ok: true, identity: mailIdentity(item, reading.id), local: boundary.has(reading.id), text: `Mail from ${mail.from.name ?? mail.from.address}: ${clip(mail.subject)}`, excerpt,
       ...(mail.url ? { link: mail.url } : {}), fingerprint: digest([mail.subject, mail.from.address, mail.receivedAt, mail.firstParagraph ?? null, mail.url ?? null]),
     };
   }
@@ -96,7 +98,7 @@ function readTask(db: Database, runtime: DeskRuntime, row: LinkRow, loaded: { st
   const node = read.node;
   const note = node.note ? clip(node.note) : "";
   return {
-    ok: true, identity, text: `Task${node.done ? " (done)" : ""}: ${clip(node.title)}`, excerpt: note || clip(node.title),
+    ok: true, identity, local: read.area.policy !== "cloud", text: `Task${node.done ? " (done)" : ""}: ${clip(node.title)}`, excerpt: note || clip(node.title),
     ...(node.external?.url ? { link: node.external.url } : {}), fingerprint: digest([node.title, node.note ?? null, node.done ?? false, node.dueDate ?? null, node.external?.url ?? null]),
   };
 }
@@ -108,7 +110,7 @@ function readThread(row: LinkRow, loaded: { studio: Studio } | null, studioConfi
   const thread = loaded?.studio ? [...loaded.studio.active, ...loaded.studio.parked, ...loaded.studio.closed].find((t) => t.slug === slug) : undefined;
   if (!thread) return unreadable("read-failed", identity);
   return {
-    ok: true, identity, text: `Studio thread: ${clip(thread.question)}`, excerpt: clip(thread.stand || thread.question),
+    ok: true, identity, local: thread.policy !== "cloud", text: `Studio thread: ${clip(thread.question)}`, excerpt: clip(thread.stand || thread.question),
     fingerprint: digest([thread.question, thread.stand, thread.state, thread.outcomeText, thread.policy]),
   };
 }
@@ -126,7 +128,7 @@ async function defaultReaders(db: Database, runtime: DeskRuntime, now: number): 
   const loaded = await loadStudio(db, runtime, now);
   const openNotes = new Map(listOpenNotes(db).map((n) => [`note:${n.id}`, n]));
   return {
-    mail: (row) => readMail(row, readings, desk?.sources.map(source => source.id) ?? []),
+    mail: (row) => readMail(row, readings, desk?.sources.map(source => source.id) ?? [], desk ? sourceBoundary(desk) : sourceBoundary({ areas: [], sources: [] })),
     task: (row) => readTask(db, runtime, row, loaded),
     thread: (row) => readThread(row, loaded, desk?.studio !== undefined),
     note: (row) => readNote(openNotes, row),
@@ -160,8 +162,14 @@ export function resolveMeeting(runtime: DeskRuntime, eventKey: string): MeetingF
   return { title: event.title, at: event.at, end: event.end, connection: source?.id ?? null, fingerprint: digest([source?.events.find(e => `cal:${source.id}:${e.id}` === eventKey), config]) };
 }
 
-interface BriefEvidence {
+export interface EvidenceFact {
+  fact: BriefFact;
+  local: boolean;
+}
+
+export interface BriefEvidence {
   facts: BriefFact[];
+  snapshot: EvidenceFact[];
   gaps: BriefGap[];
   previousMeeting: BriefPreviousMeeting;
   revision: string;
@@ -172,6 +180,7 @@ const emptyMeetingGap = (eventKey: string, meeting: MeetingFacts): BriefGap =>
 
 interface Gathered {
   facts: BriefFact[];
+  locals: [string, boolean][];
   gaps: BriefGap[];
   fingerprints: [string, string][];
 }
@@ -183,6 +192,7 @@ async function gatherLinked(db: Database, eventKey: string, meeting: MeetingFact
   const facts = new Map<string, BriefFact>();
   const gaps = new Map<string, BriefGap>();
   const fingerprints = new Map<string, string>();
+  const locals = new Map<string, boolean>();
   if (rows.length === 0) {
     const gap = emptyMeetingGap(eventKey, meeting);
     gaps.set(gap.id, gap);
@@ -197,10 +207,11 @@ async function gatherLinked(db: Database, eventKey: string, meeting: MeetingFact
         const fact = factOf(result);
         facts.set(fact.id, fact);
         fingerprints.set(fact.id, result.fingerprint);
+        locals.set(fact.id, result.local !== false);
       }
     }
   }
-  return { facts: [...facts.values()], gaps: [...gaps.values()], fingerprints: [...fingerprints.entries()].sort() };
+  return { facts: [...facts.values()], gaps: [...gaps.values()], locals: [...locals.entries()].sort(), fingerprints: [...fingerprints.entries()].sort() };
 }
 
 type PreviousFault = "self" | "not-earlier";
@@ -208,18 +219,32 @@ type PreviousFault = "self" | "not-earlier";
 export const previousFault = (eventKey: string, current: MeetingFacts, previousKey: string, previous: MeetingFacts): PreviousFault | null =>
   previousKey === eventKey ? "self" : previous.at >= current.at ? "not-earlier" : null;
 
-async function gatherPrevious(db: Database, runtime: DeskRuntime, eventKey: string, meeting: MeetingFacts, readers: LazyReaders): Promise<{ previousMeeting: BriefPreviousMeeting; fingerprint: unknown }> {
+async function gatherPrevious(db: Database, runtime: DeskRuntime, eventKey: string, meeting: MeetingFacts, readers: LazyReaders): Promise<{ previousMeeting: BriefPreviousMeeting; fingerprint: unknown; gathered: Gathered | null }> {
   const relation = readPreviousRelation(db, eventKey);
-  if (!relation) return { previousMeeting: PREVIOUS_MEETING_UNIDENTIFIED, fingerprint: null };
+  if (!relation) return { previousMeeting: PREVIOUS_MEETING_UNIDENTIFIED, fingerprint: null, gathered: null };
   const previous = resolveMeeting(runtime, relation.previousEvent);
   const readable = previous !== null && previous.connection === relation.previousConnection && meeting.connection === relation.eventConnection && previousFault(eventKey, meeting, relation.previousEvent, previous) === null;
-  if (!previous || !readable) return { previousMeeting: previousUnavailable(relation.previousEvent), fingerprint: [relation.previousEvent, "unavailable"] };
+  if (!previous || !readable) return { previousMeeting: previousUnavailable(relation.previousEvent), fingerprint: [relation.previousEvent, "unavailable"], gathered: null };
   const gathered = await gatherLinked(db, relation.previousEvent, previous, readers);
   return {
+    gathered,
     previousMeeting: previousIdentified(relation.previousEvent, gathered.facts, gathered.gaps),
     fingerprint: [relation.previousEvent, previous.fingerprint, previous.at, previous.end, gathered.fingerprints, gathered.gaps.map((g) => [g.id, g.reason]).sort()],
   };
 }
+
+const snapshotOf = (...sources: (Gathered | null)[]): EvidenceFact[] => {
+  const byId = new Map<string, EvidenceFact>();
+  for (const gathered of sources) {
+    const locals = new Map(gathered?.locals ?? []);
+    for (const fact of gathered?.facts ?? []) {
+      const local = locals.get(fact.id) !== false;
+      const seen = byId.get(fact.id);
+      byId.set(fact.id, { fact: seen?.fact ?? fact, local: local || seen?.local === true });
+    }
+  }
+  return [...byId.values()];
+};
 
 export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKey: string, meeting: MeetingFacts, deps: BriefDeps = {}): Promise<BriefEvidence> {
   let loaded: Promise<BriefReaders> | undefined;
@@ -234,10 +259,12 @@ export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKe
     runtime.options?.sources,
     currentReadings(runtime).map(reading => [reading.id, reading.error !== null, reading.dropped, reading.problems, reading.capabilities, reading.calendarCoverage]),
     current.fingerprints,
+    current.locals,
     current.gaps.map((g) => [g.id, g.reason]).sort(),
     previous.fingerprint,
+    previous.gathered?.locals ?? null,
   ]);
-  return { facts: current.facts, gaps: current.gaps, previousMeeting: previous.previousMeeting, revision };
+  return { facts: current.facts, snapshot: snapshotOf(current, previous.gathered), gaps: current.gaps, previousMeeting: previous.previousMeeting, revision };
 }
 
 const readRow = async (readers: BriefReaders, row: LinkRow): Promise<BriefRead> => {
@@ -249,7 +276,7 @@ const readRow = async (readers: BriefReaders, row: LinkRow): Promise<BriefRead> 
   }
 };
 
-export const briefOf = (eventKey: string, evidence: BriefEvidence, preparedAt: number): MeetingBrief => ({
+export const briefOf = (eventKey: string, evidence: Pick<BriefEvidence, "facts" | "gaps" | "previousMeeting" | "revision">, preparedAt: number): MeetingBrief => ({
   event: eventKey,
   revision: evidence.revision,
   preparedAt: new Date(preparedAt).toISOString(),
@@ -276,4 +303,5 @@ export const storePrepared = (db: Database, brief: MeetingBrief, preparedAt: num
 
 export const dropPrepared = (db: Database, eventKey: string): void => {
   db.query("DELETE FROM desk_meeting_briefs WHERE event = ?").run(eventKey);
+  db.query("DELETE FROM desk_meeting_syntheses WHERE event = ?").run(eventKey);
 };

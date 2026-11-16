@@ -7,12 +7,13 @@ import { RULE_ACTIONS, RULE_MATCHES } from "../surface/mc/desk/mail-rules-schema
 import { SNOOZE_TIMES } from "../surface/mc/desk/mail-snooze-schema";
 import { SWEEP_WORDS } from "../surface/mc/desk/mail-sweep-schema";
 import { WAITING_OPS } from "../surface/mc/desk/mail-waiting-schema";
+import { BRIEF_SYNTHESIS_FAILED_REASONS, BRIEF_SYNTHESIS_STATES, BRIEF_SYNTHESIS_UNAVAILABLE_REASONS } from "../surface/mc/desk/meeting-brief-contract";
 import { DESK_PHRASE_CODES } from "../surface/mc/desk/phrases";
 import { DESK_ITEM_KINDS } from "../surface/mc/desk/types";
 import { MAIL_ROUND_GROUP_KINDS } from "../surface/mc/desk/mail-round";
 import { DEFAULT_MAIL_ROUND_SLOTS } from "../common/types/desk-mail-rounds";
 
-export const DESK_API_VERSION = "1.1.0";
+export const DESK_API_VERSION = "1.2.0";
 const DESK_API_VERSION_HEADER = "x-desk-api-version";
 export const DESK_CONTRACT_PATH = "/api/desk/contract";
 
@@ -38,6 +39,9 @@ export function deskContract() {
       DESK_ITEM_KINDS,
       MAIL_ROUND_GROUP_KINDS,
       DEFAULT_MAIL_ROUND_SLOTS,
+      BRIEF_SYNTHESIS_STATES,
+      BRIEF_SYNTHESIS_UNAVAILABLE_REASONS,
+      BRIEF_SYNTHESIS_FAILED_REASONS,
     },
   };
 }
