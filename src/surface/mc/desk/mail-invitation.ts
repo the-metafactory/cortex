@@ -1,3 +1,4 @@
+import { MailInvitationReplyCommandRequestSchema, MailInvitationReplyCommandResultSchema } from "../../../desk-sdk/mail-command-contract";
 import type { Database } from "bun:sqlite";
 import { accountOf } from "../../../common/types/config";
 import { oneLine } from "./actions";
@@ -269,7 +270,7 @@ export function decisionSentence(decision: InvitationDecision, ago: string): str
 /** The stdin of the calendar-reply command for one answer. */
 export function invitePayload(mail: ListedMail, reply: InviteReply, requestId: string): { action: "invite-reply"; account: string; messageId: string; uid: string; reply: InviteReply; requestId: string } | null {
   if (!mail.account || !mail.invitation) return null;
-  return { action: "invite-reply", account: mail.account, messageId: mail.id, uid: mail.invitation.uid, reply, requestId };
+  return MailInvitationReplyCommandRequestSchema.parse({ action: "invite-reply", account: mail.account, messageId: mail.id, uid: mail.invitation.uid, reply, requestId });
 }
 
 /** The calendar writer's card for an accepted invitation. */
@@ -351,7 +352,8 @@ export async function replyToInvitation(mail: ListedMail, input: InviteReplyInpu
       finish("failed", why);
       return refuse(502, `The answer was not sent: ${why}`);
     }
-    sent = sentMessage(out.stdout, input.reply);
+    const { message } = MailInvitationReplyCommandResultSchema.parse(out.stdout);
+    sent = message ? `${DONE[input.reply]}. ${oneLine(message, "")}` : `${DONE[input.reply]}.`;
   } catch (err) {
     if (err instanceof CommandTimeout) {
       finish("uncertain", `the reply command ${err.message}`);
@@ -368,16 +370,6 @@ export async function replyToInvitation(mail: ListedMail, input: InviteReplyInpu
 }
 
 const DONE: Record<InviteReply, string> = { accept: "Accepted", decline: "Declined" };
-
-function sentMessage(stdout: string, reply: InviteReply): string {
-  try {
-    const out: unknown = JSON.parse(stdout);
-    if (typeof out === "object" && out !== null && "message" in out && typeof out.message === "string" && out.message.trim() && out.message.length <= 300) return `${DONE[reply]}. ${oneLine(out.message, "")}`;
-  } catch {
-    return `${DONE[reply]}.`;
-  }
-  return `${DONE[reply]}.`;
-}
 
 function calendarFor(config: InvitationsConfig | undefined, account: string): { calendar?: string } | null {
   const entry = config?.addToCalendar.find((e) => accountOf(e) === account);

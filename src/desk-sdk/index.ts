@@ -1,6 +1,7 @@
 // glossary-ignore: host, run, message, body
 export { DESK_ADAPTER_SDK_VERSION } from "./version";
 export * from "./command-contract";
+export * from "./mail-command-contract";
 import type { CancelRequest, DispatchRequest, LookupRequest, OwnerResult, OwnerSupport, ReadbackRequest } from "../conversations/domain-adapters/operations/types";
 import type { ObservationRequest } from "../conversations/domain-adapters/reads/observation-types";
 import type { QueryFetchRequest } from "../conversations/domain-adapters/reads/query-types";
