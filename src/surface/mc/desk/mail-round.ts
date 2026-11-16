@@ -301,8 +301,8 @@ function finishRound(db: Database, id: string, now: number): void {
   db.query("UPDATE desk_mail_rounds SET status = 'finished', finished_at = ? WHERE id = ? AND status = 'open'").run(now, id);
 }
 
-function pruneFinishedRounds(db: Database, now: number): void {
-  db.query("DELETE FROM desk_mail_rounds WHERE status = 'finished' AND finished_at < ?").run(now - MAIL_ROUND_RETENTION_MS);
+function pruneFinishedRounds(db: Database, now: number): string[] {
+  return db.query<{ id: string }, [number]>("DELETE FROM desk_mail_rounds WHERE status = 'finished' AND finished_at < ? RETURNING id").all(now - MAIL_ROUND_RETENTION_MS).map((row) => row.id);
 }
 
 function queueSnapshot(row: QueueRow): SourceMail {
@@ -441,6 +441,7 @@ function readTokenOperation(db: Database, token: string): RoundOperationRow | nu
 interface RecordedOperation {
   requestId: string;
   binding: string;
+  roundId: string;
   kind: "put-back" | "undo";
   token: string;
   state: string;
@@ -449,7 +450,13 @@ interface RecordedOperation {
 }
 
 function rememberOperation(db: Database, operation: RecordedOperation): void {
-  db.query("INSERT INTO desk_mail_round_operations (request_id, binding, kind, token, state, result, undone_by, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)").run(operation.requestId, operation.binding, operation.kind, operation.token, operation.state, operation.result, operation.now);
+  db.query("INSERT INTO desk_mail_round_operations (request_id, binding, round_id, kind, token, state, result, undone_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)").run(operation.requestId, operation.binding, operation.roundId, operation.kind, operation.token, operation.state, operation.result, operation.now);
+}
+
+function replayable(db: Database, requestId: string, binding: string): RoundOperationRow | RoundFailure | null {
+  const prior = readOperation(db, requestId);
+  if (!prior) return null;
+  return prior.binding === binding ? prior : refuseRound(409, ROUND_REQUEST_REUSED);
 }
 
 function putBackPosition(db: Database, except: string): number {
@@ -501,8 +508,8 @@ function leaveFirstForNextRound(db: Database, open: StoredRound | null, state: P
 
 export function putBackMailRound(db: Database, request: MailRoundPutBackRequest): MailRoundPutBackResult {
   const binding = JSON.stringify({ action: "put-back", roundId: request.roundId, revision: request.revision, key: request.key });
-  const prior = readOperation(db, request.requestId);
-  if (prior) return prior.binding === binding ? parseStored<MailRoundPutBackResult>(prior.result, refuseRound(409, ROUND_STALE)) : refuseRound(409, ROUND_REQUEST_REUSED);
+  const prior = replayable(db, request.requestId, binding);
+  if (prior) return "request_id" in prior ? parseStored<MailRoundPutBackResult>(prior.result, refuseRound(409, ROUND_STALE)) : prior;
   return db.transaction((): MailRoundPutBackResult => {
     const row = readOpenRow(db);
     if (!row) return refuseRound(409, ROUND_NOT_OPEN);
@@ -518,15 +525,15 @@ export function putBackMailRound(db: Database, request: MailRoundPutBackRequest)
     if (members.length === 0) finishRound(db, round.id, request.now);
     queuePutBack(db, member, request.now);
     const result: MailRoundPutBackResult = { ok: true, message: `Put ${quotedSubject(member.mail.subject)} back. It leads your next mail round.`, undo: crypto.randomUUID() };
-    rememberOperation(db, { requestId: request.requestId, binding, kind: "put-back", token: result.undo, state: JSON.stringify(state), result: JSON.stringify(result), now: request.now });
+    rememberOperation(db, { requestId: request.requestId, binding, roundId: round.id, kind: "put-back", token: result.undo, state: JSON.stringify(state), result: JSON.stringify(result), now: request.now });
     return result;
   }).immediate();
 }
 
 export function undoMailRoundPutBack(db: Database, request: MailRoundUndoRequest): MailRoundUndoResult {
   const binding = JSON.stringify({ action: "undo", token: request.token });
-  const prior = readOperation(db, request.requestId);
-  if (prior) return prior.binding === binding ? parseStored<MailRoundUndoResult>(prior.result, refuseRound(409, ROUND_STALE)) : refuseRound(409, ROUND_REQUEST_REUSED);
+  const prior = replayable(db, request.requestId, binding);
+  if (prior) return "request_id" in prior ? parseStored<MailRoundUndoResult>(prior.result, refuseRound(409, ROUND_STALE)) : prior;
   return db.transaction((): MailRoundUndoResult => {
     const operation = readTokenOperation(db, request.token);
     const state = operation ? parseStored<PutBackState | null>(operation.state, null) : null;
@@ -536,13 +543,22 @@ export function undoMailRoundPutBack(db: Database, request: MailRoundUndoRequest
     const open = row ? storedRound(row) : null;
     const result = open?.id === state.roundId ? restoreMember(db, open, state) : leaveFirstForNextRound(db, open, state, request.now);
     db.query("UPDATE desk_mail_round_operations SET undone_by = ? WHERE request_id = ?").run(request.requestId, operation.request_id);
-    rememberOperation(db, { requestId: request.requestId, binding, kind: "undo", token: request.token, state: operation.state, result: JSON.stringify(result), now: request.now });
+    rememberOperation(db, { requestId: request.requestId, binding, roundId: state.roundId, kind: "undo", token: request.token, state: operation.state, result: JSON.stringify(result), now: request.now });
     return result;
   }).immediate();
 }
 
-function pruneRoundOperations(db: Database): void {
-  db.query("DELETE FROM desk_mail_round_operations WHERE json_extract(state, '$.roundId') NOT IN (SELECT id FROM desk_mail_rounds)").run();
+function pruneRoundOperations(db: Database, roundIds: readonly string[]): void {
+  for (const roundId of roundIds) db.query("DELETE FROM desk_mail_round_operations WHERE round_id = ?").run(roundId);
+}
+
+const NO_MEETINGS: CalendarAvailability = { sources: [], events: [] };
+
+export function mailRoundAnswerView(db: Database, args: { now: number; slots?: readonly string[]; readings: readonly { id: string; error: string | null }[] }): MailRoundView {
+  const failed = args.readings.filter((reading) => reading.error !== null).map((reading) => reading.id);
+  const row = readOpenRow(db);
+  const slots = configuredSlots(args.slots);
+  return viewOf(row ? storedRound(row) : null, readQueue(db).length, nextEffectiveSlot(args.now, slots, NO_MEETINGS), { mail: failed, calendar: failed });
 }
 
 export function readMailRound(db: Database, input: MailRoundInput): MailRoundView {
@@ -550,8 +566,8 @@ export function readMailRound(db: Database, input: MailRoundInput): MailRoundVie
     const slots = configuredSlots(input.slots);
     const candidates = candidatesOf(input);
     const succeeded = new Set(input.readings.filter((reading) => reading.error === null).map((reading) => reading.id));
-    pruneFinishedRounds(db, input.now);
-    pruneRoundOperations(db);
+    const pruned = pruneFinishedRounds(db, input.now);
+    if (pruned.length > 0) pruneRoundOperations(db, pruned);
     const row = readOpenRow(db);
     const reconciled = row ? reconcileOpen(db, storedRound(row), candidates, succeeded, input.now) : { open: null, justFinished: null };
     pruneQueue(db, reconciled.open, candidates, succeeded);

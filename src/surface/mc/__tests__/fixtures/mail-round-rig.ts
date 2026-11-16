@@ -69,6 +69,26 @@ export const roundStatuses = (db: Database): { id: string | null; status: string
 
 const SIDE_EFFECT_TABLES = ["desk_mail_moves", "desk_mail_snoozes", "desk_links", "desk_done", "desk_mail_log"] as const;
 
+interface RoundAnswer {
+  ok: boolean;
+  message?: string;
+  messagePhrase?: { code: string; params?: Record<string, unknown> };
+  undo?: string;
+  outcome?: string;
+  error?: string;
+  mailRound?: DeskView["mailRound"];
+}
+
+export const readAnswer = async (response: Response): Promise<RoundAnswer> => (await response.json()) as RoundAnswer;
+
+export const putBackBody = (round: { id: string | null; revision: number }, key: string, requestId: string): Record<string, unknown> => ({
+  action: "put-back",
+  roundId: round.id,
+  revision: round.revision,
+  key,
+  requestId,
+});
+
 export function roundSideEffects(db: Database): Record<string, number> {
   return Object.fromEntries(SIDE_EFFECT_TABLES.map((table) => [table, db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1]));
 }

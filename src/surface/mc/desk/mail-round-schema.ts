@@ -2,6 +2,7 @@ export const MAIL_ROUND_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS desk_mail_round_operations (
     request_id TEXT PRIMARY KEY,
     binding TEXT NOT NULL,
+    round_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK(kind IN ('put-back','undo')),
     token TEXT NOT NULL,
     state TEXT NOT NULL CHECK(json_valid(state)),
@@ -14,4 +15,10 @@ export const MAIL_ROUND_SQL: string[] = [
 
 export const MAIL_ROUND_COLUMNS = [
   { table: "desk_mail_round_queue", column: "put_back", ddl: "ALTER TABLE desk_mail_round_queue ADD COLUMN put_back INTEGER NOT NULL DEFAULT 0" },
+  {
+    table: "desk_mail_round_operations",
+    column: "round_id",
+    ddl: "ALTER TABLE desk_mail_round_operations ADD COLUMN round_id TEXT",
+    post: ["CREATE INDEX IF NOT EXISTS desk_mail_round_operation_round ON desk_mail_round_operations(round_id)"],
+  },
 ];

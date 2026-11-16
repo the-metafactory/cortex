@@ -1,22 +1,11 @@
 import assert from "node:assert/strict";
 import type { DeskView } from "../src/surface/mc/desk/types";
-import { openMailRoundRig, queuedMails, roundAt, roundKeys, roundMail, roundSideEffects, roundStatuses, type MailRoundRig } from "../src/surface/mc/__tests__/fixtures/mail-round-rig";
-
-interface RoundAnswer {
-  ok: boolean;
-  message?: string;
-  undo?: string;
-  outcome?: string;
-  error?: string;
-  messagePhrase?: { code: string; params?: Record<string, unknown> };
-  mailRound?: DeskView["mailRound"];
-}
+import { openMailRoundRig, putBackBody, queuedMails, readAnswer, roundAt, roundKeys, roundMail, roundSideEffects, roundStatuses, type MailRoundRig } from "../src/surface/mc/__tests__/fixtures/mail-round-rig";
 
 const rig: MailRoundRig = await openMailRoundRig(roundAt(9, 8), { mailDigest: undefined, mailInvitations: undefined });
 
-const readAnswer = async (response: Response): Promise<RoundAnswer> => (await response.json()) as RoundAnswer;
-const putBack = async (round: NonNullable<DeskView["mailRound"]>, key: string, requestId: string): Promise<Response> =>
-  rig.postRound({ action: "put-back", roundId: round.id, revision: round.revision, key, requestId });
+const putBack = (round: NonNullable<DeskView["mailRound"]>, key: string, requestId: string): Promise<Response> =>
+  rig.postRound(putBackBody(round, key, requestId));
 const undo = async (token: string | undefined, requestId: string): Promise<Response> => rig.postRound({ action: "undo", token, requestId });
 
 try {
@@ -54,7 +43,7 @@ try {
   assert.equal(middle.ok, true);
   assert.deepEqual(middle.mailRound?.mails.map((member) => member.key), ["mail:a", "mail:c"]);
   assert.equal(middle.messagePhrase?.code, "mail.put-back");
-  assert.equal(typeof middle.messagePhrase?.params?.nextAt, "string");
+  assert.equal(middle.messagePhrase?.params?.nextAt, new Date(roundAt(9, 13, 30)).toISOString());
   assert.deepEqual(queuedMails(rig.database()), [{ mail_key: "mail:b", put_back: 1, position: 0 }]);
 
   const retried = await readAnswer(await putBack(current, "mail:b", "probe-put-back-middle"));
@@ -114,7 +103,7 @@ try {
   assert.equal(conflict.status, 409);
 
   assert.deepEqual(roundSideEffects(rig.database()), untouched);
-  assert.equal(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_round_operations WHERE result IS NOT NULL").get()?.n, 7);
+  assert.equal(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_round_operations WHERE json_extract(result, '$.ok') = 1").get()?.n, 7);
   assert.equal(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_round_operations WHERE kind = 'put-back' AND undone_by IS NOT NULL").get()?.n, 3);
 
   console.log("Mail round put-back probe passed: a middle and a final member lead the successor in put-back order, a racing stale revision is refused, retries survive a reopen, and undo restores the open round or reports the finished one without touching mail, tasks or snoozes.");

@@ -1,25 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { openMailRoundRig, queuedMails, roundAt, roundKeys, roundMail, roundSideEffects, roundStatuses, type MailRoundRig } from "./fixtures/mail-round-rig";
-
-interface RoundAnswer {
-  ok: boolean;
-  message?: string;
-  messagePhrase?: { code: string; params?: Record<string, unknown> };
-  undo?: string;
-  outcome?: string;
-  error?: string;
-  mailRound?: { id: string | null; revision: number; due: boolean; mails: { key: string }[]; waiting: number; unavailable: { mail: string[]; calendar: string[] } };
-}
-
-const putBackBody = (round: { id: string | null; revision: number }, key: string, requestId: string): Record<string, unknown> => ({
-  action: "put-back",
-  roundId: round.id,
-  revision: round.revision,
-  key,
-  requestId,
-});
-
-const readAnswer = async (response: Response): Promise<RoundAnswer> => (await response.json()) as RoundAnswer;
+import { openMailRoundRig, putBackBody, queuedMails, readAnswer, roundAt, roundKeys, roundMail, roundSideEffects, roundStatuses, type MailRoundRig } from "./fixtures/mail-round-rig";
 
 let rig: MailRoundRig | undefined;
 afterEach(async () => {
@@ -48,7 +28,7 @@ describe("POST /api/desk/mail/round put-back", () => {
     expect(answer.mailRound?.waiting).toBe(1);
     expect(typeof answer.undo).toBe("string");
     expect(answer.messagePhrase?.code).toBe("mail.put-back");
-    expect(typeof answer.messagePhrase?.params?.nextAt).toBe("string");
+    expect(answer.messagePhrase?.params?.nextAt).toBe(new Date(roundAt(11, 13, 30)).toISOString());
     expect(roundSideEffects(rig!.database())).toEqual(before);
     expect(queuedMails(rig!.database())).toEqual([{ mail_key: "mail:b", put_back: 1, position: 0 }]);
 
