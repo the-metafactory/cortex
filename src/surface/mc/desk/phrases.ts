@@ -121,6 +121,15 @@ export type DeskPhrase =
   | { code: "brief.gap-relink-required" }
   | { code: "brief.refresh-required" }
   | { code: "brief.previous-unidentified" }
+  | { code: "brief.previous-identified" }
+  | { code: "brief.previous-unavailable" }
+  | { code: "brief.previous-set" }
+  | { code: "brief.previous-cleared" }
+  | { code: "brief.previous-self" }
+  | { code: "brief.previous-not-earlier" }
+  | { code: "brief.previous-target-unavailable" }
+  | { code: "brief.previous-invalid" }
+  | { code: "brief.meeting-gone" }
   | { code: "brief.synthesis-not-configured" };
 
 export const DESK_ITEM_PHRASE_CODES = [
@@ -150,6 +159,8 @@ export const DESK_ACT_PHRASE_CODES = [
 export const DESK_BRIEF_PHRASE_CODES = [
   "brief.gap-no-adapter", "brief.gap-access-denied", "brief.gap-read-failed", "brief.gap-no-linked-material",
   "brief.gap-relink-required", "brief.refresh-required", "brief.previous-unidentified", "brief.synthesis-not-configured",
+  "brief.previous-identified", "brief.previous-unavailable", "brief.previous-set", "brief.previous-cleared", "brief.previous-self",
+  "brief.previous-not-earlier", "brief.previous-target-unavailable", "brief.previous-invalid", "brief.meeting-gone",
 ] as const satisfies readonly DeskPhrase["code"][];
 
 export const DESK_PHRASE_CODES = [
