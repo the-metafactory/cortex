@@ -564,17 +564,26 @@ export class MailClassifier {
     }
   }
 
-  private pending(db: Database, input: ClassifyInput): ClassifierMail[] {
+  private sortUnimportant(db: Database, input: ClassifyInput): ClassifierMail[] {
     const listed = new Set((input.unimportant ?? []).map((address) => address.toLowerCase()));
     const vips = new Set(input.vips.map((address) => address.toLowerCase()));
-    const eligible = input.mail.filter((m) => {
-      if (!isUnimportant(listed, vips, m.from.address)) return true;
-      saveUnimportant(db, m.id, input.now);
-      return false;
-    });
+    const known = new Set(db.query<{ message_id: string }, [string]>("SELECT message_id FROM desk_mail_classes WHERE model = ?").all(UNIMPORTANT_MODEL).map(r => r.message_id));
+    const eligible: ClassifierMail[] = [];
+    for (const m of input.mail) {
+      if (isUnimportant(listed, vips, m.from.address)) {
+        if (!known.has(m.id)) {
+          saveUnimportant(db, m.id, input.now);
+          known.add(m.id);
+        }
+      } else eligible.push(m);
+    }
+    return eligible;
+  }
+
+  private pending(db: Database, mail: ClassifierMail[], now: number): ClassifierMail[] {
     const known = new Set(db.query<{ message_id: string }, [number]>("SELECT message_id FROM desk_mail_classes WHERE model != 'desk:unimportant' AND json_extract(CASE WHEN json_valid(details) THEN details ELSE '{}' END, '$.contractVersion') = ?").all(MAIL_CLASSIFIER_CONTRACT).map(r => r.message_id));
-    return eligible
-      .filter((m) => !known.has(m.id) && (this.retryAt.get(m.id) ?? 0) <= input.now)
+    return mail
+      .filter((m) => !known.has(m.id) && (this.retryAt.get(m.id) ?? 0) <= now)
       .sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt))
       .slice(0, this.config.maxPerPass);
   }
@@ -587,7 +596,8 @@ export class MailClassifier {
     const corrections = (input.corrections ?? []).slice(0, MAX_CORRECTIONS);
     const meetings = upcomingMeetings(input.events, input.now, CLASSIFY_WINDOW_MS).map((e) => ({ key: eventKey(e), title: e.title, start: e.start, sourceId: e.sourceId, sourcePolicy: this.config.sourcePolicy ?? "cloud" }));
     const keys = new Set(meetings.map((m) => m.key));
-    const pending = this.pending(db, input);
+    const eligible = this.sortUnimportant(db, input);
+    const pending = this.pending(db, eligible, input.now);
     const localSources = input.localSources ?? NOTHING_LEAVES;
     const similarity = pending.length > 0 && this.similarity ? this.similarity.load(db, input.now, input.sourceIds, localSources) : undefined;
     for (const m of pending) {

@@ -26,6 +26,23 @@ const NOW = Date.parse("2026-11-02T09:00:00Z");
 const COMMAND: CommandConfig = { command: ["capture-classifier"], timeoutSeconds: 5, maxPerPass: 1 };
 const ENDPOINT: EndpointConfig = { baseUrl: "https://classifier.example/v1", model: "fixture", timeoutSeconds: 5, maxPerPass: 1 };
 const ANSWER = { category: "reply", commitment: "none", reason: "The sender expects an answer." } as const;
+interface CommandCall {
+  argv: string[];
+  timeout: number;
+  body: unknown;
+}
+const fakeCommand = (calls: CommandCall[]): CommandRunner => async (argv, timeout, stdin) => {
+  calls.push({ argv, timeout, body: JSON.parse(stdin) });
+  return { code: 0, signal: null, stdout: JSON.stringify(ANSWER), stderr: "" };
+};
+interface FetchCall {
+  url: Parameters<typeof fetch>[0];
+  body: unknown;
+}
+const fakeFetch = (calls: FetchCall[]): typeof fetch => (async (url, options) => {
+  calls.push({ url, body: JSON.parse(options?.body as string) });
+  return Response.json({ choices: [{ message: { content: JSON.stringify(ANSWER) } }] });
+}) as typeof fetch;
 const quiet = (): void => undefined;
 const mail = (id: string, address = "sender@example.org"): ClassifierMail => ({
   kind: "mail", id, sourceId: "work-mail", account: "work", from: { name: "Sender", address },
@@ -58,12 +75,8 @@ describe("Cortex's classification messages", () => {
   });
 
   it("adds buildMessages to command stdin while preserving every existing request field", async () => {
-    const calls: { argv: string[]; timeout: number; body: unknown }[] = [];
-    const run: CommandRunner = async (argv, timeout, stdin) => {
-      calls.push({ argv, timeout, body: JSON.parse(stdin) });
-      return { code: 0, signal: null, stdout: JSON.stringify(ANSWER), stderr: "" };
-    };
-    const result = await new MailClassifier(COMMAND, commandClassifier(COMMAND, run), quiet).kick(db, richInput());
+    const calls: CommandCall[] = [];
+    const result = await new MailClassifier(COMMAND, commandClassifier(COMMAND, fakeCommand(calls)), quiet).kick(db, richInput());
     const request = expectedRequest();
     expect(result).toMatchObject({ classified: 1, failed: 0 });
     expect(calls).toEqual([{ argv: COMMAND.command, timeout: 5000, body: { ...request, messages: buildMessages(request) } }]);
@@ -71,14 +84,9 @@ describe("Cortex's classification messages", () => {
   });
 
   it("keeps the endpoint's messages and completion request unchanged", async () => {
-    const posts: unknown[] = [];
-    const fetchImpl = (async (url, options) => {
-      expect(url).toBe("https://classifier.example/v1/chat/completions");
-      posts.push(JSON.parse(options?.body as string));
-      return Response.json({ choices: [{ message: { content: JSON.stringify(ANSWER) } }] });
-    }) as typeof fetch;
-    await new MailClassifier(ENDPOINT, chatClassifier(ENDPOINT, fetchImpl), quiet).kick(db, richInput());
-    expect(posts).toEqual([{ model: "fixture", messages: buildMessages(expectedRequest()), temperature: 0, max_tokens: 600 }]);
+    const posts: FetchCall[] = [];
+    await new MailClassifier(ENDPOINT, chatClassifier(ENDPOINT, fakeFetch(posts)), quiet).kick(db, richInput());
+    expect(posts).toEqual([{ url: "https://classifier.example/v1/chat/completions", body: { model: "fixture", messages: buildMessages(expectedRequest()), temperature: 0, max_tokens: 600 } }]);
     expect(readClassifications(db, ["review"]).get("review")).toEqual(ANSWER);
   });
 
@@ -112,19 +120,12 @@ describe("Cortex's classification messages", () => {
 for (const transport of ["command", "endpoint"] as const) {
   describe(`${transport} classifier's unimportant-sender rule`, () => {
     const recorder = () => {
-      const calls: unknown[] = [];
-      const command: CommandRunner = async (_argv, _timeout, stdin) => {
-        calls.push(JSON.parse(stdin));
-        return { code: 0, signal: null, stdout: JSON.stringify(ANSWER), stderr: "" };
-      };
-      const endpoint = (async (_url, options) => {
-        calls.push(JSON.parse(options?.body as string));
-        return Response.json({ choices: [{ message: { content: JSON.stringify(ANSWER) } }] });
-      }) as typeof fetch;
+      const commands: CommandCall[] = [];
+      const posts: FetchCall[] = [];
       const classifier = transport === "command"
-        ? new MailClassifier(COMMAND, commandClassifier(COMMAND, command), quiet)
-        : new MailClassifier(ENDPOINT, chatClassifier(ENDPOINT, endpoint), quiet);
-      return { calls, classifier };
+        ? new MailClassifier(COMMAND, commandClassifier(COMMAND, fakeCommand(commands)), quiet)
+        : new MailClassifier(ENDPOINT, chatClassifier(ENDPOINT, fakeFetch(posts)), quiet);
+      return { calls: transport === "command" ? commands : posts, classifier };
     };
 
     it.each(["SENDER@EXAMPLE.ORG", "@EXAMPLE.ORG"])("saves bulk for %s without a model call, even over an existing verdict", async (entry) => {
@@ -141,6 +142,29 @@ for (const transport of ["command", "endpoint"] as const) {
     it.each(["SENDER@EXAMPLE.ORG", "@EXAMPLE.ORG"])("sends a VIP matching %s to the model despite the unimportant domain", async (vip) => {
       const { calls, classifier } = recorder();
       await classifier.kick(db, { ...input([mail("vip", "Sender@Example.Org")]), vips: [vip], unimportant: ["@EXAMPLE.ORG"] });
+      expect(calls).toHaveLength(1);
+      expect(readClassifications(db, ["vip"]).get("vip")).toEqual(ANSWER);
+    });
+
+    it("does not rewrite saved unimportant verdicts on repeated passes", async () => {
+      const { calls, classifier } = recorder();
+      const request = { ...input([mail("unimportant")]), unimportant: ["@EXAMPLE.ORG"] };
+      await classifier.kick(db, request);
+      expect(recorded(db, "unimportant")).toEqual({ category: "bulk", reason: UNIMPORTANT_REASON, model: UNIMPORTANT_MODEL });
+      const changes = db.query<{ count: number }, []>("SELECT total_changes() AS count");
+      const before = changes.get();
+      await classifier.kick(db, { ...request, now: NOW + 60_000 });
+      await classifier.kick(db, { ...request, now: NOW + 120_000 });
+      expect(changes.get()).toEqual(before);
+      expect(calls).toEqual([]);
+    });
+
+    it("sends a previously unimportant sender to the model after becoming a VIP", async () => {
+      const { calls, classifier } = recorder();
+      const request = { ...input([mail("vip")]), unimportant: ["@EXAMPLE.ORG"] };
+      await classifier.kick(db, request);
+      expect(recorded(db, "vip")).toEqual({ category: "bulk", reason: UNIMPORTANT_REASON, model: UNIMPORTANT_MODEL });
+      await classifier.kick(db, { ...request, vips: ["SENDER@EXAMPLE.ORG"] });
       expect(calls).toHaveLength(1);
       expect(readClassifications(db, ["vip"]).get("vip")).toEqual(ANSWER);
     });
