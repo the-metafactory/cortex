@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DEFAULT_SETTINGS, findNode, type AppState, type OutlineNode, type Recurrence } from "../../../balance";
-import { handleDeskMyDay } from "../api/desk-my-day";
-import { initDatabase } from "../db/init";
-import { HandledLedger } from "../desk/actions";
-import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
-import { balanceDetails } from "../desk/balance-command";
-import type { MyDayCommand } from "../desk/my-day-schema";
 import { desk } from "./desk-day-fixture";
+import type { MyDayCommand } from "../desk/my-day-schema";
+import { balanceDetails } from "../desk/balance-command";
+import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
+import { HandledLedger } from "../desk/actions";
+import { initDatabase } from "../db/init";
+import { handleDeskMyDay } from "../api/desk-my-day";
+import { DEFAULT_SETTINGS, findNode, type AppState, type OutlineNode, type Recurrence } from "../../../balance";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import type { Database } from "bun:sqlite";
 
 const DAY = "2026-11-12";
 const at = (iso: string) => new Date(`${iso}T10:00:00`).getTime();
@@ -27,18 +27,17 @@ const seed = (): AppState => ({
 });
 
 describe("outline start, put-away and repeat over the Desk My day route", () => {
-  let dir: string;
-  let path: string;
   let db: Database;
+  let dir = "";
+  const path = () => join(dir, "store.sqlite");
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "desk-outline-time-"));
-    path = join(dir, "store.sqlite");
-    db = initDatabase(path);
+    db = initDatabase(path());
     saveBalanceState(db, seed());
   });
   afterEach(() => {
-    db.close();
     rmSync(dir, { recursive: true, force: true });
+    db.close();
   });
   const runtime = () => ({ options: desk, ledger: new HandledLedger() });
   const view = async () => (await (await handleDeskMyDay(new Request("http://localhost/api/desk/my-day"), db, runtime(), undefined, at(DAY))).json()) as { revision: number; outline: OutlineNode; items: { task: OutlineNode }[] };
@@ -47,7 +46,7 @@ describe("outline start, put-away and repeat over the Desk My day route", () => 
   const row = (state: AppState, id: string): OutlineNode => findNode(state.outline, id) ?? (() => { throw new Error(`Missing ${id}`); })();
   const stored = (): AppState => {
     db.close();
-    db = initDatabase(path);
+    db = initDatabase(path());
     const state = loadBalanceState(db);
     if (!state) throw new Error("The store is empty.");
     return state;
@@ -55,11 +54,11 @@ describe("outline start, put-away and repeat over the Desk My day route", () => 
   const edit = async (id: string, patch: Record<string, unknown>): Promise<Response> => {
     const current = await view();
     const details = { ...balanceDetails(row({ ...seed(), outline: current.outline }, id), DAY), ...patch };
-    return post({ op: "outline-edit", id, revision: current.revision, details, yes: false } as MyDayCommand);
+    return post({ op: "outline-edit", id, revision: current.revision, details, yes: false });
   };
   const add = async (fields: Record<string, unknown>): Promise<{ response: Response; id?: string }> => {
     const { revision } = await view();
-    const response = await post({ op: "outline-add", revision, parent: "area:work", title: "New", ...fields } as MyDayCommand);
+    const response = await post({ op: "outline-add", revision, parent: "area:work", title: "New", ...fields });
     const body = (await response.clone().json().catch(() => ({}))) as { outlineId?: string };
     return { response, id: body.outlineId };
   };
@@ -91,7 +90,7 @@ describe("outline start, put-away and repeat over the Desk My day route", () => 
     expect(node.deferredUntil).toBeUndefined();
     expect(node.repeat).toBeUndefined();
     const current = await view();
-    const details = balanceDetails(findNode(current.outline, "legacy") as OutlineNode, DAY);
+    const details = balanceDetails(findNode(current.outline, "legacy")!, DAY);
     expect(Object.keys(details)).not.toContain("repeat");
     expect((await post({ op: "outline-edit", id: "legacy", revision: current.revision, details, yes: false })).status).toBe(200);
     const after = row(stored(), "legacy");
@@ -171,7 +170,7 @@ describe("outline start, put-away and repeat over the Desk My day route", () => 
   it("preserves every field on a stale revision and on a denied write", async () => {
     const snapshot = JSON.stringify(stored());
     const current = await view();
-    const details = { ...balanceDetails(findNode(current.outline, "legacy") as OutlineNode, DAY), startDate: "", deferredUntil: "", repeat: null };
+    const details = { ...balanceDetails(findNode(current.outline, "legacy")!, DAY), startDate: "", deferredUntil: "", repeat: null };
     const stale = await post({ op: "outline-edit", id: "legacy", revision: current.revision + 1, details, yes: false });
     expect(stale.status).toBe(409);
     const denied = await post({ op: "outline-edit", id: "not-in-a-configured-area", revision: current.revision, details, yes: false });

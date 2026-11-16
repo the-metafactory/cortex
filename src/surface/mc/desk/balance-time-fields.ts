@@ -1,7 +1,7 @@
 import { newRecurrence, validateRecurrence, type OutlineNode, type Recurrence } from "../../../balance";
 import type { OutlineRepeatInput } from "./balance-command";
 
-export interface OutlineTimeFields {
+interface OutlineTimeFields {
   startDate?: string;
   deferredUntil?: string;
   repeat?: OutlineRepeatInput | null;
