@@ -4,7 +4,7 @@ export type { MailPhraseModifiers, DeskPhrase };
 export const DESK_ITEM_PHRASE_CODES = [
   "ranger.resume-queued", "ranger.blocked", "ranger.stopped", "ranger.approval-needed", "ranger.discussion-needed",
   "ranger.map-read-only", "ranger.approval-unavailable", "ranger.question", "ranger.conversations-unavailable",
-  "ranger.retry-failed", "ranger.retried", "goal.check-regressed", "goal.reading", "meeting.soon", "reminder.due",
+  "ranger.retry-failed", "ranger.retried", "goal.check-regressed", "goal.reading", "meeting.soon", "meeting.ended", "reminder.due",
   "mail.meeting-today", "mail.deadline-today", "mail.vip", "mail.ranked", "mail.received", "mail.meeting-possible",
   "mail.meeting-linked", "mail.unimportant", "mail.precedent", "mail.unsubscribe", "mail.invitation", "mail.suspicious",
   "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "mail.put-away-time",
@@ -23,7 +23,7 @@ export const DESK_ACT_PHRASE_CODES = [
   "mail.studio-proposed", "create.done", "create.kept", "autonomy.set", "handoff.done", "routine.saved", "routine.paused",
   "routine.resumed", "routine.removed", "routine.installed", "routine.denied", "routine.approved", "routine.auto",
   "routine.approval", "routine.discarded", "studio.done", "studio.spar-queued", "ranger.action-done", "ranger.action-queued",
-  "mail.put-back", "mail.put-back-undone", "mail.put-back-next-round",
+  "mail.put-back", "mail.put-back-undone", "mail.put-back-next-round", "meeting.dismissed",
 ] as const satisfies readonly DeskPhrase["code"][];
 
 export const DESK_BRIEF_PHRASE_CODES = [

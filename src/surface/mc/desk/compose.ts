@@ -20,7 +20,9 @@ import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subject
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoIsCloud, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { readDecisions, type DecisionStore } from "./decisions";
 import { DAY_MS, deskTimeZone, startOfDay } from "./time";
-import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
+import { SourceCache, type DeskSourceConfig, type SourceMail, type SourceReading } from "./sources/command";
+import { calendarEvents, type CalendarEvent } from "./calendar-events";
+import { afterMeetingEvents, afterMeetingItems, readMeetingDismissals } from "./meeting-after";
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
 import { suspicionContext } from "./mail-suspicion";
@@ -342,6 +344,7 @@ export async function composeDesk(
   }));
   const calendar = [...events, ...written];
   const sod = startOfDay(now);
+  const meetingDismissals = readMeetingDismissals(db, now);
   const linksByEvent = meetingLinks(db, sod);
   const todayCalendar = withEventLinks(calendarEvents(calendar, sod, sod + DAY_MS), linksByEvent);
   const aheadCalendar = withEventLinks(calendarEvents(calendar, sod + DAY_MS, sod + AHEAD_DAYS * DAY_MS), linksByEvent);
@@ -419,6 +422,7 @@ export async function composeDesk(
     ...mailItems({ ...mailItemOptions(withoutAnsweredRead(mail, answers)), invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
     ...meetingItems(deskCalendar, now, rules.meetingMinutes),
+    ...afterMeetingItems(afterMeetingEvents(db, readings, now), meetingDismissals, now),
     ...ruleCards,
     ...dmarcCards,
     ...waitingCards,
@@ -639,32 +643,8 @@ function returnedCalendars(reading: SourceReading): ReturnedCalendars[] {
   return [{ source: reading.id, calendarIds: [...coverage.calendars.map(calendar => calendar.id), ...withIds], names: namedOnly }];
 }
 
-type CalendarEvent = SourceEvent & { area: string | null; sourceId: string; color?: string };
-
 function withEventLinks(events: DeskEvent[], links: ReadonlyMap<string, EventLink[]>): DeskEvent[] {
   return events.map((e) => { const linked = e.kind === "meeting" ? links.get(e.key) : undefined; return linked ? { ...e, links: linked } : e; });
-}
-
-function calendarEvents(events: CalendarEvent[], from: number, to: number): DeskEvent[] {
-  return events
-    .filter((e) => { const at = Date.parse(e.start); return at < to && (e.end ? Date.parse(e.end) > from : at >= from); })
-    .map((e): DeskEvent => ({
-      key: `cal:${e.sourceId}:${e.id}`,
-      at: Date.parse(e.start),
-      ...(e.availability ? { availability: e.availability } : {}),
-      ...(e.calendarId ? { calendarId: e.calendarId } : {}),
-      ...(e.end ? { end: Date.parse(e.end) } : {}),
-      title: e.title,
-      ...(e.location && !e.online ? { note: e.location } : {}),
-      area: e.area,
-      kind: e.allDay ? "all-day" : "meeting",
-      source: e.sourceId,
-      ...(e.calendar ? { calendar: e.calendar } : {}),
-      ...(e.color ? { color: e.color } : {}),
-      ...(e.url ? { url: e.url } : {}),
-      ...(e.online ? { online: true } : {}),
-    }))
-    .sort((a, b) => a.at - b.at);
 }
 
 function reminderEvents(reminders: DeskNote[], from: number, to: number): DeskEvent[] {

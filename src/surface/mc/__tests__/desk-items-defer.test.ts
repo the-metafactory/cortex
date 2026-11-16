@@ -5,14 +5,12 @@ import { DEFAULT_CONFIG } from "../config";
 import { readSnooze, readSnoozes } from "../desk/mail-snooze";
 import { DESK_ITEM_KINDS } from "../desk/types";
 import { startServer } from "../server";
-import { openMailRoundRig, roundAt, roundEvent, roundMail, type MailRoundRig } from "./fixtures/mail-round-rig";
+import { openMailRoundRig, postDeskJson, roundAt, roundEvent, roundMail, type MailRoundRig } from "./fixtures/mail-round-rig";
 
 const NOW = roundAt(16, 10);
 let rig: MailRoundRig;
 
-const post = (body: unknown): Promise<Response> => fetch(`${rig.baseUrl()}/api/desk/items/defer`, {
-  method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body),
-});
+const post = (body: unknown): Promise<Response> => postDeskJson(rig.baseUrl(), "/api/desk/items/defer", body);
 
 beforeEach(async () => {
   rig = await openMailRoundRig(NOW, { mailDigest: undefined, mailInvitations: undefined });
