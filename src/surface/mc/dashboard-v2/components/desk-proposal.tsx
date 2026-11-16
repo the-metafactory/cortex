@@ -5,12 +5,13 @@ import { clock } from "../../desk/time";
 import type { CapabilityBuildResult, CapabilityRefusal, StepSovereignty } from "../../desk/routine-capability-contract";
 import { buildCapabilities } from "../lib/desk-ask";
 import { useAssistantName } from "../lib/assistant-name";
+import { DestinationPicker, type DestinationOption } from "./desk-destination-picker";
 
-type FieldType = "text" | "long" | "time" | "map";
+type FieldType = "text" | "long" | "time" | "map" | "area";
 
 const FIELDS: Record<AskKind, { key: string; label: string; type: FieldType }[]> = {
   routine: [],
-  row: [{ key: "title", label: "Task", type: "text" }],
+  row: [{ key: "title", label: "Task", type: "text" }, { key: "area", label: "Area", type: "area" }],
   conversation: [{ key: "text", label: "Message", type: "long" }],
   reminder: [{ key: "text", label: "What", type: "text" }, { key: "due", label: "When", type: "time" }],
   note: [{ key: "text", label: "Note", type: "long" }],
@@ -56,6 +57,14 @@ interface ProposalCardProps {
   onFieldsChange: (fields: Record<string, unknown>) => void;
   onAlternative?: () => void;
   cancelLabel?: string;
+  areas?: DestinationOption[];
+  choices?: ProposalChoice[];
+}
+
+export interface ProposalChoice {
+  label: string;
+  problem?: string;
+  onChoose: () => void;
 }
 
 export function ProposalCard(props: ProposalCardProps) {
@@ -114,14 +123,14 @@ function MissingCapabilities({ refusal, busy }: { refusal: CapabilityRefusal; bu
   </section>;
 }
 
-function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange, onAlternative }: ProposalCardProps) {
+function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange, onAlternative, areas = [], choices = [] }: ProposalCardProps) {
   const name = useAssistantName();
   const [fields, setFields] = useState<Record<string, unknown>>(proposal.fields);
   useEffect(() => onFieldsChange(fields), [fields]);
   const unwritable = proposal.unwritable === true;
   const [editing, setEditing] = useState(Boolean(proposal.problem) && !unwritable);
   const allDay = fields.allDay === true;
-  const missing = FIELDS[proposal.kind].some((f) => f.type === "time" && f.key !== "end" && !fields[f.key]) || (proposal.kind === "task" && !fields.map);
+  const missing = FIELDS[proposal.kind].some((f) => f.type === "time" && f.key !== "end" && !fields[f.key]) || (proposal.kind === "task" && !fields.map) || (proposal.kind === "row" && !fields.area);
   const set = (key: string, value: unknown): void => setFields((cur) => {
     const next = { ...cur };
     if (value === "" || value === undefined) delete next[key];
@@ -133,6 +142,7 @@ function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCa
     const v = fields[key];
     if (type === "time") return typeof v === "string" && Number.isFinite(Date.parse(v)) ? whenText(Date.parse(v), now, allDay) : "";
     if (type === "map") return maps.find((m) => m.ref === v)?.label ?? (typeof v === "string" ? v : "");
+    if (type === "area") return areas.find((a) => a.id === v)?.label ?? (typeof v === "string" ? v : "");
     return typeof v === "string" ? v : "";
   };
 
@@ -140,6 +150,9 @@ function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCa
     const v = fields[key];
     if (type === "time") {
       return <input type="datetime-local" aria-label={label} value={toLocalInput(v)} onChange={(e) => set(key, e.target.value ? new Date(e.target.value).toISOString() : "")} />;
+    }
+    if (type === "area") {
+      return <DestinationPicker label={label} value={typeof v === "string" ? v : ""} options={areas} placeholder="Choose an area…" empty="No configured areas." onChange={(id) => set(key, id)} />;
     }
     if (type === "map") {
       return (
@@ -181,9 +194,11 @@ function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCa
             <p className="desk-lands">Lands on the timeline: <button type="button" onClick={onGoto}>{whenText(at, now, allDay)} {new Date(at).toDateString() === new Date(now).toDateString() ? "↓" : "↘"}</button></p>
           )}
           {proposal.problem && (unwritable || missing) && <p className="desk-prop-problem" role="alert">{unwritable ? `${proposal.problem} Nothing will be created.` : proposal.problem}</p>}
+          {choices.flatMap((choice) => choice.problem ? [<p key={choice.label} className="desk-prop-note" role="status">{choice.label}: {choice.problem}</p>] : [])}
           <div className="desk-acts">
             <button type="button" className="desk-btn pri" disabled={blocked || busy} aria-busy={busy} onClick={() => onConfirm(fields)}>{busy ? working : talk ? "Start the conversation" : "Confirm"}</button>
             {!unwritable && <button type="button" className="desk-btn" disabled={busy} onClick={() => setEditing((e) => !e)}>{editing ? "Done editing" : "Edit"}</button>}
+            {choices.map((choice) => <button key={choice.label} type="button" className="desk-btn" disabled={busy || Boolean(choice.problem)} onClick={choice.onChoose}>{choice.label}</button>)}
             {proposal.alternative && onAlternative && <button type="button" className="desk-btn" disabled={busy} onClick={onAlternative}>Talk it over with {name} instead</button>}
             <button type="button" className="desk-btn ghost" disabled={busy} onClick={onCancel}>Cancel</button>
           </div>
