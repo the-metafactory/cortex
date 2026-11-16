@@ -4,6 +4,8 @@ import { logMailDecision, mailFeatures } from "./mail-log";
 import { refuse } from "./mail-move";
 import { junkIdentity } from "./sources/mail-identity";
 import { SENDER_WIDE_CODES, senderKey, type SuspicionCode, type SuspicionReason } from "./mail-suspicion";
+import type { TrustedOneMail, TrustedView } from "../../../desk-api/wire/mail";
+export type { TrustedView };
 
 export const TRUST_DONE = "mail.trust";
 
@@ -21,20 +23,6 @@ const words = (codes: readonly SuspicionCode[]): string => {
   const list = codes.map((c) => CODE_WORDS[c]);
   return list.length <= 1 ? (list[0] ?? "") : `${list.slice(0, -1).join(", ")} and ${list.at(-1) ?? ""}`;
 };
-
-export interface TrustedOneMail {
-  codes: SuspicionCode[];
-  subject: string | null;
-}
-
-export interface TrustedView {
-  notSpam?: boolean;
-  sender: string;
-  codes: SuspicionCode[];
-  mails: TrustedOneMail[];
-  at: number;
-  sentence: string;
-}
 
 export type TrustResult = { ok: true; message: string; undo?: string; restored?: string; trusted?: TrustedView[] } | { ok: false; status: number; error: string };
 

@@ -1,26 +1,8 @@
 import type { DeskCalendar } from "./calendars";
 import { calendarKey, calendarSetting } from "./calendars";
 import type { SourceReading, DeskSourceConfig } from "./sources/command";
-import type { EventAvailability } from "./calendar-contract";
-
-export type CalendarSourceState =
-  | { id: string; kind: "attention" }
-  | { id: string; kind: "unknown"; reason: string }
-  | { id: string; kind: "calendar"; from: number; to: number; readAt: number; calendars: string[]; provenance: string };
-export interface CalendarInterval {
-  key: string;
-  source: string;
-  calendar: string;
-  calendarId: string;
-  title: string;
-  at: number;
-  end?: number;
-  availability: EventAvailability;
-}
-export interface CalendarAvailability {
-  sources: CalendarSourceState[];
-  events: CalendarInterval[];
-}
+import type { CalendarSourceState, CalendarInterval, CalendarAvailability } from "../../../desk-api/wire/calendar";
+export type { CalendarInterval, CalendarAvailability };
 
 export function calendarAvailability(args: { sources: DeskSourceConfig[]; readings: SourceReading[]; calendars: DeskCalendar[]; now: number }): CalendarAvailability {
   const settings = new Map(args.calendars.map(calendar => [calendarKey(calendar.source, calendar.name, calendar.calendarId), calendar]));

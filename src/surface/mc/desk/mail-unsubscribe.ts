@@ -15,17 +15,8 @@ export { unsubscribeMethod } from "../../../conversations/domain-adapters/mail/u
 export type UnsubscribeMethod = NonNullable<ReturnType<typeof unsubscribeMethod>>;
 
 export { DEFAULT_UNSUBSCRIBE, UNSUBSCRIBE_SQL, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
-
-export type UnsubscribeOffer =
-  | { kind: "one-click"; url: string; host: string; dismissed: number; failed?: string }
-  | { kind: "page"; url: string; host: string; dismissed: number }
-  | { kind: "rule"; at: number; host: string };
-
-export interface UnsubscribeView {
-  kind: UnsubscribeOffer["kind"];
-  host: string;
-  url?: string;
-}
+import type { UnsubscribeOffer, UnsubscribeView } from "../../../desk-api/wire/mail";
+export type { UnsubscribeOffer };
 
 const hostOf = (url: string): string => {
   const u = new URL(url);

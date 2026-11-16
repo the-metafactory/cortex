@@ -1,5 +1,8 @@
 import type { VOICE_PROVIDERS } from "../../../common/types/config";
 import type { DeskWakeOptions } from "../../../common/types/desk-wake";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { DeskVoice, VoiceProviderId as WireVoiceProviderId, DeskWakeOptions as WireDeskWakeOptions } from "../../../desk-api/wire/voice";
+export type { DeskVoice };
 
 export type VoiceProviderId = (typeof VOICE_PROVIDERS)[number];
 
@@ -20,7 +23,6 @@ export interface VoiceOptions {
   elevenlabs?: ElevenLabsOptions;
 }
 
-export type DeskVoice = Omit<VoiceOptions, "elevenlabs">;
 
 export const voiceView = (v: VoiceOptions | undefined, assistantName: string): DeskVoice => ({ enabled: v?.enabled ?? true, input: v?.input ?? "browser", output: v?.output ?? "browser", ...(v?.wake ? { wake: { ...v.wake, assistantName: v.wake.assistantName ?? assistantName } } : {}) });
 
@@ -120,3 +122,7 @@ export async function elevenLabsTranscribe(audio: Blob, opts: ElevenLabsOptions,
   const text = typeof body?.text === "string" ? body.text.trim() : "";
   return text ? { ok: true, value: text } : { ok: false, status: 422, line: "I did not catch that. Try again or type it." };
 }
+
+type _WireVoiceProviderId = Expect<SameShape<VoiceProviderId, WireVoiceProviderId>>;
+type _WireDeskWakeOptions = Expect<SameShape<DeskWakeOptions, WireDeskWakeOptions>>;
+type _WireDeskVoice = Expect<SameShape<Omit<VoiceOptions, "elevenlabs">, DeskVoice>>;

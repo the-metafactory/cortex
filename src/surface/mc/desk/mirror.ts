@@ -1,5 +1,5 @@
 import type { AppState } from "../../../balance";
-import { completionReview, type CompletionReview } from "../../../balance";
+import { completionReview } from "../../../balance";
 import { localDay } from "./my-day";
 import { deskTimeZone } from "./time";
 import type { DeskOptions } from "./compose";
@@ -7,10 +7,11 @@ import type { SourceEvent, SourceReading } from "./sources/command";
 import type { StudioView, StudioThreadView } from "./studio/view";
 import type { DmarcWeek } from "./mail-dmarc";
 import type { MailMirror } from "./mail-mirror";
+import type { MirrorWeek, MirrorCalendar, MirrorThread, WeeklyMirror } from "../../../desk-api/wire/mirror";
+export type { MirrorThread, WeeklyMirror };
 
 export const MIRROR_DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
 export interface MirrorSchedule { day: typeof MIRROR_DAYS[number]; time: string }
-export interface MirrorWeek { timeZone: string; from: string; through: string; start: number; end: number }
 export function mirrorWeek(now: number): MirrorWeek {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
@@ -28,28 +29,7 @@ export function mirrorOffered(now: number, schedule: MirrorSchedule | undefined)
   return day > configured || (day === configured && date.getHours() * 60 + date.getMinutes() >= hours * 60 + minutes);
 }
 export interface MirrorCalendarEvent extends SourceEvent { area: string | null; sourceId: string }
-export interface MirrorCalendar {
-  sources: { id: string; readAt: number | null; status: "snapshot" | "stale" | "failed" | "missing"; problems: number }[];
-  areas: { id: string | null; hours: number }[];
-  withoutDuration: number;
-  allDay: number;
-  available: boolean;
-}
-export type MirrorThread = Pick<StudioThreadView, "slug" | "question" | "outcome" | "outcomeText" | "expect" | "reviewOn">;
 const threadSummary = ({ slug, question, outcome, outcomeText, expect, reviewOn }: StudioThreadView): MirrorThread => ({ slug, question, outcome, outcomeText, expect, reviewOn });
-export interface WeeklyMirror {
-  generatedAt: number;
-  week: MirrorWeek;
-  offered: boolean;
-  balance: CompletionReview | null;
-  recordedEffort: number;
-  studioEffortShare: number | null;
-  unallocatedEffortShare: number | null;
-  calendar: MirrorCalendar;
-  threads: { available: boolean; partial: boolean; opened: MirrorThread[]; parked: MirrorThread[]; closed: MirrorThread[]; reviews: MirrorThread[] };
-  dmarc: DmarcWeek | null;
-  mail: MailMirror | null;
-}
 function unionDuration(intervals: [number, number][]): number {
   let total = 0;
   let end = -Infinity;

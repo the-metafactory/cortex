@@ -10,6 +10,8 @@ import { addSender, isVip, listVips, normalizeVip } from "./vips";
 import { failed, refuse as refuseWith, wording, type ActRefusal, type ActWording } from "./act-result";
 import type { DeskPhrase } from "./phrases";
 import { junkIdentity } from "./sources/mail-identity";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { MoveTarget as WireMoveTarget } from "../../../desk-api/wire/mail";
 
 export const MOVE_TARGETS = MailMoveCommandRequestSchema.shape.target.options;
 export type MoveTarget = (typeof MOVE_TARGETS)[number];
@@ -253,3 +255,5 @@ export function blockSenderDomain(db: Database, id: string, now: number): MoveRe
   addSender(db, "unimportant", domain, "Blocked after Spam", now);
   return moved(`Blocked ${domain}: its mail now counts as unimportant. You can change this in Settings.`, { code: "mail.domain-blocked", params: { domain } });
 }
+
+type _WireMoveTarget = Expect<SameShape<MoveTarget, WireMoveTarget>>;

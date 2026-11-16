@@ -1,22 +1,7 @@
 import type { ObservationView } from "../../../conversations/domain-adapters/reads/observation-types";
 import type { OutlineNode } from "../../../balance";
-
-export type BalanceDayHealth = "fresh" | "stale" | "unavailable" | "conflicted";
-
-export interface BalanceProjectedTask {
-  readonly id: string;
-  readonly title: string;
-  readonly done: boolean;
-  readonly dueDate: string | null;
-  readonly note?: string;
-  readonly effort?: 1 | 2 | 4;
-}
-
-export interface BalanceDayProjection {
-  readonly status: BalanceDayHealth;
-  readonly observedAt: string | null;
-  readonly tasks: readonly BalanceProjectedTask[];
-}
+import type { BalanceDayHealth, BalanceProjectedTask, BalanceDayProjection } from "../../../desk-api/wire/balance";
+export type { BalanceDayProjection };
 
 export interface BalanceDayReader {
   projection(refresh?: boolean): Promise<BalanceDayProjection | null>;

@@ -4,6 +4,8 @@ import type { MaterialLink, StudioThread } from "./format";
 import { outcomeLabel, withHref } from "./labels";
 import { withoutMailFrame } from "./mail-header";
 import type { StudioThreadView, StudioView } from "./view";
+import type { SparPersona } from "../../../../desk-api/wire/studio";
+export type { SparPersona };
 
 const PERSON_KINDS = ["person", "people", "contact"] as const;
 
@@ -217,11 +219,6 @@ const MAX_THREAD_PERSONAS = 10;
 const MAX_PERSONA_NAME = 100;
 
 export const threadPeople = (thread: Pick<StudioThread, "material" | "notes">): Relation[] => [...peopleRelations(thread), ...keptRelations(thread, NO_THREADS).filter((k) => k.kind === "person")];
-
-export interface SparPersona {
-  name: string;
-  from: "config" | "thread";
-}
 
 const offerable = (name: string): boolean => name.length >= 1 && name.length <= MAX_PERSONA_NAME && !/[\r\n]/.test(name);
 

@@ -10,6 +10,8 @@ import { retryable, spawnRanger, type RangerRunner } from "./actions";
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { WaitingTask } from "./sources/waiting";
 import { DAY_MS } from "./time";
+import type { RulingExplanation } from "../../../desk-api/wire/ruling";
+export type { RulingExplanation };
 
 export const RULING_ACTION = "ranger.rule";
 
@@ -181,17 +183,6 @@ export const RULING_MODEL_FAILED = "The ruling explainer could not answer.";
 export const RULING_POLICY_REFUSED = "The ruling explainer's source policy does not permit this repository.";
 export const RULING_PENDING = "The issue explanation is being prepared.";
 const RULING_MAX_TOKENS = 2400;
-
-export interface RulingChoice {
-  label: string;
-  consequence: string;
-  ruling: string;
-}
-
-export interface RulingExplanation {
-  sentence: string;
-  choices: RulingChoice[];
-}
 
 export type RulingExplain = { kind: "explained"; explanation: RulingExplanation } | { kind: "unexplained"; line: string };
 

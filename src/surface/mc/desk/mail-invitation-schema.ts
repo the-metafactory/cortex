@@ -1,8 +1,7 @@
-export const INVITE_REPLIES = ["accept", "decline"] as const;
-export type InviteReply = (typeof INVITE_REPLIES)[number];
-
-export const INVITE_STATUSES = ["sending", "sent", "failed", "uncertain"] as const;
-export type InviteStatus = (typeof INVITE_STATUSES)[number];
+import { INVITE_REPLIES } from "../../../desk-api/wire/mail";
+import type { InviteReply, InviteStatus } from "../../../desk-api/wire/mail";
+export { INVITE_REPLIES };
+export type { InviteReply, InviteStatus };
 
 export interface InvitationSlotsConfig {
   days: number;

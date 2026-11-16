@@ -4,53 +4,16 @@ import type { CalendarAvailability } from "./calendar-availability";
 import type { SweepGroup } from "./mail-sweep";
 import type { MoveTarget } from "./mail-move";
 import type { SourceMail } from "./sources/command";
+import { MAIL_ROUND_GROUP_KINDS } from "../../../desk-api/wire/mail-round";
+import type { MailRoundGroupKind, MailRoundUnavailable, MailRoundView } from "../../../desk-api/wire/mail-round";
+export { MAIL_ROUND_GROUP_KINDS };
+export type { MailRoundView };
 
 export const MAIL_ROUND_INTERRUPT_REASONS = ["mail.meeting-today", "mail.deadline-today", "mail.vip"] as const;
-export const MAIL_ROUND_GROUP_KINDS = ["bundle", "sweep", "digest"] as const;
 export const MAIL_ROUND_ACTIONS = ["put-back", "undo"] as const;
 export const MAIL_ROUND_UNDO_OUTCOMES = ["restored", "next-round"] as const;
 
 export type MailRoundUndoOutcome = (typeof MAIL_ROUND_UNDO_OUTCOMES)[number];
-
-type MailRoundGroupKind = (typeof MAIL_ROUND_GROUP_KINDS)[number];
-
-interface MailRoundGroupView {
-  id: string;
-  kind: MailRoundGroupKind;
-  label: string;
-  title: string;
-  target: MoveTarget;
-  area: string | null;
-  mails: string[];
-}
-
-interface MailRoundMailView {
-  key: string;
-  subject: string;
-  from: string;
-  at: string;
-  unread: boolean;
-  area: string | null;
-  url?: string;
-  groupId?: string;
-}
-
-interface MailRoundUnavailable {
-  mail: string[];
-  calendar: string[];
-}
-
-export interface MailRoundView {
-  id: string | null;
-  revision: number;
-  due: boolean;
-  scheduledFor: string | null;
-  nextScheduledAt: string;
-  waiting: number;
-  groups: MailRoundGroupView[];
-  mails: MailRoundMailView[];
-  unavailable: MailRoundUnavailable;
-}
 
 type MailRoundSourceMail = SourceMail & { sourceId: string; area: string | null };
 

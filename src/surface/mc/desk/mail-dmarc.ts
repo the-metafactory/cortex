@@ -15,6 +15,8 @@ import type { DeskItem } from "./types";
 import { CARD_DAYS, REFUSED_EXIT, type DmarcConfig, type DmarcFailOn } from "./mail-dmarc-schema";
 
 export { DMARC_SQL, type DmarcConfig, type DmarcFailOn } from "./mail-dmarc-schema";
+import type { DmarcWeekDomain, DmarcWeek } from "../../../desk-api/wire/mail";
+export type { DmarcWeek };
 
 
 const Count = z.number().int().min(0).max(1e12);
@@ -186,25 +188,6 @@ export class DmarcLoop {
     });
     return this.chain;
   }
-}
-
-export interface DmarcWeekDomain {
-  domain: string;
-  owned: boolean;
-  reports: number;
-  messages: number;
-  failures: number;
-}
-
-export interface DmarcWeek {
-  from: string;
-  reports: number;
-  messages: number;
-  failures: number;
-  foreign: number;
-  refused: { subject: string; reason: string }[];
-  domains: DmarcWeekDomain[];
-  line: string;
 }
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;

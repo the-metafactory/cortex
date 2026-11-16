@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.16.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.16.1";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -449,8 +449,8 @@ export declare const MailInvitationReplyCommandRequestSchema: z.ZodObject<{
 	action: z.ZodLiteral<"invite-reply">;
 	uid: z.ZodString;
 	reply: z.ZodEnum<{
-		accept: "accept";
 		decline: "decline";
+		accept: "accept";
 	}>;
 	requestId: z.ZodString;
 }, z.core.$strip>;
@@ -469,10 +469,10 @@ export declare const MailTrashCommandResultSchema: z.ZodPipe<z.ZodTransform<unkn
 export declare const MailLocateCommandResultSchema: z.ZodPipe<z.ZodTransform<unknown, unknown>, z.ZodObject<{
 	place: z.ZodEnum<{
 		junk: "junk";
-		inbox: "inbox";
 		archive: "archive";
 		trash: "trash";
 		gone: "gone";
+		inbox: "inbox";
 	}>;
 	folder: z.ZodCatch<z.ZodPipe<z.ZodString, z.ZodTransform<string | null, string>>>;
 	unread: z.ZodPipe<z.ZodUnknown, z.ZodTransform<boolean, unknown>>;
@@ -567,9 +567,9 @@ declare const AdapterDeclarationSchema: z.ZodObject<{
 		capabilityId: z.ZodString;
 		label: z.ZodString;
 		kind: z.ZodEnum<{
+			action: "action";
 			observation: "observation";
 			query: "query";
-			action: "action";
 		}>;
 		objectTypes: z.ZodArray<z.ZodString>;
 		inputSchemaRef: z.ZodObject<{
@@ -1235,8 +1235,8 @@ declare const ObservationBatchSchema: z.ZodObject<{
 	gap: z.ZodBoolean;
 	coverage: z.ZodEnum<{
 		none: "none";
-		watermark: "watermark";
 		objects: "objects";
+		watermark: "watermark";
 	}>;
 }, z.core.$strict>;
 export type ObservationBatch = z.infer<typeof ObservationBatchSchema>;
@@ -1295,12 +1295,12 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 		}, z.core.$strict>;
 		said: z.ZodEnum<{
 			junk: "junk";
-			todo: "todo";
-			plan: "plan";
-			reply: "reply";
-			keep: "keep";
 			archive: "archive";
 			trash: "trash";
+			reply: "reply";
+			plan: "plan";
+			todo: "todo";
+			keep: "keep";
 			"not-bulk": "not-bulk";
 			matters: "matters";
 		}>;
@@ -1363,9 +1363,9 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 		}, z.core.$strict>;
 		op: z.ZodEnum<{
 			done: "done";
-			expect: "expect";
 			snooze: "snooze";
 			"no-answer": "no-answer";
+			expect: "expect";
 		}>;
 	}, z.core.$strict>,
 	z.ZodObject<{

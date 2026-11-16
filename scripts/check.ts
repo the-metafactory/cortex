@@ -10,7 +10,7 @@ export const GATES: Gate[] = [
   { name: "unused-exports", steps: [["bun", "scripts/check-unused-exports.ts"]] },
   { name: "typecheck", steps: [["bunx", "tsc", "--noEmit"]] },
   { name: "vocab", steps: [["bash", "scripts/check-carveouts.sh"], ["bun", "scripts/check-wire-vocab.ts"]] },
-  { name: "sdk", steps: [["bun", "run", "sdk:dts:check"], ["bun", "scripts/check-release-pins.ts"], ["bun", "scripts/check-desk-sdk.ts"], ["bun", "scripts/check-desk-api.ts"], ["bun", "scripts/probe-desk-conformance-export.ts", "--typecheck"]] },
+  { name: "sdk", steps: [["bun", "run", "sdk:dts:check"], ["bun", "scripts/check-release-pins.ts"], ["bun", "scripts/check-desk-sdk.ts"], ["bun", "scripts/check-desk-api.ts"], ["bun", "scripts/check-desk-wire-imports.ts"], ["bun", "scripts/probe-desk-conformance-export.ts", "--typecheck"]] },
   { name: "shippable", steps: [["bun", "scripts/check-shippable-hygiene.ts"]] },
   { name: "xdg", steps: [["bun", "scripts/xdg-audit.ts", "--repos", "."]] },
   { name: "test", steps: [["bun", "scripts/build-desk-wake.ts"], ["bun", "scripts/desk-wake/probe-build-cache.ts"], ["bun", "scripts/check-desk-probes.ts"], ["bun", "scripts/probe-conversation-tools.ts"], ["bun", "run", "test", "--parallel"]] },
