@@ -1,8 +1,15 @@
 import { z } from "zod";
+import type { DeskOptions } from "../desk/compose";
+import type { DeskItem } from "../desk/types";
 import type { Database } from "bun:sqlite";
 import { answer, failResponse } from "../desk/act-result";
 import { composeCurrentDay, type DeskRuntime, type DeskVigilSource } from "../desk/compose";
 import { cancelItemDefer, deferItem, deferRefusal, isDeferrableKind, isRefusedKind, ONLY_MAIL_WAITS_FOR_A_PERSON } from "../desk/item-defer";
+import { deferTaskUntil, undoTaskDefer } from "../desk/my-day";
+import { openTask, TASK_HANDOFF_KEY_PREFIX } from "../desk/task-handoff";
+import { readTaskHandoff } from "../desk/task-handoff-store";
+import { localDay } from "../desk/time";
+import { resolveSnoozeChoice } from "../desk/mail-snooze";
 import { resolveListedMail } from "../desk/mail-actions";
 import { cancelSnooze, readingEvents, readSnooze, snoozeMail } from "../desk/mail-snooze";
 import { SnoozeChoiceSchema } from "./desk-mail-choice";
@@ -35,6 +42,10 @@ export async function handleDeskItemsDefer(req: Request, db: Database, runtime: 
 
 async function deferWorkItem(body: z.infer<typeof DeferRequestSchema>, db: Database, runtime: DeskRuntime, vigil: DeskVigilSource | undefined): Promise<Response> {
   if (body.action === "defer.cancel") {
+    if (body.key.startsWith(TASK_HANDOFF_KEY_PREFIX) && runtime.options) {
+      const restored = restoreTaskDefer(db, runtime.options, (runtime.now ?? Date.now)(), body.key);
+      if (restored) return failResponse(409, restored);
+    }
     const cancelled = cancelItemDefer(db, body.key);
     return cancelled ? answer({ ok: true, ...cancelled }) : failResponse(400, "The Desk has no deferred item with this key.");
   }
@@ -45,8 +56,33 @@ async function deferWorkItem(body: z.infer<typeof DeferRequestSchema>, db: Datab
   if (isRefusedKind(named)) return failResponse(400, deferRefusal(named));
   const item = (await composeCurrentDay(db, runtime, desk, vigil, now)).items.find((entry) => entry.key === body.key);
   if (!item) return failResponse(400, `The Desk does not list an item of kind ${named} with this key.`);
+  if (item.kind === "task-handoff") return deferTaskHandoff(db, desk, item, body.until, now);
   if (!isDeferrableKind(item.kind)) return failResponse(400, deferRefusal(item.kind));
   if (body.until.kind === "person") return failResponse(400, ONLY_MAIL_WAITS_FOR_A_PERSON);
   const deferred = deferItem(db, item, body.until, { now, events: readingEvents(runtime.sourceCache?.cached() ?? []) });
   return deferred.ok ? answer(deferred) : failResponse(deferred.status, deferred.error);
+}
+
+const A_TASK_WAITS_UNTIL_A_DAY = "A task waits until a day.";
+const TASK_NOT_OPEN = "The task behind this card no longer exists in Balance.";
+const receiptOf = (key: string): string => `item-defer:${key}`;
+
+function deferTaskHandoff(db: Database, desk: DeskOptions, item: DeskItem, choice: z.infer<typeof SnoozeChoiceSchema>, now: number): Response {
+  if (choice.kind === "meeting" || choice.kind === "person") return failResponse(400, A_TASK_WAITS_UNTIL_A_DAY);
+  const row = readTaskHandoff(db, item.key.slice(TASK_HANDOFF_KEY_PREFIX.length));
+  if (!row || !openTask(db, desk, row.taskId)) return failResponse(404, TASK_NOT_OPEN);
+  const resolved = resolveSnoozeChoice(choice, { now, events: new Map(), names: new Map() });
+  if (typeof resolved === "string" || resolved.untilAt === null) return failResponse(409, typeof resolved === "string" ? resolved : A_TASK_WAITS_UNTIL_A_DAY);
+  if (!deferTaskUntil({ db, desk, now, taskId: row.taskId, after: localDay(resolved.untilAt), receipt: receiptOf(item.key) })) return failResponse(404, TASK_NOT_OPEN);
+  const deferred = deferItem(db, item, choice, { now, events: new Map() });
+  return deferred.ok ? answer(deferred) : failResponse(deferred.status, deferred.error);
+}
+
+function restoreTaskDefer(db: Database, desk: DeskOptions, now: number, key: string): string | null {
+  try {
+    undoTaskDefer({ db, desk, now, receipt: receiptOf(key) });
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "The task could not be restored.";
+  }
 }

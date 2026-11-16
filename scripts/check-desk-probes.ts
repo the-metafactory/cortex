@@ -163,6 +163,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-mail-junk.ts",
   "probe-desk-item-defer.ts",
   "probe-desk-item-defer-kinds.ts",
+  "probe-desk-item-defer-task.ts",
   "probe-desk-mail-round.ts",
   "probe-desk-mail-round-putback.ts",
   "probe-desk-mail-sweep.ts",
