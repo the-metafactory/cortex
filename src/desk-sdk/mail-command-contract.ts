@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { INTERRUPT_REASON_CODES } from "../surface/mc/desk/types";
+import { INTERRUPT_REASON_CODES } from "./interrupt-reason";
 
 const mailReference = z.object({ action: z.string(), account: z.string(), messageId: z.string() });
 const moveTarget = z.enum(["archive", "junk", "trash"]);

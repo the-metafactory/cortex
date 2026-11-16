@@ -1,4 +1,5 @@
 import { MailInvitationReplyCommandRequestSchema, MailInvitationReplyCommandResultSchema } from "../../../desk-sdk/mail-command-contract";
+import type { z } from "zod";
 import type { Database } from "bun:sqlite";
 import { accountOf } from "../../../common/types/config";
 import { oneLine } from "./actions";
@@ -268,7 +269,7 @@ export function decisionSentence(decision: InvitationDecision, ago: string): str
 }
 
 /** The stdin of the calendar-reply command for one answer. */
-export function invitePayload(mail: ListedMail, reply: InviteReply, requestId: string): { action: "invite-reply"; account: string; messageId: string; uid: string; reply: InviteReply; requestId: string } | null {
+export function invitePayload(mail: ListedMail, reply: InviteReply, requestId: string): z.output<typeof MailInvitationReplyCommandRequestSchema> | null {
   if (!mail.account || !mail.invitation) return null;
   return MailInvitationReplyCommandRequestSchema.parse({ action: "invite-reply", account: mail.account, messageId: mail.id, uid: mail.invitation.uid, reply, requestId });
 }

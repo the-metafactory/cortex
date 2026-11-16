@@ -18,6 +18,11 @@ export { UNDO_WINDOW_MS };
 
 const FOLDER: Record<MoveTarget, string> = { archive: "Archive", junk: "Junk", trash: "Trash" };
 const DONE: Record<MoveTarget, string> = { archive: "Archived", junk: "Moved to Junk", trash: "Deleted" };
+const moveAnswer = (stdout: string, fallback: string): { message: string; folder: string | null } => {
+  const answer = MailMoveCommandResultSchema.parse(stdout);
+  return { ...answer, message: oneLine(answer.message, fallback) };
+};
+
 const NOT_SET: Record<MoveTarget, string> = {
   archive: "Archiving mail is not set up on this stack.",
   junk: "Moving mail to Junk is not set up on this stack.",
@@ -116,8 +121,7 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
   const request: Record<string, string> = command === "move" ? MailMoveCommandRequestSchema.parse({ action: "move", account, messageId: mail.id, target }) : MailTrashCommandRequestSchema.parse({ action: "trash", account, messageId: mail.id });
   return runClaimed(deps, config.timeoutSeconds, { key: claimKey(mail.id), argv, request, command, failed: (line) => line, timedOut: `The mail may have moved; check ${FOLDER[target]}.` }, (stdout) => {
     deps.ledger.add(movedKey(target, mail.id), deps.now);
-    const { message: text, folder } = MailMoveCommandResultSchema.parse(stdout);
-    const message = oneLine(text, `Moved to ${FOLDER[target]}.`);
+    const { message, folder } = moveAnswer(stdout, `Moved to ${FOLDER[target]}.`);
     const correction = by?.correction;
     if (command !== "move") {
       if (correction === undefined) logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
@@ -191,7 +195,7 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
     : MailRestoreCommandRequestSchema.parse({ action: "restore", account: row.account, messageId: row.message_id, from: movedFrom });
   const claimed: Claimed = { key: claimKey(row.message_id), argv, request, command: "move", failed: (line) => `The mail was not moved back: ${line}`, timedOut: `The mail may be back; check ${backTo}.` };
   return runClaimed(deps, config.timeoutSeconds, claimed, (stdout) => {
-    const message = oneLine(MailMoveCommandResultSchema.parse(stdout).message, `Moved back to ${backTo}.`);
+    const { message } = moveAnswer(stdout, `Moved back to ${backTo}.`);
     if (movedFrom === null) deps.ledger.add(movedKey("junk", row.message_id), deps.now);
     else deps.ledger.forget(movedKey(movedFrom, row.message_id));
     const withdrawn = deps.db.transaction((): boolean => {
@@ -221,8 +225,7 @@ export async function restoreJunkMail(mail: ListedMail & { listedAt: number }, d
   const request = MailRestoreCommandRequestSchema.parse({ action: "restore", account, messageId: mail.id, from: "junk" });
   return runClaimed(deps, config.timeoutSeconds, { key: claimKey(mail.id), argv, request, command: "move", failed: line => line, timedOut: "The mail may have moved; check INBOX." }, stdout => {
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
-    const { message: text, folder } = MailMoveCommandResultSchema.parse(stdout);
-    const message = oneLine(text, "Moved back to INBOX.");
+    const { message, folder } = moveAnswer(stdout, "Moved back to INBOX.");
     deps.db.transaction(() => {
       retireJunkRestores(deps.db, account, mail.id, message, deps.now);
       const correction = recordCorrection(id);
