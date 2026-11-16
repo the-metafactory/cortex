@@ -85,7 +85,7 @@ export interface ConformanceReport {
 	mailQueries?: ConformanceMailQuery[];
 }
 export declare function formatReport(report: ConformanceReport): string;
-export declare const DESK_ADAPTER_SDK_VERSION = "1.16.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.17.0";
 /** The connection id every conformance run uses for the package's one synthetic connection. */
 export declare const CONFORMANCE_CONNECTION_ID = "conformance-connection";
 export interface MailExecutionProvider {
@@ -97,6 +97,8 @@ export interface MailExecutionProvider {
 	lookupMove?(input: unknown): Promise<unknown>;
 	unsubscribe?(input: unknown): Promise<unknown>;
 	lookupUnsubscribe?(input: unknown): Promise<unknown>;
+	report?(input: unknown): Promise<unknown>;
+	lookupReport?(input: unknown): Promise<unknown>;
 }
 export interface MailExecutionConnections {
 	connection(binding: MailConnectionBinding): MailExecutionProvider | undefined;

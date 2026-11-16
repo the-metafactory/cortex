@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.16.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.17.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -1248,7 +1248,7 @@ export interface ObservationRequest {
 	continuation?: string;
 	limit: number;
 }
-export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe";
+export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe" | "report" | "lookupReport";
 export interface DeskMailExecutionConnection {
 	readonly version: number;
 	readonly methods: readonly DeskMailExecutionMethod[];

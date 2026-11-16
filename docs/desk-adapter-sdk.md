@@ -5,7 +5,7 @@ This is the authoring contract for a Desk adapter package. It describes the `des
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
-SDK 1.16.0 adds `invitationOpen`, the `repliesTo` rule and their conformance vectors to the `./desk-sdk` export; see [Rules an adapter applies for Cortex](desk/commands.md#rules-an-adapter-applies-for-cortex).
+SDK 1.17.0 adds the `report` and `lookupReport` Mail execution methods. SDK 1.16.0 added `invitationOpen`, the `repliesTo` rule and their conformance vectors to the `./desk-sdk` export; see [Rules an adapter applies for Cortex](desk/commands.md#rules-an-adapter-applies-for-cortex).
 
 SDK 1.15.0 adds `MailMoveCommandRequestSchema`, `MailRestoreCommandRequestSchema`, `MailTrashCommandRequestSchema`, `MailLocateCommandRequestSchema`, `MailDraftCommandRequestSchema`, `MailReportCommandRequestSchema`, `MailInvitationReplyCommandRequestSchema` and their corresponding `ResultSchema` exports, plus `PushCommandRequestSchema` for the command transport's stdin. The mail result schemas accept raw stdout or decoded JSON, preserving each action's existing fallbacks; locate rejects unknown places. They live in `src/desk-sdk/mail-command-contract.ts` and are exported through `./desk-sdk`.
 
