@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { z } from "zod/v4";
 import { DeskMailMirrorSchema } from "../../../common/types/config";
 import { PRINCIPAL_ACTED_WHERE, queryMailLog, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
-import { listRules, matchesRule, ruleSentence, type MailRule } from "./mail-rules";
+import { matchesRule, readableRules, ruleSentence, type MailRule } from "./mail-rules";
 import { listKey } from "./mail-unsubscribe";
 import { isVip, listVips } from "./vips";
 import type { MailMirrorCount, MailMirrorSender, MailMirrorRule, MailMirrorUnsubscribe, MailMirrorUnread, MailMirrorTime, MailMirror } from "../../../desk-api/wire/mirror";
@@ -199,7 +199,7 @@ export function readMailMirror(db: Database, week: { start: number; end: number 
   return mailMirror({
     start: week.start, end: week.end, entries,
     runs: mirrorRuleRuns(db, week.start, week.end),
-    rules: listRules(db),
+    rules: readableRules(db),
     vips: new Set(listVips(db).map((v) => v.address)),
     partial: entries.length >= MAIL_MIRROR_LOG_LIMIT,
     ...(options.config ? { config: options.config } : {}),

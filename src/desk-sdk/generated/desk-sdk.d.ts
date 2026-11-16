@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.17.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.19.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -321,12 +321,32 @@ declare const ASK_KINDS: readonly [
 	"goal",
 	"calendar",
 	"routine",
-	"conversation"
+	"conversation",
+	"row"
 ];
 export type AskKind = (typeof ASK_KINDS)[number];
 declare const FIELD_SCHEMAS: {
 	routine: z.ZodObject<{
 		proposalId: z.ZodUUID;
+	}, z.core.$strip>;
+	row: z.ZodObject<{
+		title: z.ZodString;
+		area: z.ZodString;
+		repeat: z.ZodObject<{
+			mode: z.ZodOptional<z.ZodEnum<{
+				calendar: "calendar";
+				completion: "completion";
+			}>>;
+			unit: z.ZodEnum<{
+				month: "month";
+				day: "day";
+				week: "week";
+			}>;
+			interval: z.ZodNumber;
+			weekdays: z.ZodOptional<z.ZodArray<z.ZodNumber>>;
+			count: z.ZodOptional<z.ZodNumber>;
+			until: z.ZodOptional<z.ZodISODate>;
+		}, z.core.$strict>;
 	}, z.core.$strip>;
 	conversation: z.ZodObject<{
 		text: z.ZodString;
@@ -1248,7 +1268,7 @@ export interface ObservationRequest {
 	continuation?: string;
 	limit: number;
 }
-export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe" | "report" | "lookupReport";
+export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe" | "report" | "lookupReport" | "invitationReply" | "invitationRemove" | "invitationRestore" | "lookupInvitation";
 export interface DeskMailExecutionConnection {
 	readonly version: number;
 	readonly methods: readonly DeskMailExecutionMethod[];
@@ -1464,6 +1484,41 @@ export declare function mailReportSnapshot(options: {
 	account: string;
 	kind: MailReportKind;
 	input: MailReportInput;
+	provenance: Provenance;
+}): ApprovedSnapshot;
+export declare const INVITATION_REPLIES: readonly [
+	"accept",
+	"decline",
+	"tentative"
+];
+export type InvitationReply = (typeof INVITATION_REPLIES)[number];
+export type InvitationAction = InvitationReply | "remove" | "restore";
+export declare const INVITATION_CAPABILITIES: Record<InvitationAction, string>;
+declare const InvitationInputSchema: z.ZodObject<{
+	message: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	invitation: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	expectedRevision: z.ZodString;
+}, z.core.$strict>;
+export type InvitationInput = z.infer<typeof InvitationInputSchema>;
+export declare function mailInvitationDeclaration(adapterId: string, actions?: readonly InvitationAction[]): AdapterDeclaration;
+export declare function mailInvitationSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: string;
+	action: InvitationAction;
+	messageId: string;
+	invitationId: string;
+	expectedRevision: string;
 	provenance: Provenance;
 }): ApprovedSnapshot;
 export declare const MAIL_MOVE_CAPABILITY = "mail.move";

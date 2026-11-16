@@ -1,3 +1,5 @@
+import type { OutlineRepeatInput } from "./balance-command";
+
 export interface RoutineSchedule {
   clock: "elapsed" | "wall";
   expression: string;
@@ -11,8 +13,27 @@ export function routineRequest(text: string): boolean {
   return /\bevery\s+(?:\d+\s+)?(?:minutes?|hours?|day|morning|evening|weekdays?|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(text);
 }
 
+const SCHEDULE = /^every\s+(?:(?<count>\d+)\s+)?(?<unit>minutes?|hours?|day|morning|evening|weekdays?|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<ampm>am|pm)?)?\s*[,;:]?\s+(?<request>.+)$/i;
+const WORK_WEEK = [1, 2, 3, 4, 5];
+
+export interface RowRepeat {
+  title: string;
+  repeat: OutlineRepeatInput;
+}
+
+export function rowRepeat(text: string): RowRepeat | null {
+  const groups = SCHEDULE.exec(text.trim())?.groups;
+  const unit = groups?.unit?.toLowerCase() ?? "";
+  const title = groups?.request?.trim() ?? "";
+  if (!groups || groups.count || !title || /^(minute|hour)/.test(unit)) return null;
+  const day = DAYS.indexOf(unit);
+  if (day >= 0) return { title, repeat: { unit: "week", interval: 1, weekdays: [day] } };
+  if (unit.startsWith("weekday")) return { title, repeat: { unit: "week", interval: 1, weekdays: WORK_WEEK } };
+  return { title, repeat: { unit: "day", interval: 1 } };
+}
+
 export function routineSchedule(text: string): RoutineSchedule | string {
-  const match = /^every\s+(?:(?<count>\d+)\s+)?(?<unit>minutes?|hours?|day|morning|evening|weekdays?|monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+at\s+(?<hour>\d{1,2})(?::(?<minute>\d{2}))?\s*(?<ampm>am|pm)?)?\s*[,;:]?\s+(?<request>.+)$/i.exec(text.trim());
+  const match = SCHEDULE.exec(text.trim());
   if (!match?.groups) return "Start with a schedule such as ‘every Friday at 17:00, …’ or ‘every minute, …’.";
   const { unit = "", count, hour, minute = "0", ampm, request = "" } = match.groups;
   const u = unit.toLowerCase();

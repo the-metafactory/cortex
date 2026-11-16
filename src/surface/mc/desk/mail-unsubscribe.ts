@@ -5,7 +5,7 @@ import { isIP, type LookupFunction } from "node:net";
 import type { ListedMail, TrashLedger } from "./mail-actions";
 import { logMailDecision, mailFeatures, PRINCIPAL_ACTED_WHERE, queryMailLog, type MailLogAction } from "./mail-log";
 import { refuse, type MoveResult } from "./mail-move";
-import { createRule, listRules, matchesRule, type MailRule, type RuleChange } from "./mail-rules";
+import { createRule, matchesRule, readableRules, type MailRule, type RuleChange } from "./mail-rules";
 import { suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import type { SourceMail } from "./sources/command";
 import { DEFAULT_UNSUBSCRIBE, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
@@ -311,6 +311,6 @@ export function archiveWhatArrives(db: Database, mail: ListedMail, now: number):
 export const offerContext = (db: Database, config: UnsubscribeConfig | undefined, suspicion: SuspicionContext, flagged?: ReadonlySet<string>): OfferContext => ({
   config: config ?? DEFAULT_UNSUBSCRIBE,
   suspicion,
-  rules: listRules(db),
+  rules: readableRules(db),
   ...(flagged ? { flagged } : {}),
 });

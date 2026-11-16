@@ -71,6 +71,7 @@ export const CONVERSATION_NOT_WRITTEN = "Start a conversation from its proposal 
 
 export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<Created> {
   if (card.kind === "routine") return { ok: false, error: "Confirm routines through their stored proposal." };
+  if (card.kind === "row") return { ok: false, error: "Repeating rows are written to Balance by the create route." };
   if (card.kind === "capture") return { ok: false, error: notSetUp("capture") };
   if (card.kind === "conversation") return { ok: false, error: CONVERSATION_NOT_WRITTEN };
   const argv = deps.writers[card.kind];

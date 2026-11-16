@@ -6,7 +6,7 @@ import { ActionButton, CorrectionNote, DeskBody, DeskItemRow, DeskView, DoneForY
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
-import { askDesk, createFromProposal } from "../lib/desk-ask";
+import { askDesk, createFromProposal, ROW_NEEDS_AREA } from "../lib/desk-ask";
 import type { DeskProposal } from "../../desk/ask";
 import { openGroup, selectItems } from "../../desk/present";
 import { DeskWakeSchema } from "../../../../common/types/desk-wake";
@@ -331,6 +331,59 @@ describe("the command bar", () => {
     );
     expect(goal(() => {})).toContain(">Talk it over with Assistant instead</button>");
     expect(goal()).not.toContain("Talk it over with Assistant instead");
+  });
+
+  describe("a repeating row offered with no area", () => {
+    const AREAS = [{ id: "work", label: "Work" }, { id: "home", label: "Home" }];
+    const repeat = { unit: "week", interval: 1, weekdays: [1] };
+    const row = (fields: Record<string, unknown>, choices: { label: string; problem?: string; onChoose: () => void }[] = []) => renderToStaticMarkup(
+      <ProposalCard proposal={{ kind: "row", label: "Repeat it for me", fields, via: "rules", ...(fields.area ? {} : { problem: "Which area should this go in?" }) }} said="every Monday at 9 call the bank" maps={[]} now={NOW} busy={false}
+        onConfirm={() => {}} onCancel={() => {}} onGoto={() => {}} onFieldsChange={() => {}} areas={AREAS} choices={choices} />,
+    );
+    const recording = () => {
+      const posts: { path: string; body: Record<string, unknown> }[] = [];
+      const fetchImpl = async (path: string, init: RequestInit) => {
+        posts.push({ path, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+        return new Response(JSON.stringify({ ok: true, message: "Added call the bank to Balance.", proposal: { kind: "routine", label: "Routine", fields: { proposalId: "p" }, via: "rules" } }), { status: 200 });
+      };
+      return { posts, fetchImpl };
+    };
+
+    it("asks for the area with the Desk's area picker and keeps Confirm off until one is picked", () => {
+      const html = row({ title: "call the bank", repeat });
+      expect(html).toContain('role="combobox"');
+      expect(html).toContain("Choose an area…");
+      expect(html).toContain("Which area should this go in?");
+      expect(html).toMatch(/<button[^>]*disabled[^>]*>Confirm/);
+    });
+
+    it("turns Confirm on once an area is picked, and creates the row under that area", async () => {
+      const picked = { title: "call the bank", repeat, area: "home" };
+      const html = row(picked);
+      expect(html).toContain("Home");
+      expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Confirm/);
+      const { posts, fetchImpl } = recording();
+      expect(await createFromProposal("req-row", "row", picked, fetchImpl)).toEqual({ ok: true, text: "Added call the bank to Balance." });
+      expect(posts).toEqual([{ path: "/api/desk/create", body: { requestId: "req-row", kind: "row", fields: picked } }]);
+    });
+
+    it("refuses to confirm a row with no area and sends nothing", async () => {
+      const { posts, fetchImpl } = recording();
+      expect(await createFromProposal("req-row", "row", { title: "call the bank", repeat }, fetchImpl)).toEqual({ ok: false, text: ROW_NEEDS_AREA });
+      expect(await createFromProposal("req-row", "row", { title: "call the bank", repeat, area: "" }, fetchImpl)).toEqual({ ok: false, text: ROW_NEEDS_AREA });
+      expect(posts).toHaveLength(0);
+    });
+
+    it("keeps the routine offer as the second choice, and choosing it asks with choice routine", async () => {
+      expect(row({ title: "call the bank", repeat }, [{ label: "Have Ivy do it", onChoose: () => {} }])).toMatch(/<button[^>]*>Have Ivy do it<\/button>/);
+      const blocked = row({ title: "call the bank", repeat }, [{ label: "Have Ivy do it", problem: "Include a time, for example ‘every Friday at 17:00, …’.", onChoose: () => {} }]);
+      expect(blocked).toMatch(/<button[^>]*disabled[^>]*>Have Ivy do it<\/button>/);
+      expect(blocked).toContain("Have Ivy do it: Include a time");
+      const { posts, fetchImpl } = recording();
+      const answer = await askDesk("every Monday at 9 call the bank", fetchImpl, undefined, "routine");
+      expect(answer).toMatchObject({ ok: true, proposal: { kind: "routine" } });
+      expect(posts).toEqual([{ path: "/api/desk/ask", body: { text: "every Monday at 9 call the bank", choice: "routine" } }]);
+    });
   });
 
   it("shows notes under Keep in mind", () => {

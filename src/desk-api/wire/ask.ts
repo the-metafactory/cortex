@@ -1,7 +1,7 @@
 import type { ParserRouting } from "./parser-routing";
 import type { CapabilityRefusal } from "./routines";
 
-export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar", "routine", "conversation"] as const;
+export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar", "routine", "conversation", "row"] as const;
 
 export type AskKind = (typeof ASK_KINDS)[number];
 

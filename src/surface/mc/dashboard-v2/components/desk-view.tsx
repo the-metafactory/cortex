@@ -133,7 +133,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }); };
   const [askText, setAskText] = useState("");
   const [asking, setAsking] = useState(false);
-  const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
+  const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown>; others: DeskProposal[] } | null>(null);
   const [creating, setCreating] = useState(false);
   const askInput = useRef<HTMLInputElement>(null);
   const [hint, setHint] = useState(() => wantsHint(view.notifications, browserNotifyEnv()));
@@ -246,19 +246,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         setNote(result.text);
         return;
       }
-      await propose(text, result.proposal);
+      await propose(text, result.proposal, result.proposals);
       setAskText("");
     } finally {
       setAsking(false);
     }
   };
 
-  const presentProposal = (said: string, p: DeskProposal, requestId: string): void => {
-    setProposal({ p, said, requestId, fields: p.fields });
+  const presentProposal = (said: string, p: DeskProposal, requestId: string, proposals: DeskProposal[] = []): void => {
+    setProposal({ p, said, requestId, fields: p.fields, others: proposals.slice(1) });
     revealDay({ kind: "proposal" });
   };
 
-  const propose = async (said: string, p: DeskProposal): Promise<string | null> => {
+  const propose = async (said: string, p: DeskProposal, proposals?: DeskProposal[]): Promise<string | null> => {
     const requestId = crypto.randomUUID();
     if (p.kind === "capture" && p.automatic && !p.problem) {
       const filed = await createFromProposal(requestId, p.kind, p.fields);
@@ -270,8 +270,20 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       presentProposal(said, p, requestId);
       return `${filed.text} Your thought is kept in the draft for retry.`;
     }
-    presentProposal(said, p, requestId);
+    presentProposal(said, p, requestId, proposals);
     return null;
+  };
+
+  const chooseRoutine = async (said: string): Promise<void> => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const result = await askDesk(said, fetch, area === ALL_AREAS ? undefined : area, "routine");
+      if (!result.ok) { setNote(result.text); return; }
+      presentProposal(said, result.proposal, crypto.randomUUID());
+    } finally {
+      setCreating(false);
+    }
   };
 
   const discussion = useStudioSession(captureChanged);
@@ -801,6 +813,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       onCancel={() => { setProposal(null); }}
       onGoto={() => { focusEvent(GHOST_KEY); }}
       onFieldsChange={(fields) => { setProposal((cur) => (cur ? { ...cur, fields } : cur)); }}
+      areas={view.areas.map((a) => ({ id: a.id, label: a.label }))}
+      choices={proposal.others.filter((other) => other.kind === "routine").map((other) => ({ label: other.label, ...(other.problem ? { problem: other.problem } : {}), onChoose: () => void chooseRoutine(proposal.said) }))}
       {...(alternative ? { onAlternative: () => void startTalk(proposal.requestId, alternative.fields, proposal.said) } : {})}
     />
   );
