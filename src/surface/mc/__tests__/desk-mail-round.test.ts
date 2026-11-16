@@ -81,6 +81,21 @@ describe("a durable scheduled mail round", () => {
     expect(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_rounds WHERE status = 'open'").get()?.n).toBe(1);
   });
 
+  it("prunes a finished round after the retention and keeps an open one", async () => {
+    rig = await openMailRoundRig(roundAt(2, 8));
+    rig.setState({ mail: [roundMail("a", roundAt(2, 7))] });
+    rig.setNow(roundAt(2, 8, 31));
+    expect((await rig.get()).mailRound?.due).toBe(true);
+    expect((await rig.post({ action: "hide", key: "mail:a" })).status).toBe(200);
+    await rig.get();
+    const finished = (): number | undefined => rig?.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_rounds WHERE status = 'finished'").get()?.n;
+    expect(finished()).toBe(1);
+
+    rig.setNow(roundAt(2, 8, 31) + 8 * 86_400_000);
+    await rig.get();
+    expect(finished()).toBe(0);
+  });
+
   it("creates one round on a weekend slot and moves a slot past a shifted meeting chain", async () => {
     rig = await openMailRoundRig(roundAt(8, 8));
     rig.setState({ mail: [roundMail("weekend", roundAt(8, 7))] });

@@ -36,7 +36,7 @@ interface MailRoundUnavailable {
   calendar: string[];
 }
 
-interface MailRoundView {
+export interface MailRoundView {
   id: string | null;
   revision: number;
   due: boolean;
@@ -121,9 +121,22 @@ interface Candidate {
   area: string | null;
 }
 
+interface Candidates {
+  ordered: Candidate[];
+  byKey: Map<string, Candidate>;
+  bySource: Map<string, Set<string>>;
+}
+
+interface ReconcileResult {
+  open: StoredRound | null;
+  justFinished: StoredRound | null;
+}
+
 const MAX_SHIFT_STEPS = 64;
 const DAYS_BEFORE = 3;
 const DAYS_AFTER = 8;
+const DAY_MS = 86_400_000;
+const MAIL_ROUND_RETENTION_MS = 7 * DAY_MS;
 
 const mailKey = (id: string): string => `mail:${id}`;
 
@@ -186,7 +199,7 @@ function groupMeta(group: SweepGroup): Omit<StoredGroup, "memberKeys"> {
   return { id: group.id, kind: group.kind, label: group.label, title: group.title, target: group.target, area: group.area };
 }
 
-function candidatesOf(input: MailRoundInput): { ordered: Candidate[]; byKey: Map<string, Candidate>; bySource: Map<string, Set<string>> } {
+function candidatesOf(input: MailRoundInput): Candidates {
   const ordered: Candidate[] = [];
   const byKey = new Map<string, Candidate>();
   const bySource = new Map<string, Set<string>>();
@@ -241,6 +254,10 @@ function finishRound(db: Database, id: string, now: number): void {
   db.query("UPDATE desk_mail_rounds SET status = 'finished', finished_at = ? WHERE id = ? AND status = 'open'").run(now, id);
 }
 
+function pruneFinishedRounds(db: Database, now: number): void {
+  db.query("DELETE FROM desk_mail_rounds WHERE status = 'finished' AND finished_at < ?").run(now - MAIL_ROUND_RETENTION_MS);
+}
+
 function queueSnapshot(row: QueueRow): SourceMail {
   return parseStored<SourceMail>(row.mail, { kind: "mail", id: row.message_id, from: { address: "unknown@example.invalid" }, subject: "", receivedAt: new Date(row.queued_at).toISOString(), unread: true });
 }
@@ -258,19 +275,12 @@ function groupAssignment(groups: readonly SweepGroup[], members: readonly Stored
   return { groups: assigned, byKey };
 }
 
-function createRound(db: Database, rows: readonly QueueRow[], input: MailRoundInput, byKey: Map<string, Candidate>, candidateOrder: readonly string[], capturedAt: number): StoredRound | null {
-  const candidates = [...rows];
-  const order = new Map(candidateOrder.map((key, index) => [key, index]));
-  candidates.sort((left, right) => (order.get(left.mail_key) ?? 1_000_000_000 + left.position) - (order.get(right.mail_key) ?? 1_000_000_000 + right.position));
-  const seen = new Set<string>();
-  const ordered = candidates.filter((row) => {
-    if (seen.has(row.mail_key)) return false;
-    seen.add(row.mail_key);
-    return true;
-  });
+function createRound(db: Database, rows: readonly QueueRow[], input: MailRoundInput, candidates: Candidates, capturedAt: number): StoredRound | null {
+  const order = new Map(candidates.ordered.map((candidate, index) => [candidate.key, index]));
+  const ordered = [...rows].sort((left, right) => (order.get(left.mail_key) ?? 1_000_000_000 + left.position) - (order.get(right.mail_key) ?? 1_000_000_000 + right.position));
   if (ordered.length === 0) return null;
   const members: StoredMember[] = ordered.map((row) => {
-    const candidate = byKey.get(row.mail_key);
+    const candidate = candidates.byKey.get(row.mail_key);
     const live = candidate?.sourceId === row.source_id ? candidate.mail : queueSnapshot(row);
     return { key: row.mail_key, sourceId: row.source_id, messageId: row.message_id, account: row.account, area: candidate?.area ?? null, mail: live };
   });
@@ -308,61 +318,68 @@ function viewOf(round: StoredRound | null, waiting: number, nextScheduledAt: num
   };
 }
 
+function reconcileOpen(db: Database, open: StoredRound, candidates: Candidates, succeeded: ReadonlySet<string>, now: number): ReconcileResult {
+  const surviving = open.members.filter((member) => !succeeded.has(member.sourceId) || candidates.bySource.get(member.sourceId)?.has(member.key) === true);
+  const refreshed = surviving.map((member) => {
+    const candidate = candidates.byKey.get(member.key);
+    return candidate?.sourceId === member.sourceId ? { ...member, mail: candidate.mail, area: candidate.area } : member;
+  });
+  if (refreshed.length === 0) {
+    finishRound(db, open.id, now);
+    return { open: null, justFinished: open };
+  }
+  const groups = filterGroups(open.groups, refreshed);
+  const changed = refreshed.length !== open.members.length || !sameJson(open.groups, groups);
+  const next: StoredRound = { ...open, revision: changed ? open.revision + 1 : open.revision, groups, members: refreshed };
+  if (changed || !sameJson(open.members, refreshed)) writeRound(db, next);
+  return { open: next, justFinished: null };
+}
+
+function pruneQueue(db: Database, open: StoredRound | null, candidates: Candidates, succeeded: ReadonlySet<string>): void {
+  const openKeys = new Set(open?.members.map((member) => member.key) ?? []);
+  for (const row of readQueue(db)) {
+    const gone = succeeded.has(row.source_id) && candidates.bySource.get(row.source_id)?.has(row.mail_key) !== true;
+    if (gone || openKeys.has(row.mail_key)) db.query("DELETE FROM desk_mail_round_queue WHERE mail_key = ?").run(row.mail_key);
+  }
+}
+
+function enqueueCandidates(db: Database, open: StoredRound | null, candidates: Candidates, succeeded: ReadonlySet<string>, now: number): QueueRow[] {
+  const openKeys = new Set(open?.members.map((member) => member.key) ?? []);
+  const queued = readQueue(db);
+  const queuedKeys = new Set(queued.map((row) => row.mail_key));
+  let position = queued.reduce((max, row) => Math.max(max, row.position), 0);
+  for (const candidate of candidates.byKey.values()) {
+    if (!candidate.mail.unread || !succeeded.has(candidate.sourceId) || openKeys.has(candidate.key) || queuedKeys.has(candidate.key)) continue;
+    position += 1;
+    const receivedAt = Date.parse(candidate.mail.receivedAt);
+    db.query("INSERT INTO desk_mail_round_queue (mail_key, source_id, account, message_id, mail, queued_at, position) VALUES (?, ?, ?, ?, ?, ?, ?)").run(candidate.key, candidate.sourceId, candidate.mail.account ?? null, candidate.mail.id, JSON.stringify(candidate.mail), Number.isFinite(receivedAt) ? receivedAt : now, position);
+    queuedKeys.add(candidate.key);
+  }
+  return readQueue(db);
+}
+
+function successorRows(queued: readonly QueueRow[], justFinished: StoredRound | null, dueAt: number | undefined, input: MailRoundInput, slots: readonly string[]): QueueRow[] {
+  if (!justFinished) return queued.filter((row) => dueAt !== undefined && row.queued_at <= dueAt);
+  return slotPassed(justFinished.openedAt, input.now, slots, input.availability) ? [...queued] : [];
+}
+
+function openSuccessor(db: Database, input: MailRoundInput, slots: readonly string[], candidates: Candidates, queued: readonly QueueRow[], justFinished: StoredRound | null): StoredRound | null {
+  const dueAt = latestEffectiveSlot(input.now, slots, input.availability);
+  const rows = successorRows(queued, justFinished, dueAt, input, slots).filter((row) => !input.interrupting.has(row.mail_key));
+  return rows.length === 0 ? null : createRound(db, rows, input, candidates, dueAt ?? input.now);
+}
+
 export function readMailRound(db: Database, input: MailRoundInput): MailRoundView {
   return db.transaction(() => {
     const slots = configuredSlots(input.slots);
-    const { ordered, byKey, bySource } = candidatesOf(input);
+    const candidates = candidatesOf(input);
     const succeeded = new Set(input.readings.filter((reading) => reading.error === null).map((reading) => reading.id));
-    let open = (() => { const row = readOpenRow(db); return row ? storedRound(row) : null; })();
-    let justFinished: StoredRound | null = null;
-
-    if (open) {
-      const surviving = open.members.filter((member) => !succeeded.has(member.sourceId) || bySource.get(member.sourceId)?.has(member.key) === true);
-      const refreshed = surviving.map((member) => {
-        const candidate = byKey.get(member.key);
-        return candidate?.sourceId === member.sourceId ? { ...member, mail: candidate.mail, area: candidate.area } : member;
-      });
-      if (refreshed.length === 0) {
-        justFinished = open;
-        finishRound(db, open.id, input.now);
-        open = null;
-      } else {
-        const groups = filterGroups(open.groups, refreshed);
-        const changed = refreshed.length !== open.members.length || !sameJson(open.groups, groups);
-        const next: StoredRound = { ...open, revision: changed ? open.revision + 1 : open.revision, groups, members: refreshed };
-        if (changed || !sameJson(open.members, refreshed)) writeRound(db, next);
-        open = next;
-      }
-    }
-
-    const openKeys = new Set(open?.members.map((member) => member.key) ?? []);
-    for (const row of readQueue(db)) {
-      const gone = succeeded.has(row.source_id) && bySource.get(row.source_id)?.has(row.mail_key) !== true;
-      if (gone || openKeys.has(row.mail_key)) db.query("DELETE FROM desk_mail_round_queue WHERE mail_key = ?").run(row.mail_key);
-    }
-
-    let queued = readQueue(db);
-    const queuedKeys = new Set(queued.map((row) => row.mail_key));
-    let position = queued.reduce((max, row) => Math.max(max, row.position), 0);
-    for (const candidate of byKey.values()) {
-      if (!candidate.mail.unread || !succeeded.has(candidate.sourceId) || openKeys.has(candidate.key) || queuedKeys.has(candidate.key)) continue;
-      position += 1;
-      const queuedAt = Date.parse(candidate.mail.receivedAt);
-      db.query("INSERT INTO desk_mail_round_queue (mail_key, source_id, account, message_id, mail, queued_at, position) VALUES (?, ?, ?, ?, ?, ?, ?)").run(candidate.key, candidate.sourceId, candidate.mail.account ?? null, candidate.mail.id, JSON.stringify(candidate.mail), Number.isFinite(queuedAt) ? queuedAt : input.now, position);
-      queuedKeys.add(candidate.key);
-    }
-    queued = readQueue(db);
-
-    if (!open) {
-      const dueAt = latestEffectiveSlot(input.now, slots, input.availability);
-      const catchUp = justFinished !== null && dueAt !== undefined && slotPassed(justFinished.openedAt, input.now, slots, input.availability);
-      const rows = justFinished ? (catchUp ? queued : []) : queued.filter((row) => dueAt !== undefined && row.queued_at <= dueAt);
-      const eligible = rows.filter((row) => !input.interrupting.has(row.mail_key));
-      const capturedAt = dueAt ?? input.now;
-      const created = eligible.length > 0 ? createRound(db, eligible, input, byKey, ordered.map((candidate) => candidate.key), capturedAt) : null;
-      if (created) open = created;
-    }
-
+    pruneFinishedRounds(db, input.now);
+    const row = readOpenRow(db);
+    const reconciled = row ? reconcileOpen(db, storedRound(row), candidates, succeeded, input.now) : { open: null, justFinished: null };
+    pruneQueue(db, reconciled.open, candidates, succeeded);
+    const queued = enqueueCandidates(db, reconciled.open, candidates, succeeded, input.now);
+    const open = reconciled.open ?? openSuccessor(db, input, slots, candidates, queued, reconciled.justFinished);
     const unavailable: MailRoundUnavailable = {
       mail: input.readings.filter((reading) => reading.error !== null).map((reading) => reading.id),
       calendar: input.availability.sources.filter((source) => source.kind === "unknown").map((source) => source.id),

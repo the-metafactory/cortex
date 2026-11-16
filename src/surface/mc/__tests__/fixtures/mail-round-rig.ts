@@ -18,7 +18,6 @@ export interface RoundState {
 
 export interface MailRoundRig {
   dir: string;
-  dbPath: string;
   database: () => Database;
   baseUrl: () => string;
   setNow: (now: number) => void;
@@ -93,7 +92,6 @@ export async function openMailRoundRig(now: number, overrides: Partial<DeskOptio
   let ctx: ServerContext = startServer({ ...DEFAULT_CONFIG, port: 0 }, db, { deskNow: () => clock, desk });
   const rig: MailRoundRig = {
     dir,
-    dbPath,
     database: () => db,
     baseUrl: () => `http://localhost:${ctx.port}`,
     setNow: (at) => { clock = at; },
