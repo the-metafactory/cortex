@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { findNode, type AppState, type OutlineNode } from "../../../balance";
 import type { MyDayMeta } from "./my-day-schema";
 import { responseCoverage, lastResponseCoverage } from "./studio/response";
-import type { StudioThread, ThreadState } from "./studio/format";
+import type { StudioThread } from "./studio/format";
+import type { StudioProjectLink } from "../../../desk-api/wire/studio";
 
 export interface StudioProjection {
   namespace: string;
@@ -101,8 +102,6 @@ export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioPro
     current.done = current.children.length === 0;
   }
 }
-/** A Studio thread's outline row with its thread's state; `state` and `openNotes` are null when the Studio is off or this request could not read it. */
-export interface StudioProjectLink { id: string; slug: string; state: ThreadState | null; openNotes: number | null }
 export function studioProjectLinks(meta: MyDayMeta, input?: StudioProjection): StudioProjectLink[] {
   if (!input) return meta.studio.map(entry => ({ id: entry.projectId, slug: entry.slug, state: null, openNotes: null }));
   const threads = new Map(uniquelyIdentifiedThreads(input).map(({ source, thread }) => [source, thread]));

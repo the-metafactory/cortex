@@ -10,7 +10,7 @@ export function RoutineCreation({ open, onClose, onCreated }: { open: boolean; o
   const prepare = async (): Promise<void> => {
     if (inFlight.current || !text.trim()) return; inFlight.current = true; setBusy(true); setNotice(null);
     try {
-      const result = await askDesk(text);
+      const result = await askDesk(text, fetch, undefined, "routine");
       if (!result.ok) { setNotice(result.text); return; }
       if (result.proposal.kind !== "routine") { setNotice("Describe a recurring routine with its schedule and steps. Nothing was installed."); return; }
       setProposal({ value: result.proposal, requestId: crypto.randomUUID(), said: text });

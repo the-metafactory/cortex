@@ -10,38 +10,13 @@ import type { SourceReading } from "./sources/command";
 import { SWEEP_WORDS } from "./mail-sweep-schema";
 import { DAY_MS } from "./time";
 import { isVip } from "./vips";
-
-export const SWEEP_KINDS = ["bundle", "sweep", "digest"] as const;
-export type SweepKind = (typeof SWEEP_KINDS)[number];
-export type SweepBasis = "similar" | "list" | "sender" | "age" | "day";
+import type { SweepBasis, SweepMailView, MailSweepView } from "../../../desk-api/wire/mail";
+export type { SweepMailView, MailSweepView };
 
 export const SWEEP_LIMITS = { minBundle: 2, minSweep: 3, ageDays: 3, maxBundles: 5, maxSweeps: 3, maxMails: 200 } as const;
 
 
 export type SweepMember = ListedMail & { area: string | null };
-
-export interface SweepMailView {
-  key: string;
-  subject: string;
-  from: string;
-  at: string;
-  url?: string;
-  unsubscribe?: import("./mail-unsubscribe").UnsubscribeView;
-}
-
-/** `label` is deprecated in favour of `kind` and `basis`, or `labelPhrase` for a category. Served through 1.x; removed in 2.0. */
-export interface MailSweepView {
-  id: string;
-  kind: SweepKind;
-  basis: SweepBasis;
-  target: MoveTarget;
-  label: string;
-  labelPhrase?: import("./phrases").DeskPhrase;
-  title: string;
-  why: string;
-  area: string | null;
-  mails: SweepMailView[];
-}
 
 export interface SweepGroup extends Omit<MailSweepView, "mails"> {
   about: string;

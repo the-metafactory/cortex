@@ -8,7 +8,7 @@ import { digestedIds } from "./mail-rules";
 import { textHash } from "./mail-similar";
 import { SingleFlight } from "./single-flight";
 import { suspicionContext, suspicionOf, type SuspicionContext } from "./mail-suspicion";
-import { byAge, commonArea, listSweeps, plural, senderOf, sweepContext, sweepView, SWEEP_LIMITS, type MailSweepView, type SweepGroup, type SweepMember, type SweepOptions } from "./mail-sweep";
+import { byAge, commonArea, listSweeps, plural, senderOf, sweepContext, sweepView, SWEEP_LIMITS, type SweepGroup, type SweepMember, type SweepOptions } from "./mail-sweep";
 import type { ListedMail } from "./mail-actions";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS, localDay } from "./time";
@@ -18,6 +18,8 @@ import { withoutSnoozed } from "./mail-snooze";
 import { offDeskIds } from "./links";
 
 export { DIGEST_SQL, type DigestConfig, type DigestModel } from "./mail-digest-schema";
+import type { MailDigestView } from "../../../desk-api/wire/mail";
+export type { MailDigestView };
 
 export const DIGEST_LIMITS = { maxFlags: 2, maxReason: 160, maxTopics: 30, maxItems: 40, keptDays: 30 } as const;
 
@@ -34,16 +36,6 @@ export interface DigestFlag {
   kind: DigestTopicKind;
   topic: string;
   reason: string;
-}
-
-export interface DigestFlagView {
-  key: string;
-  line: string;
-}
-
-export interface MailDigestView extends MailSweepView {
-  day: string;
-  flags: DigestFlagView[];
 }
 
 export interface DigestInput {

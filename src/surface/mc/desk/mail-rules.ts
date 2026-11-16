@@ -14,37 +14,12 @@ import { attachMail, endLink, linkByRun, linkTargetOf, offDeskIds, type LinkTarg
 import { readClassifications } from "./classify";
 import { isSuspicious, suspicionContext, type SuspicionContext } from "./mail-suspicion";
 
-export { DEFAULT_MAIL_RULES, MAIL_RULES_SQL, RULE_ACTIONS, RULE_MATCHES, type MailRulesConfig, type RuleAction, type RuleMatch, type RuleTarget } from "./mail-rules-schema";
+export { DEFAULT_MAIL_RULES, MAIL_RULES_SQL, type MailRulesConfig, type RuleTarget } from "./mail-rules-schema";
+import type { MailRule, MailRuleView } from "../../../desk-api/wire/mail";
+export type { MailRule, MailRuleView };
 
 export const RULES_GRANT = "mail.rules";
 export const LATER_MS = 7 * DAY_MS;
-
-export interface MailRule {
-  id: string;
-  match: RuleMatch;
-  value: string;
-  action: RuleAction;
-  on: boolean;
-  createdAt: number;
-  lastRunAt: number | null;
-  count: number;
-  held: number | null;
-  released: boolean;
-  target: RuleTarget | null;
-}
-
-export interface MailRuleView {
-  id: string;
-  match: RuleMatch;
-  value: string;
-  action: RuleAction;
-  on: boolean;
-  sentence: string;
-  lastRunAt: number | null;
-  count: number;
-  held: number | null;
-  target: RuleTarget | null;
-}
 
 export interface RuleProposal {
   key: string;
@@ -178,8 +153,27 @@ export const listRules = (db: Database): MailRule[] => allRows(db).map(toRule);
 
 export const ruleById = (db: Database, id: string): MailRule | null => listRules(db).find((r) => r.id === id) ?? null;
 
-export const ruleViews = (db: Database): MailRuleView[] =>
-  listRules(db).map((r) => ({ id: r.id, match: r.match, value: r.value, action: r.action, on: r.on, sentence: ruleSentence(r), lastRunAt: r.lastRunAt, count: r.count, held: r.held, target: r.target }));
+type MailRulesRead = { ok: true; rules: MailRule[] } | { ok: false };
+
+/** The approved rules, or that the store could not be read (said once in the log, so no caller has to repeat it). */
+export function readMailRules(db: Database): MailRulesRead {
+  try {
+    return { ok: true, rules: listRules(db) };
+  } catch (err) {
+    console.error(`desk: mail rule store unreadable: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false };
+  }
+}
+
+export const readableRules = (db: Database): MailRule[] => {
+  const read = readMailRules(db);
+  return read.ok ? read.rules : [];
+};
+
+export const ruleViewsOf = (rules: readonly MailRule[]): MailRuleView[] =>
+  rules.map((r) => ({ id: r.id, match: r.match, value: r.value, action: r.action, on: r.on, sentence: ruleSentence(r), lastRunAt: r.lastRunAt, count: r.count, held: r.held, target: r.target }));
+
+export const ruleViews = (db: Database): MailRuleView[] => ruleViewsOf(listRules(db));
 
 /** Rule runs, newest first, for Done for you and the weekly mirror. */
 export function ruleRuns(db: Database, q: { since?: number; ruleId?: string; limit?: number } = {}): RuleRun[] {
@@ -217,7 +211,7 @@ const rulesRun = (db: Database): boolean => listGrants(db).has(RULES_GRANT);
 /** Listed mails an approved rule will handle on its next pass. The Desk does not send them to the model; a paused rule's mail goes to the model. */
 export function pendingRuleMail(db: Database, mails: readonly SourceMail[], suspicion: SuspicionContext = suspicionContext(db)): Set<string> {
   if (!rulesRun(db)) return new Set();
-  const rules = listRules(db).filter((r) => r.on && (r.held === null || r.released));
+  const rules = readableRules(db).filter((r) => r.on && (r.held === null || r.released));
   if (rules.length === 0) return new Set();
   const ids = mails.map((m) => m.id);
   const ran = ranIds(db, ids);

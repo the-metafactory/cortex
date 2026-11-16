@@ -1,8 +1,8 @@
 import { parserPermissions } from "../desk/parser-permissions";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
-import type { DeskRuntime } from "../desk/compose";
-import { ASK_KINDS, conversationFields, conversationOffer, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, toProposal, validateCard, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
+import type { DeskOptions, DeskRuntime } from "../desk/compose";
+import { ASK_KINDS, conversationFields, conversationOffer, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, rowProposal, toProposal, validateCard, type AskFields, type DeskProposal, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
 import { CONVERSATION_NOT_WRITTEN, createFromCard, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
 import { ParserPermissionsSchema } from "../../../common/types/desk-parser";
 import { parserRoutingNotice } from "../desk/parser-routing";
@@ -11,16 +11,19 @@ import { listGrants } from "../desk/autonomy";
 import { fileStudioCapture, undoStudioCapture, type CaptureModel } from "../desk/studio/capture";
 import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import { closeNote } from "../desk/notes";
-import { buildRoutineCard, actOnRoutine } from "../desk/routines";
-import { routineRequest } from "../desk/routine-schedule";
+import { buildRoutineCard, actOnRoutine, routineOffer } from "../desk/routines";
+import { routineRequest, rowRepeat } from "../desk/routine-schedule";
 import type { RoutineRunner } from "../desk/routine-command";
 import type { RoutineCapabilities } from "../desk/routine-providers";
 import { assistantNameOf } from "../desk/assistant-name";
+import { writeRepeatingRow } from "../desk/balance-conversation-writer";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
 const MAX_TEXT = 1000;
-const AskInputSchema = z.object({ text: z.string(), area: z.string().min(1).optional(), routing: ParserPermissionsSchema.optional() });
+const AskInputSchema = z.object({ text: z.string(), area: z.string().min(1).optional(), routing: ParserPermissionsSchema.optional(), choice: z.literal("routine").optional() });
+const ROUTINE_RESTRICTED = "The routine composer cannot enforce this request's provider restriction.";
+const ROUTINE_STORAGE_MISSING = "Routine proposal storage is unavailable.";
 const CaptureUndoSchema = z.object({ id: z.string().regex(/^capture-[a-f0-9]{32}$/), requestId: z.string().regex(STUDIO_REQUEST_ID) });
 
 export interface DeskAskDeps {
@@ -59,11 +62,19 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   const policy = effectivePolicy(body.area ? [body.area] : [], desk.areas);
   if (policy.unknown.length) return fail(400, "Choose an area configured on this Desk.");
   if (routineRequest(text)) {
-    if (body.routing || policy.policy === "local") return fail(409, "The routine composer cannot enforce this request's provider restriction.");
-    if (!db) return fail(503, "Routine proposal storage is unavailable.");
+    const restricted = body.routing !== undefined || policy.policy === "local";
+    const row = body.choice === "routine" ? null : rowRepeat(text);
+    if (row) {
+      const proposals: DeskProposal[] = [rowProposal(row, body.area)];
+      if (desk.routines) proposals.push(routineOffer(text, `Have ${assistantNameOf(desk)} do it`, restricted ? ROUTINE_RESTRICTED : db ? undefined : ROUTINE_STORAGE_MISSING));
+      return Response.json({ ok: true, proposal: proposals[0], proposals }, { headers: noStore });
+    }
+    if (restricted) return fail(409, ROUTINE_RESTRICTED);
+    if (!db) return fail(503, ROUTINE_STORAGE_MISSING);
     const proposal = await buildRoutineCard(db, text, desk.routines, now, deps.runRoutine, deps.routineCapabilities);
-    return Response.json({ ok: true, proposal }, { headers: noStore });
+    return Response.json({ ok: true, proposal, ...(body.choice ? {} : { proposals: [proposal] }) }, { headers: noStore });
   }
+  if (body.choice) return fail(400, "Only recurring text can become a routine.");
   const permissions = parserPermissions(desk, body.area ? [body.area] : [], body.routing);
   if (permissions.kind === "denied") return fail(503, permissions.reason);
   const routing = permissions.routing;
@@ -73,7 +84,7 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   let result: ParseResult | RulesResult | null = explicitCapture(text);
   let via: "parser" | "rules" = "rules";
   if (!result && ask?.parser.length) {
-    const request = { text, now: new Date(now).toISOString(), timeZone: deps.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, kinds: [...ASK_KINDS], maps, ...(routing ? { routing } : {}) };
+    const request = { text, now: new Date(now).toISOString(), timeZone: deps.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, kinds: ASK_KINDS.filter((kind) => kind !== "row"), maps, ...(routing ? { routing } : {}) };
     result = await parseWithCommand(ask.parser, request, deps.runParser ?? parserFrom(spawnWithStdin), ask.timeoutSeconds * 1000);
     if (result) via = "parser";
   }
@@ -110,13 +121,14 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
     await runtime.routineRead?.afterWrite(db, desk.routines);
     return Response.json(result, { status: result.ok ? 200 : 409, headers: noStore });
   }
-  if (!writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)).has(card.kind)) return fail(409, notSetUp(card.kind));
+  if (card.kind !== "row" && !writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)).has(card.kind)) return fail(409, notSetUp(card.kind));
 
   const key = `ask:${requestId}`;
   if (runtime.ledger.has(key)) return fail(409, "This was already created.");
   if (!runtime.ledger.claim(key)) return fail(409, "This is already being created.");
   try {
     const now = (deps.now ?? Date.now)();
+    if (card.kind === "row") return await createRepeatingRow(db, desk, card.fields, key, runtime, now);
     if (card.kind === "capture" && desk.studio) {
       const filed = await fileStudioCapture({ options: desk.studio, areas: desk.areas, assistantName: assistantNameOf(desk), requestId, text: card.fields.text, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) });
       return Response.json(filed, { status: filed.ok ? 200 : filed.status, headers: noStore });
@@ -139,6 +151,13 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
   } finally {
     runtime.ledger.release(key);
   }
+}
+
+async function createRepeatingRow(db: Database, desk: DeskOptions, fields: AskFields["row"], key: string, runtime: DeskRuntime, now: number): Promise<Response> {
+  const created = await writeRepeatingRow({ db, desk: () => desk, now: () => now }, { operationId: key, fields: { title: fields.title, area: fields.area }, repeat: fields.repeat });
+  if (created.state !== "created") return fail(409, created.state === "failed" ? created.error : "Balance did not confirm the row.");
+  runtime.ledger.add(key, now);
+  return Response.json({ ok: true, id: created.canonicalId, message: `Added ${fields.title} to Balance.` }, { headers: noStore });
 }
 
 export async function handleDeskNoteDone(req: Request, db: Database, now: number = Date.now()): Promise<Response> {

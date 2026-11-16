@@ -1,12 +1,14 @@
 #!/usr/bin/env bun
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const log = process.env.STUB_PI_LOG ?? "";
 const stdin = process.env.STUB_PI_IGNORE_STDIN ? "" : await new Response(Bun.stdin.stream()).text();
 appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2), stdin })}\n`);
 const delay = Number(process.env.STUB_PI_DELAY_MS ?? "0");
 if (delay > 0) await Bun.sleep(delay);
-const events = process.env.STUB_PI_EVENTS ? readFileSync(process.env.STUB_PI_EVENTS, "utf8") : "";
+const nth = readFileSync(log, "utf8").trim().split("\n").length;
+const perCall = process.env.STUB_PI_EVENTS ? `${process.env.STUB_PI_EVENTS}.${nth}` : "";
+const events = perCall && existsSync(perCall) ? readFileSync(perCall, "utf8") : process.env.STUB_PI_EVENTS ? readFileSync(process.env.STUB_PI_EVENTS, "utf8") : "";
 const pauseAfter = Number(process.env.STUB_PI_PAUSE_AFTER ?? "0");
 if (pauseAfter > 0) {
   const lines = events.split("\n");

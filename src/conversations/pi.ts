@@ -6,6 +6,7 @@ import { delimiter, join } from "node:path";
 import { z } from "zod";
 import { piToolBridge } from "./tools/pi-bridge";
 import { activityOf } from "./tools/capabilities";
+import { CODEX_SIGN_IN_NEEDED, isCodexAuthExpiry, type RefreshOutcome } from "./codex-auth";
 import { PI_DEFAULTS, PI_FILE_TOOLS, type DeskConversations, type PiReadTool } from "../common/types/desk-conversations";
 import type { ChatTurn, ToolActivity, ToolSpec, TurnCall, TurnReply, TurnRequest } from "./model";
 
@@ -18,6 +19,7 @@ export interface PiSettings {
   cwd: string;
   passEnv: readonly string[];
   env?: Record<string, string>;
+  codexAuth?: { refresh: (signal?: AbortSignal) => Promise<RefreshOutcome> };
 }
 
 const RESULT_LIMIT = 50_000;
@@ -193,7 +195,48 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
   } finally { await text.dispose(); }
 }
 
+const REFRESH_FAILURE: Record<Extract<RefreshOutcome, { ok: false }>["reason"], string> = {
+  "not-signed-in": "No Codex sign-in is stored.",
+  rejected: "The Codex refresh was rejected.",
+  timeout: "The Codex refresh timed out.",
+  cancelled: "The Codex refresh was cancelled.",
+};
+
+function withEffectTracking(request: TurnRequest, effects: { released: boolean }): TurnRequest {
+  const { text, started, activity, tools } = request;
+  return {
+    ...request,
+    activity: item => { effects.released = true; return activity(item); },
+    ...(text ? { text: (delta: string, reset?: boolean) => { if (delta) effects.released = true; return text(delta, reset); } } : {}),
+    ...(started ? { started: (callId: string, name: string) => { effects.released = true; return started(callId, name); } } : {}),
+    ...(tools ? { tools: { ...tools, call: (...args: Parameters<typeof tools.call>) => { effects.released = true; return tools.call(...args); } } } : {}),
+  };
+}
+
 export function piTurns(settings: PiSettings): TurnCall {
+  const once = piTurnOnce(settings);
+  return async (request: TurnRequest): Promise<TurnReply> => {
+    const recovery = settings.codexAuth;
+    if (!recovery) return once(request);
+    const effects = { released: false };
+    try { return await once(withEffectTracking(request, effects)); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (request.signal.aborted || !isCodexAuthExpiry(request.lane.provider, message)) throw error;
+      const refreshed = await recovery.refresh(request.signal);
+      if (!refreshed.ok) throw new Error(`${CODEX_SIGN_IN_NEEDED} ${REFRESH_FAILURE[refreshed.reason]} Reconnect Codex, then retry. ${NO_FALLBACK}`, { cause: error });
+      if (effects.released) throw new Error(`Codex credentials were refreshed, but this turn had already started work, so it was not replayed. Retry to continue. ${NO_FALLBACK}`, { cause: error });
+      try { return await once(withEffectTracking(request, { released: false })); }
+      catch (second) {
+        const detail = second instanceof Error ? second.message : String(second);
+        const stillExpired = isCodexAuthExpiry(request.lane.provider, detail);
+        throw new Error(stillExpired ? `${CODEX_SIGN_IN_NEEDED} The credential was refreshed and the turn retried once, but Codex still rejected it. Reconnect Codex, then retry. ${NO_FALLBACK}` : detail, { cause: second });
+      }
+    }
+  };
+}
+
+function piTurnOnce(settings: PiSettings): TurnCall {
   return async (request: TurnRequest): Promise<TurnReply> => {
     await mkdir(settings.sessionDir, { recursive: true });
     await request.tools?.validate();

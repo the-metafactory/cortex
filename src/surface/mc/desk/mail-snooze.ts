@@ -6,10 +6,11 @@ import { snoozeAt, snoozeWhen, type SnoozeChoice } from "./mail-snooze-schema";
 import type { SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
 import { sightEvent, type EventFacts, type FollowedEvent } from "./event-follow";
-import type { DeskItem } from "./types";
+import type { DeferredItem, DeskItem } from "./types";
 import type { DeskPhrase } from "./phrases";
 
 export { SNOOZE_MORNING_HOUR, SNOOZE_SQL, SNOOZE_TIMES, snoozeAt, snoozeWhen, type SnoozeChoice, type SnoozeTime } from "./mail-snooze-schema";
+import type { HiddenMail } from "../../../desk-api/wire/mail";
 
 export type SnoozeKind = "time" | "meeting" | "person" | "hidden";
 export type SnoozeState = "snoozed" | "back";
@@ -222,7 +223,7 @@ const ADDRESS_RE = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
 
 type Resolved = Pick<SnoozeRow, "kind" | "untilAt" | "eventKey" | "eventTitle" | "eventStart" | "person" | "personName" | "label">;
 
-function resolve(choice: SnoozeChoice, ctx: { now: number; events: ReadonlyMap<string, SnoozeEvent>; names: ReadonlyMap<string, string> }): Resolved | string {
+export function resolveSnoozeChoice(choice: SnoozeChoice, ctx: { now: number; events: ReadonlyMap<string, SnoozeEvent>; names: ReadonlyMap<string, string> }): Resolved | string {
   const none = { eventKey: null, eventTitle: null, eventStart: null, person: null, personName: null };
   if (choice.kind === "meeting") {
     const event = ctx.events.get(choice.event);
@@ -254,7 +255,7 @@ function insertSnooze(db: Database, mail: ListedMail, resolved: Resolved, now: n
 
 export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice, ctx: { now: number; readings: readonly SourceReading[] }): SnoozeResult {
   const names = new Map(ctx.readings.flatMap((r) => r.mail.flatMap((m): [string, string][] => (m.from.name ? [[m.from.address.toLowerCase(), m.from.name]] : []))));
-  const resolved = resolve(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
+  const resolved = resolveSnoozeChoice(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
   if (typeof resolved === "string") return refuse(409, resolved);
   const features = mailFeatures(db, mail);
   insertSnooze(db, mail, resolved, ctx.now);
@@ -292,13 +293,13 @@ export function undoHide(db: Database, messageId: string): { ok: true; message: 
   return { ok: true, message: `${quoted(row.subject)} is back on the Desk.` };
 }
 
-export interface HiddenMail {
-  key: string;
-  subject: string;
-  sender: string;
-  at: number;
-}
-
 export function hiddenMail(db: Database): HiddenMail[] {
   return readSnoozes(db, "snoozed").filter((r) => r.kind === "hidden").map((r) => ({ key: `mail:${r.messageId}`, subject: r.subject, sender: r.sender, at: r.createdAt }));
+}
+
+export function deferredMail(db: Database, now: number): DeferredItem[] {
+  return readSnoozes(db, "snoozed")
+    .filter((row) => row.kind !== "hidden")
+    .sort((a, b) => (a.untilAt ?? Infinity) - (b.untilAt ?? Infinity) || a.createdAt - b.createdAt)
+    .map((row) => ({ key: `mail:${row.messageId}`, title: row.subject, until: row.kind === "time" && row.untilAt !== null ? `until ${snoozeWhen(row.untilAt, now)}` : row.label }));
 }

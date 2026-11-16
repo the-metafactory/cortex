@@ -1,5 +1,9 @@
-import type { DeskProposal } from "./ask";
 import { z } from "zod";
+import { BUILD_STATES } from "../../../desk-api/wire/routines";
+import type { BuildState, CapabilityInstallView, DraftNodeView, RoutineDraftView } from "../../../desk-api/wire/routines";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { MissingCapability as WireMissingCapability, CapabilityRefusal as WireCapabilityRefusal } from "../../../desk-api/wire/routines";
+export type { BuildState, CapabilityInstallView, DraftNodeView, RoutineDraftView };
 
 export const CAPABILITY_MARKER_LABEL = "desk-capability";
 export const capabilityMarker = (capability: string): string => `${CAPABILITY_MARKER_LABEL}:${capability}`;
@@ -25,19 +29,11 @@ export type CapabilityNode = z.infer<typeof CapabilityNodeSchema>;
 export const BuiltNodeSchema = CapabilityNodeSchema.extend({ notStarted: z.string().optional() });
 export type BuiltNode = z.infer<typeof BuiltNodeSchema>;
 
-export const BUILD_STATES = ["filed", "building", "in-review", "merged", "failed"] as const;
 export const BuildStatusSchema = z.object({
   state: z.enum(BUILD_STATES),
   reason: z.string().optional(),
   pr: z.union([z.string(), z.number()]).transform(String).optional(),
 });
-export type BuildState =
-  | { state: (typeof BUILD_STATES)[number] | "live"; reason?: string; pr?: string }
-  | { state: "unknown"; error: string };
-export interface CapabilityInstallView { id: string; bundle: string; state: "running" | "installed" | "failed" | "undoing" | "undone"; error: string | null; at: number }
-export interface DraftNodeView { capability: string; ref: string; url: string; notStarted?: string; build: BuildState | null; install?: CapabilityInstallView; canInstall?: boolean; presenceLate?: boolean }
-export interface RoutineDraftView { proposalId: string; title: string; nodes: DraftNodeView[]; missing: MissingCapability[]; proposal?: DeskProposal; error?: string }
-
 export const CapabilityRefusalSchema = z.object({
   proposalId: z.uuid(),
   missing: z.array(MissingCapabilitySchema).min(1),
@@ -59,3 +55,6 @@ export const CapabilityBuildResultSchema = z.object({
   failed: z.array(z.object({ capability: z.string(), error: z.string() })),
 });
 export type CapabilityBuildResult = z.infer<typeof CapabilityBuildResultSchema>;
+
+type _WireMissingCapability = Expect<SameShape<MissingCapability, WireMissingCapability>>;
+type _WireCapabilityRefusal = Expect<SameShape<CapabilityRefusal, WireCapabilityRefusal>>;

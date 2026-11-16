@@ -2,75 +2,19 @@ import type { Database } from "bun:sqlite";
 import type { z } from "zod/v4";
 import { DeskMailMirrorSchema } from "../../../common/types/config";
 import { PRINCIPAL_ACTED_WHERE, queryMailLog, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
-import { listRules, matchesRule, ruleSentence, type MailRule, type RuleMatch } from "./mail-rules";
-import { listKey, type UnsubscribeView } from "./mail-unsubscribe";
+import { matchesRule, readableRules, ruleSentence, type MailRule } from "./mail-rules";
+import { listKey } from "./mail-unsubscribe";
 import { isVip, listVips } from "./vips";
+import type { MailMirrorCount, MailMirrorSender, MailMirrorRule, MailMirrorUnsubscribe, MailMirrorUnread, MailMirrorTime, MailMirror } from "../../../desk-api/wire/mirror";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { MailMirrorConfig as WireMailMirrorConfig } from "../../../desk-api/wire/mirror";
+export type { MailMirrorRule, MailMirrorUnsubscribe, MailMirrorUnread, MailMirror };
 
 export type MailMirrorConfig = z.infer<typeof DeskMailMirrorSchema>;
 
 export const DEFAULT_MAIL_MIRROR: MailMirrorConfig = DeskMailMirrorSchema.parse({});
 
 export const MAIL_MIRROR_LOG_LIMIT = 5000;
-
-export interface MailMirrorCount<K extends string> {
-  key: K;
-  count: number;
-}
-
-export interface MailMirrorSender {
-  kind: "list" | "sender";
-  value: string;
-  decisions: number;
-}
-
-export interface MailMirrorRule {
-  id: string;
-  sentence: string;
-  match: RuleMatch;
-  value: string;
-  action: MailRule["action"];
-  on: boolean;
-  runs: number;
-  failed: number;
-  undone: number;
-  check: boolean;
-}
-
-export interface MailMirrorUnsubscribe {
-  key: string;
-  view: UnsubscribeView;
-}
-
-export interface MailMirrorUnread {
-  kind: "list" | "sender";
-  value: string;
-  count: number;
-  rule: { match: "list" | "sender"; value: string; action: "archive"; sentence: string };
-  unsubscribe?: MailMirrorUnsubscribe;
-}
-
-export interface MailMirrorTime {
-  mails: number;
-  totalMs: number;
-  medianMs: number;
-  capped: number;
-  untimed: number;
-  capMs: number;
-}
-
-export interface MailMirror {
-  decisions: number;
-  mails: number;
-  partial: boolean;
-  byAction: MailMirrorCount<MailLogAction>[];
-  byWhere: MailMirrorCount<MailLogWhere>[];
-  senders: MailMirrorSender[];
-  rules: MailMirrorRule[];
-  checkRules: MailMirrorRule[];
-  archivedUnread: MailMirrorUnread[];
-  time: MailMirrorTime | null;
-  config: MailMirrorConfig;
-}
 
 export interface MailMirrorRun {
   ruleId: string;
@@ -255,10 +199,12 @@ export function readMailMirror(db: Database, week: { start: number; end: number 
   return mailMirror({
     start: week.start, end: week.end, entries,
     runs: mirrorRuleRuns(db, week.start, week.end),
-    rules: listRules(db),
+    rules: readableRules(db),
     vips: new Set(listVips(db).map((v) => v.address)),
     partial: entries.length >= MAIL_MIRROR_LOG_LIMIT,
     ...(options.config ? { config: options.config } : {}),
     ...(options.offers ? { offers: options.offers } : {}),
   });
 }
+
+type _WireMailMirrorConfig = Expect<SameShape<MailMirrorConfig, WireMailMirrorConfig>>;

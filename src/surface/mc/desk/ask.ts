@@ -3,16 +3,21 @@ import { ParserPermissionsSchema, type ParserPermissions } from "../../../common
 import { ParserRoutingSchema, parserUnavailable, type ParserRouting } from "./parser-routing";
 import { parserMessages } from "./parser-prompt";
 import { DAY_MS, startOfDay } from "./time";
-import type { CapabilityRefusal } from "./routine-capability-contract";
-
-export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar", "routine", "conversation"] as const;
-export type AskKind = (typeof ASK_KINDS)[number];
+import { OutlineRepeatInputSchema } from "./balance-command";
+import type { RowRepeat } from "./routine-schedule";
+import { ASK_KINDS } from "../../../desk-api/wire/ask";
+import type { AskKind, DeskProposal, ConversationOffer } from "../../../desk-api/wire/ask";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { ConversationOffer as WireConversationOffer } from "../../../desk-api/wire/ask";
+export { ASK_KINDS };
+export type { AskKind, DeskProposal };
 
 const iso = z.string().refine((s) => Number.isFinite(Date.parse(s)), "not a date");
 const text = (max: number) => z.string().trim().min(1).max(max);
 
 export const FIELD_SCHEMAS = {
   routine: z.object({ proposalId: z.uuid() }),
+  row: z.object({ title: text(300), area: text(200), repeat: OutlineRepeatInputSchema }),
   conversation: z.object({ text: text(1000), area: text(200).optional() }),
   reminder: z.object({ text: text(300), due: iso }),
   note: z.object({ text: text(1000) }),
@@ -45,6 +50,7 @@ export function validateCard(kind: unknown, fields: unknown): AskCard | string {
 
 export const KIND_LABEL: Record<AskKind, string> = {
   routine: "Routine",
+  row: "Repeat it for me",
   reminder: "Reminder",
   note: "Note",
   capture: "Studio capture",
@@ -58,6 +64,7 @@ export const notSetUp = (kind: AskKind): string => `${KIND_PLURAL[kind]} are not
 
 const KIND_PLURAL: Record<AskKind, string> = {
   routine: "Routines",
+  row: "Repeating rows",
   reminder: "Reminders",
   note: "Notes",
   capture: "Studio captures",
@@ -269,27 +276,6 @@ export async function parseWithCommand(argv: string[], request: ParserRequest, r
   return { ...card, ...(routing ? { routing } : {}) };
 }
 
-export interface DeskProposal {
-  kind: AskKind;
-  label: string;
-  fields: Record<string, unknown>;
-  at?: number;
-  end?: number;
-  problem?: string;
-  unwritable?: true;
-  via: "parser" | "rules";
-  automatic?: boolean;
-  routing?: Extract<ParserRouting, { kind: "selected" }>;
-  alternative?: ConversationOffer;
-  capabilities?: CapabilityRefusal;
-}
-
-export interface ConversationOffer {
-  kind: "conversation";
-  label: string;
-  fields: AskFields["conversation"];
-}
-
 export const conversationFields = (text: string, area?: string): AskFields["conversation"] => ({ text, ...(area ? { area } : {}) });
 
 export const conversationOffer = (text: string, area?: string): ConversationOffer => ({ kind: "conversation", label: KIND_LABEL.conversation, fields: conversationFields(text, area) });
@@ -301,6 +287,7 @@ function problemFor(kind: AskKind, fields: Record<string, unknown>, at: number |
   if (kind === "reminder" && at === undefined) return "When should I remind you?";
   if (kind === "calendar" && at === undefined) return "When is it?";
   if (kind === "task" && !fields.map) return "Which map should the task go on? None is set up.";
+  if (kind === "row" && !fields.area) return "Which area should this go in?";
   return checked;
 }
 
@@ -318,3 +305,11 @@ export function toProposal(kind: AskKind, fields: Record<string, unknown>, writa
     via,
   };
 }
+
+const ROW_WRITABLE: ReadonlySet<AskKind> = new Set(["row"]);
+
+export function rowProposal(row: RowRepeat, area: string | undefined): DeskProposal {
+  return toProposal("row", { title: row.title, ...(area ? { area } : {}), repeat: row.repeat }, ROW_WRITABLE, "rules");
+}
+
+type _WireConversationFields = Expect<SameShape<AskFields["conversation"], WireConversationOffer["fields"]>>;

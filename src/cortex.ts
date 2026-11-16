@@ -21,7 +21,8 @@
 import { resolveStudio } from "./surface/mc/desk/studio/config";
 import { DiscordConversations } from "./conversations/discord";
 import { openConversationHost, type HostStatus } from "./conversations/host";
-import { piToolSummary, piTurns, resolvePiSettings } from "./conversations/pi";
+import { piAgentDir, piToolSummary, piTurns, resolvePiSettings } from "./conversations/pi";
+import { CodexAuth, createCodexRuntime } from "./conversations/codex-auth";
 import { CAPABILITIES_TOOL } from "./conversations/tools/capabilities";
 import { createGithubTools } from "./conversations/tools/github";
 import { createGitlabTools } from "./conversations/tools/gitlab";
@@ -2622,6 +2623,7 @@ export async function startCortex(
   // architecture); the shared gateway's pre-route interceptor (cortex#2524)
   // uses the SAME mapping, so the two paths cannot drift on the routing key.
   let conversationDiscord: DiscordConversations | null = null;
+  let codexAuth: CodexAuth | null = null;
   const inboundWithGateBridge =
     (adapter: PlatformAdapter, agent: Agent) =>
     (msg: InboundMessage): Promise<void> => {
@@ -4929,7 +4931,8 @@ export async function startCortex(
       if (!mcHeadless) {
         const conversationDir = join(cortexStateDir(), "stacks", derivedStack.stack, "conversations");
         const conversationConfig = config.mc.desk.conversations;
-        const pi = resolvePiSettings(conversationConfig?.pi, conversationDir, expandTilde);
+        codexAuth = new CodexAuth(() => createCodexRuntime(piAgentDir()));
+        const pi = { ...resolvePiSettings(conversationConfig?.pi, conversationDir, expandTilde), codexAuth };
         conversationStatus = await openConversationHost({
           dir: conversationDir,
           stack: derivedStack.stack,
@@ -4957,7 +4960,7 @@ export async function startCortex(
           console.log(`cortex: conversation Discord threads under channel ${discordConfig.channelId}: ${discordCapability.ok ? "ready" : discordCapability.reason}`);
         }
       }
-      const conversationAccess = Object.assign((): HostStatus | null => conversationStatus, { discord: () => conversationDiscord });
+      const conversationAccess = Object.assign((): HostStatus | null => conversationStatus, { discord: () => conversationDiscord, codexAuth: () => codexAuth });
       const resolvedDispatch = config.mc.desk.dispatch ? deskDispatchOptions(config.mc.desk.dispatch, mergedAgents) : undefined;
       const deskDispatch = resolvedDispatch?.options;
       if (resolvedDispatch && resolvedDispatch.unknown.length > 0) {

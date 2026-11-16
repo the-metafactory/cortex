@@ -29,6 +29,6 @@ describe("desk-sdk command contract", () => {
   });
 
   test("the version is the one this contract shipped in", () => {
-    expect(DESK_ADAPTER_SDK_VERSION).toBe("1.16.0");
+    expect(DESK_ADAPTER_SDK_VERSION).toBe("1.19.0");
   });
 });

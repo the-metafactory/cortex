@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { EventAvailability as WireEventAvailability } from "../../../desk-api/wire/calendar";
 
 const instant = z.iso.datetime({ offset: true });
 export const SourceCapabilitiesSchema = z.array(z.enum(["calendar", "attention"])).min(1).max(2)
@@ -14,6 +16,8 @@ export const CalendarCoverageSchema = z.object({
   status: z.enum(["complete", "partial"]),
   provenance: z.string().trim().min(1).max(200),
 }).refine(value => Date.parse(value.to) > Date.parse(value.from), "coverage must end after it starts");
-export type EventAvailability = z.infer<typeof EventAvailabilitySchema>;
+type EventAvailability = z.infer<typeof EventAvailabilitySchema>;
 export type CalendarCoverage = z.infer<typeof CalendarCoverageSchema>;
 export type SourceCapabilities = z.infer<typeof SourceCapabilitiesSchema>;
+
+type _WireEventAvailability = Expect<SameShape<EventAvailability, WireEventAvailability>>;

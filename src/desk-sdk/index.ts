@@ -140,6 +140,9 @@ export type { MailUnsubscribeInput, MailUnsubscribeOutput } from "../conversatio
 export { MAIL_REPORT_CAPABILITY, MAIL_REPORT_KINDS, mailReportDeclaration, mailReportSnapshot } from "../conversations/domain-adapters/mail/report-contract";
 export type { MailReportInput, MailReportKind, MailReportOutput } from "../conversations/domain-adapters/mail/report-contract";
 
+export { INVITATION_CAPABILITIES, INVITATION_REPLIES, mailInvitationDeclaration, mailInvitationSnapshot } from "../conversations/domain-adapters/mail/invitation-contract";
+export type { InvitationAction, InvitationInput, InvitationReply } from "../conversations/domain-adapters/mail/invitation-contract";
+
 /** The host seam a package module receives: its SDK version, protected action-connector registration and Mail reads. */
 export interface DeskAdapterHost {
   readonly sdkVersion: string;

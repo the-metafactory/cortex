@@ -4,57 +4,30 @@ import { sourceIdentity, todo } from "./source-task";
 export { sourceIdentity } from "./source-task";
 import { balanceParents } from "./balance-parent";
 import { planSource, unplanSource } from "./source-plan";
-import { studioLinks, studioOwned, studioProjectLinks, type StudioProjectLink, type StudioProjection } from "./studio-outline";
+import { studioLinks, studioOwned, studioProjectLinks, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, reopenOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
 import { stampCreated, stampTouched } from "./balance-touch";
 import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-day";
 import type { Database } from "bun:sqlite";
-import { applyDayToHistory, findNode, rankAll, recurrenceProjection, selectToday, shiftDays, todayPlanIds, type AppState, type OutlineNode, type RecurrenceProjection, type TodayItem } from "../../../balance";
+import { applyDayToHistory, findNode, rankAll, recurrenceProjection, selectToday, shiftDays, todayPlanIds, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { saveBalanceState } from "./balance-store";
-import { taskHandoffLines, type TaskHandoffLines } from "./task-handoff-store";
+import { taskHandoffLines } from "./task-handoff-store";
 import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
-import { taskLinks, type DeskLinkView } from "./links";
+import { taskLinks } from "./links";
 import { configuredState, isPersonDraft, loadMeta, loadMyDayState, retireStaleDraft, saveMeta, todayCap } from "./balance-sync";
 export { loadMeta } from "./balance-sync";
+import type { MyDayOutlineNode, MyDayView } from "../../../desk-api/wire/my-day";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { MyDayView as WireMyDayView } from "../../../desk-api/wire/my-day";
+export type { MyDayOutlineNode, MyDayView };
 
-/** An outline row as My day serves it: a row with a `repeat` rule also carries `recurrence`, computed by the Balance engine's recurrence rule. */
-export type MyDayOutlineNode = Omit<OutlineNode, "children"> & { children: MyDayOutlineNode[]; recurrence?: RecurrenceProjection };
 function withRecurrence(node: OutlineNode): MyDayOutlineNode {
   const recurrence = recurrenceProjection(node);
   return { ...node, children: node.children.map(withRecurrence), ...(recurrence ? { recurrence } : {}) };
-}
-export interface MyDayView {
-  work: {
-    confirmedIds: string[];
-    selection: { kind: "automatic" } | { kind: "manual"; id: string } | { kind: "unavailable"; id: string; reason: string };
-  };
-  studioStatus: "synced" | "unavailable" | "disabled";
-  studioTasks: { id: string; slug: string }[];
-  studioProjects: StudioProjectLink[];
-  revision: number;
-  configuredCaps: { cap: number; topN: number };
-  capsOverridden: boolean;
-  inbox: OutlineNode[];
-  date: string;
-  phase: "proposed" | "started" | "closed";
-  cap: number;
-  topN: number;
-  items: TodayItem[];
-  alternates: TodayItem[];
-  wins: { taskId: string; title: string }[];
-  outline: MyDayOutlineNode;
-  observation: Pick<BalanceDayProjection, "status" | "observedAt"> | null;
-  sources: MyDayMeta["sources"];
-  touchTrackingSince: string | null;
-  yesFilter: string[];
-  undos: { receipt: string; title: string }[];
-  dayUndo: { receipt: string; text: string } | null;
-  handoffs?: TaskHandoffLines;
-  links: DeskLinkView[];
 }
 const withHandoffs = (view: MyDayView, db: Database, desk: DeskOptions, now: number): MyDayView => (desk.dispatch ? { ...view, handoffs: taskHandoffLines(db, desk.dispatch, now) } : view);
 function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection, projection?: BalanceDayProjection): Omit<MyDayView, "links"> {
@@ -117,6 +90,53 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
   else delete node.dueDate;
   stampTouched(node, date);
 }
+function recordDefer(meta: MyDayMeta, node: OutlineNode, date: string, receipt: string, after: string): void {
+  const earlier = meta.undos.find(u => u.receipt === receipt && !u.used);
+  const before = earlier ? earlier.before : node.deferredUntil;
+  meta.undos = meta.undos.filter(u => u.receipt !== receipt);
+  meta.undos.push({ receipt, taskId: node.id, date, ...(before ? { before } : {}), after, used: false });
+  node.deferredUntil = after;
+}
+
+function restoreDeferred(state: AppState, previous: MyDayMeta["undos"][number]): void {
+  const node = requiredNode(state, previous.taskId);
+  if (node.deferredUntil !== previous.after) throw new Error("The task changed since Not today. Your newer edit is kept.");
+  if (previous.before) node.deferredUntil = previous.before;
+  else delete node.deferredUntil;
+  previous.used = true;
+}
+
+/** Restores the task put away under `receipt` on any later day, unlike My Day's same-day Undo; a no-op when nothing is recorded or it was used. */
+export function undoTaskDefer(args: { db: Database; desk: DeskOptions; now: number; receipt: string }): void {
+  const { db, desk, now, receipt } = args;
+  db.transaction(() => {
+    const meta = loadMeta(db);
+    const previous = meta.undos.find(u => u.receipt === receipt && !u.used);
+    if (!previous) return;
+    const state = loadMyDayState(db, desk, meta, localDay(now));
+    restoreDeferred(state, previous);
+    meta.revision += 1;
+    saveBalanceState(db, state);
+    saveMeta(db, meta);
+  }).immediate();
+}
+
+/** Puts an open task away until `after` (a day), with the same undo record as My Day's Not today; deferring again under one receipt keeps the first earlier value. Null when the task is not in the outline. */
+export function deferTaskUntil(args: { db: Database; desk: DeskOptions; now: number; taskId: string; after: string; receipt: string }): { deferredUntil: string } | null {
+  const { db, desk, now, taskId, after, receipt } = args;
+  return db.transaction(() => {
+    const meta = loadMeta(db);
+    const state = loadMyDayState(db, desk, meta, localDay(now));
+    const node = findNode(state.outline, taskId);
+    if (!node) return null;
+    recordDefer(meta, node, localDay(now), receipt, after);
+    meta.revision += 1;
+    saveBalanceState(db, state);
+    saveMeta(db, meta);
+    return { deferredUntil: after };
+  }).immediate();
+}
+
 /** `reopenable` makes an `outline-complete` of an open task return an undo receipt that My Day `undo` turns into a reopen. */
 export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection; reopenable?: boolean }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string } {
   const { db, desk, now, date, requestId, command, source, studio } = args;
@@ -211,10 +231,8 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         const current = viewOf(state, meta, desk, date, studio);
         if (current.phase === "closed" || !current.items.some(i => i.task.id === command.id)) throw new Error("Choose an item in My day.");
         const node = requiredNode(state, command.id);
-        const after = shiftDays(date, 1);
         undo = requestId;
-        meta.undos.push({ receipt: undo, taskId: node.id, date, ...(node.deferredUntil ? { before: node.deferredUntil } : {}), after, used: false });
-        node.deferredUntil = after;
+        recordDefer(meta, node, date, undo, shiftDays(date, 1));
         break;
       }
       case "today-add":
@@ -244,11 +262,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         const previous = meta.undos.find(u => u.receipt === command.receipt);
         if (!previous || previous.used) break;
         if (previous.date !== date) throw new Error("This Undo belongs to a previous day.");
-        const node = requiredNode(state, previous.taskId);
-        if (node.deferredUntil !== previous.after) throw new Error("The task changed since Not today. Your newer edit is kept.");
-        if (previous.before) node.deferredUntil = previous.before;
-        else delete node.deferredUntil;
-        previous.used = true;
+        restoreDeferred(state, previous);
         break;
       }
       case "todo": {
@@ -317,3 +331,5 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     return { view, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) };
   }).immediate();
 }
+
+type _WireMyDaySource = Expect<SameShape<MyDayMeta["sources"][number], WireMyDayView["sources"][number]>>;

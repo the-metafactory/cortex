@@ -6,13 +6,15 @@ import type { DeskOptions } from "./compose";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, DEFAULT_YES_FILTER } from "./studio/view";
 import type { ListedMail, MailActionResult } from "./mail-actions";
+import type { MailYesFilter } from "../../../desk-api/wire/mail";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { Commitment as WireCommitment, MailDecisionSummary as WireMailDecisionSummary } from "../../../desk-api/wire/mail";
+export type { MailYesFilter };
 
 export const CommitmentSchema = z.object({ kind: z.enum(["thread", "project"]), id: z.string().min(1).max(300), label: z.string().max(10000) }).strict();
 export type Commitment = z.infer<typeof CommitmentSchema>;
 export const MailDecisionSchema = z.object({ requestId: z.uuid(), intent: z.enum(["reply", "decline", "accept", "propose"]), commitment: CommitmentSchema.nullable() }).strict();
 export type MailDecision = z.infer<typeof MailDecisionSchema>;
-export interface MailYesFilter { questions: string[]; commitments: Commitment[]; problems: string[] }
-
 const DecisionStatusSchema = z.enum(["pending", "saved", "failed", "uncertain"]);
 export type MailDecisionSummary = Pick<MailDecision, "intent" | "commitment"> & { status: z.infer<typeof DecisionStatusSchema> };
 
@@ -85,3 +87,6 @@ export async function saveDecisionDraft(input: { db: Database; desk: DeskOptions
   db.query("UPDATE desk_mail_decisions SET status = ?, result = ? WHERE id = ?").run(result.ok ? "saved" : result.status >= 500 ? "uncertain" : "failed", result.ok ? result.message : result.error, decision.requestId);
   return !result.ok && result.status >= 500 ? { ...result, error: "The draft outcome is uncertain. Check Drafts before starting another." } : result;
 }
+
+type _WireCommitment = Expect<SameShape<Commitment, WireCommitment>>;
+type _WireMailDecisionSummary = Expect<SameShape<MailDecisionSummary, WireMailDecisionSummary>>;

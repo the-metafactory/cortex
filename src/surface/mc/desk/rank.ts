@@ -65,6 +65,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   "mail-junk": "Junk mail to review",
   reminder: "Reminders",
   meeting: "Meetings starting soon",
+  "meeting-after": "Meetings that just ended",
   "mail-rule": "Mail rules the Desk proposes",
   dmarc: "DMARC failures for your domains",
   "mail-waiting": "Mail still waiting for an answer",

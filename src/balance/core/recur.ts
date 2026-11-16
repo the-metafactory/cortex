@@ -1,5 +1,7 @@
 import { required } from "./required";
 import type { AppState, OutlineNode, Recurrence, RecurrenceOutcome } from "./types";
+import type { RecurrenceProjection } from "../../desk-api/wire/balance";
+export type { RecurrenceProjection };
 export function shiftDays(iso: string, days: number): string {
     const t = Date.parse(iso + "T00:00:00Z") + days * 86400000;
     return new Date(t).toISOString().slice(0, 10);
@@ -138,12 +140,6 @@ export function recurrenceFinished(repeat: Recurrence, next: string): boolean {
     if (repeat.until !== undefined && next > repeat.until)
         return true;
     return false;
-}
-/** When a repeating leaf comes back. `returnsOn` is its next occurrence and `reappearsOn` that date minus its lead days, the day `applyRecurrence` reopens it; both are null while the row is open or once the repeat is finished. */
-export interface RecurrenceProjection {
-    returnsOn: string | null;
-    finished: boolean;
-    reappearsOn: string | null;
 }
 export function recurrenceProjection(node: OutlineNode): RecurrenceProjection | null {
     if (!node.repeat)

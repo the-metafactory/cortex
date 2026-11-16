@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import { MAX_PARSER_PROVIDERS, ParserProviderSchema } from "../../../common/types/desk-parser";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { ParserRouting as WireParserRouting } from "../../../desk-api/wire/parser-routing";
 
 const reason = z.string().trim().min(1).max(200);
 const RangerCandidateProviderSchema = z.enum(["claude", ...ParserProviderSchema.options]);
@@ -52,3 +54,5 @@ export function parserRoutingNotice(routing: ParserRouting): string {
   if (/integration|selector|command|ENOENT|configuration/i.test(routing.reason)) return "The parser connection is unavailable. Nothing was created. Ask the person who manages this stack to check the configured parser and provider connections.";
   return "The provider could not finish this request. Nothing was created. Try again or ask the person who manages this stack to check provider availability and the parser connection.";
 }
+
+type _WireParserRouting = Expect<SameShape<ParserRouting, WireParserRouting>>;

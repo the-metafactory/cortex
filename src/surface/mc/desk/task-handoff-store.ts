@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { unknownTargets, type DeskDispatchConfig, type DispatchPolicy, type UnknownDispatchAgent } from "../../../common/types/desk-dispatch";
 import { handoffWhen, OPEN_STATES, type HandoffState } from "./handoff";
 import { oneLine } from "./studio/edit";
+import type { TaskHandoffLines } from "../../../desk-api/wire/handoff";
 
 export const MAX_RESULT = 4000;
 export const MAX_ERROR = 300;
@@ -88,8 +89,6 @@ export function taskHandoffLine(row: TaskHandoffRow, label: string, now: number)
   if (row.state === "failed") return `${label} could not finish: ${row.error ?? "no reason given"}`;
   return `${label}'s answer is ready in Catch-up.`;
 }
-
-export type TaskHandoffLines = Record<string, { state: HandoffState; line: string }>;
 
 /** The newest open hand-off per Balance task, as the status line My Day and the outline show beside the task. */
 export function taskHandoffLines(db: Database, dispatch: DispatchOptions | undefined, now: number): TaskHandoffLines {

@@ -1,18 +1,10 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { stripControlCharacters } from "../../../../common/untrusted-fence";
-
-export const THREAD_TYPES = ["question", "topic", "making"] as const;
-export const THREAD_STATES = ["active", "parked", "closed"] as const;
-export const THREAD_OUTCOMES = ["decided", "shipped", "dropped"] as const;
-export const NOTE_KINDS = ["note", "stand", "idea", "relation"] as const;
-export const NOTE_STATUSES = ["open", "kept", "dismissed"] as const;
-
-export type ThreadType = (typeof THREAD_TYPES)[number];
-export type ThreadState = (typeof THREAD_STATES)[number];
-export type ThreadOutcome = (typeof THREAD_OUTCOMES)[number];
-export type NoteKind = (typeof NOTE_KINDS)[number];
-export type NoteStatus = (typeof NOTE_STATUSES)[number];
+import { THREAD_TYPES, THREAD_STATES, THREAD_OUTCOMES, NOTE_KINDS, NOTE_STATUSES } from "../../../../desk-api/wire/studio";
+import type { ThreadType, ThreadOutcome, NoteKind, NoteStatus, AssistantNote, StudioResponse, MaterialLink, LogEntry, StudioThread } from "../../../../desk-api/wire/studio";
+export { THREAD_OUTCOMES };
+export type { ThreadType, ThreadOutcome, AssistantNote, StudioResponse, MaterialLink, LogEntry, StudioThread };
 
 export const STUDIO_SLUG = /^[a-z0-9][a-z0-9-]{0,79}$/;
 export const AREA_ID = /^[\w.-]{1,64}$/;
@@ -62,61 +54,6 @@ const ProposalFrontSchema = z.object({
   proposed: isoTime,
   target: TargetSchema,
 });
-
-export interface AssistantNote {
-  at: string;
-  trigger: string;
-  model: string;
-  mode?: string;
-  run?: string;
-  kind: NoteKind;
-  status: NoteStatus;
-  sample: boolean;
-  because?: string;
-  relates?: MaterialLink;
-  text: string;
-}
-
-export interface StudioResponse {
-  at: string;
-  re?: string;
-  text: string;
-}
-
-export interface MaterialLink {
-  kind: string;
-  label: string;
-  href?: string;
-  text?: string;
-  textTruncated?: true;
-}
-
-export interface LogEntry {
-  at?: string;
-  text: string;
-}
-
-export interface StudioThread {
-  id?: string;
-  slug: string;
-  path: string;
-  type: ThreadType;
-  areas: string[];
-  state: ThreadState;
-  opened: string;
-  closed?: string;
-  thinkTonight: boolean;
-  outcome?: ThreadOutcome;
-  expect?: string;
-  reviewOn?: string;
-  question: string;
-  stand: string;
-  notes: AssistantNote[];
-  responses: StudioResponse[];
-  material: MaterialLink[];
-  log: LogEntry[];
-  outcomeText: string;
-}
 
 export interface StudioCapture {
   id: string;

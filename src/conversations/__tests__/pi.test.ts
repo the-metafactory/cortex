@@ -327,3 +327,63 @@ describe("pi turns against the installed pi binary", () => {
     }
   }, 120_000);
 });
+
+describe("codex authentication recovery", () => {
+  const EXPIRED = { role: "assistant", content: [], stopReason: "error", errorMessage: "Your authentication token has expired. Please try refreshing it." };
+  const codexLane = { provider: "openai-codex", model: "gpt-test" };
+  const failing = (extra: object[] = []) => [...extra, { type: "message_end", message: EXPIRED }];
+  const setup = async (calls: number[]) => {
+    const r = await rig();
+    r.settings.codexAuth = { refresh: () => { calls.push(1); return Promise.resolve({ ok: true }); } };
+    return r;
+  };
+
+  test("refreshes once and retries once on the same provider and model", async () => {
+    const calls: number[] = [];
+    const r = await setup(calls);
+    await writeFile(`${r.events}.1`, failing().map(e => `${JSON.stringify(e)}\n`).join(""));
+    await script(r, greetingEvents());
+    const reply = await piTurns(r.settings)(request({ lane: codexLane }));
+    expect(reply.text).toBe("Hello there");
+    expect(calls).toHaveLength(1);
+    const runs = await said(r);
+    expect(runs).toHaveLength(2);
+    expect(runs.map(run => [flag(run.argv, "--provider"), flag(run.argv, "--model")])).toEqual([["openai-codex", "gpt-test"], ["openai-codex", "gpt-test"]]);
+  });
+
+  test("a second expiry stops after one retry and asks for a new sign-in", async () => {
+    const calls: number[] = [];
+    const r = await setup(calls);
+    await script(r, failing());
+    await expect(piTurns(r.settings)(request({ lane: codexLane }))).rejects.toThrow(/Codex needs a new sign-in\..*No other engine is used\./);
+    expect(calls).toHaveLength(1);
+    expect(await said(r)).toHaveLength(2);
+  });
+
+  test("a rejected refresh does not retry and names the reconnect step", async () => {
+    const r = await rig();
+    r.settings.codexAuth = { refresh: () => Promise.resolve({ ok: false, reason: "rejected" }) };
+    await script(r, failing());
+    await expect(piTurns(r.settings)(request({ lane: codexLane }))).rejects.toThrow(/Codex needs a new sign-in\. The Codex refresh was rejected\. Reconnect Codex/);
+    expect(await said(r)).toHaveLength(1);
+  });
+
+  test("a turn that already ran a tool is refreshed but never replayed", async () => {
+    const calls: number[] = [];
+    const r = await setup(calls);
+    await script(r, failing(tool("t1", "read", { path: "x" }, "ok")));
+    await expect(piTurns(r.settings)(request({ lane: codexLane }))).rejects.toThrow(/not replayed/);
+    expect(calls).toHaveLength(1);
+    expect(await said(r)).toHaveLength(1);
+  });
+
+  test("other errors and other providers keep their normal failure and never refresh", async () => {
+    const calls: number[] = [];
+    const r = await setup(calls);
+    await script(r, [{ type: "message_end", message: { ...EXPIRED, errorMessage: "rate limit exceeded" } }]);
+    await expect(piTurns(r.settings)(request({ lane: codexLane }))).rejects.toThrow(/rate limit exceeded/);
+    await script(r, failing());
+    await expect(piTurns(r.settings)(request())).rejects.toThrow(/authentication token has expired/);
+    expect(calls).toHaveLength(0);
+  });
+});

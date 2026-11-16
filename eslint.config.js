@@ -141,6 +141,7 @@ export default tseslint.config(
       // not part of the typed project.
       "src/surface-sdk/generated/",
       "src/desk-sdk/generated/",
+      "src/desk-api/generated/",
       "src/desk-adapter-sdk/generated/desk-adapter-conformance.d.ts",
       "src/bus/myelin/vendor/",
       "src/worker/",

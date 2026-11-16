@@ -5,7 +5,7 @@ import { isIP, type LookupFunction } from "node:net";
 import type { ListedMail, TrashLedger } from "./mail-actions";
 import { logMailDecision, mailFeatures, PRINCIPAL_ACTED_WHERE, queryMailLog, type MailLogAction } from "./mail-log";
 import { refuse, type MoveResult } from "./mail-move";
-import { createRule, listRules, matchesRule, type MailRule, type RuleChange } from "./mail-rules";
+import { createRule, matchesRule, readableRules, type MailRule, type RuleChange } from "./mail-rules";
 import { suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import type { SourceMail } from "./sources/command";
 import { DEFAULT_UNSUBSCRIBE, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
@@ -15,17 +15,8 @@ export { unsubscribeMethod } from "../../../conversations/domain-adapters/mail/u
 export type UnsubscribeMethod = NonNullable<ReturnType<typeof unsubscribeMethod>>;
 
 export { DEFAULT_UNSUBSCRIBE, UNSUBSCRIBE_SQL, type UnsubscribeConfig } from "./mail-unsubscribe-schema";
-
-export type UnsubscribeOffer =
-  | { kind: "one-click"; url: string; host: string; dismissed: number; failed?: string }
-  | { kind: "page"; url: string; host: string; dismissed: number }
-  | { kind: "rule"; at: number; host: string };
-
-export interface UnsubscribeView {
-  kind: UnsubscribeOffer["kind"];
-  host: string;
-  url?: string;
-}
+import type { UnsubscribeOffer, UnsubscribeView } from "../../../desk-api/wire/mail";
+export type { UnsubscribeOffer };
 
 const hostOf = (url: string): string => {
   const u = new URL(url);
@@ -320,6 +311,6 @@ export function archiveWhatArrives(db: Database, mail: ListedMail, now: number):
 export const offerContext = (db: Database, config: UnsubscribeConfig | undefined, suspicion: SuspicionContext, flagged?: ReadonlySet<string>): OfferContext => ({
   config: config ?? DEFAULT_UNSUBSCRIBE,
   suspicion,
-  rules: listRules(db),
+  rules: readableRules(db),
   ...(flagged ? { flagged } : {}),
 });
