@@ -2,9 +2,11 @@ import { z } from "zod";
 import { spawnWithStdin, type WriterRunner } from "./create";
 
 import type { RoutineOptions } from "../../../common/types/desk-routines";
-import type { RoutineAction } from "./routine-store";
-import type { CapabilityInstallView, RoutineDraftView } from "./routine-capability-contract";
 export type { RoutineOptions } from "../../../common/types/desk-routines";
+import type { RoutineView } from "../../../desk-api/wire/routines";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { InstalledRoutine as WireInstalledRoutine, PendingRoutine as WirePendingRoutine } from "../../../desk-api/wire/routines";
+export type { RoutineView };
 export type RoutineRunner = WriterRunner;
 const id = z.string().min(1);
 export const RoutineSchema = z.object({
@@ -43,12 +45,5 @@ export async function reflexCommand<T>(options: RoutineOptions, args: string[], 
   return schema.parse(JSON.parse(result.stdout));
 }
 
-export interface RoutineView {
-  installed: (InstalledRoutine & { title: string; words: string })[];
-  pending: PendingRoutine[];
-  done: { routineId: string; title: string; decisionId: string; at: string }[];
-  changes: RoutineAction[];
-  drafts?: RoutineDraftView[];
-  capabilityInstalls?: CapabilityInstallView[];
-  error?: string;
-}
+type _WireInstalledRoutine = Expect<SameShape<InstalledRoutine, WireInstalledRoutine>>;
+type _WirePendingRoutine = Expect<SameShape<PendingRoutine, WirePendingRoutine>>;

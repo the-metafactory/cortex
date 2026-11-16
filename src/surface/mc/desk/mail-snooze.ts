@@ -10,6 +10,7 @@ import type { DeskItem } from "./types";
 import type { DeskPhrase } from "./phrases";
 
 export { SNOOZE_MORNING_HOUR, SNOOZE_SQL, SNOOZE_TIMES, snoozeAt, snoozeWhen, type SnoozeChoice, type SnoozeTime } from "./mail-snooze-schema";
+import type { HiddenMail } from "../../../desk-api/wire/mail";
 
 export type SnoozeKind = "time" | "meeting" | "person" | "hidden";
 export type SnoozeState = "snoozed" | "back";
@@ -290,13 +291,6 @@ export function undoHide(db: Database, messageId: string): { ok: true; message: 
   if (row?.kind !== "hidden") return refuse(409, "This mail is not hidden.");
   db.query("DELETE FROM desk_mail_snoozes WHERE message_id = ?").run(messageId);
   return { ok: true, message: `${quoted(row.subject)} is back on the Desk.` };
-}
-
-export interface HiddenMail {
-  key: string;
-  subject: string;
-  sender: string;
-  at: number;
 }
 
 export function hiddenMail(db: Database): HiddenMail[] {

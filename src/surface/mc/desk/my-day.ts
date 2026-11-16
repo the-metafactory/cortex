@@ -4,57 +4,30 @@ import { sourceIdentity, todo } from "./source-task";
 export { sourceIdentity } from "./source-task";
 import { balanceParents } from "./balance-parent";
 import { planSource, unplanSource } from "./source-plan";
-import { studioLinks, studioOwned, studioProjectLinks, type StudioProjectLink, type StudioProjection } from "./studio-outline";
+import { studioLinks, studioOwned, studioProjectLinks, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, reopenOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
 import { stampCreated, stampTouched } from "./balance-touch";
 import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-day";
 import type { Database } from "bun:sqlite";
-import { applyDayToHistory, findNode, rankAll, recurrenceProjection, selectToday, shiftDays, todayPlanIds, type AppState, type OutlineNode, type RecurrenceProjection, type TodayItem } from "../../../balance";
+import { applyDayToHistory, findNode, rankAll, recurrenceProjection, selectToday, shiftDays, todayPlanIds, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { saveBalanceState } from "./balance-store";
-import { taskHandoffLines, type TaskHandoffLines } from "./task-handoff-store";
+import { taskHandoffLines } from "./task-handoff-store";
 import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
-import { taskLinks, type DeskLinkView } from "./links";
+import { taskLinks } from "./links";
 import { configuredState, isPersonDraft, loadMeta, loadMyDayState, retireStaleDraft, saveMeta, todayCap } from "./balance-sync";
 export { loadMeta } from "./balance-sync";
+import type { MyDayOutlineNode, MyDayView } from "../../../desk-api/wire/my-day";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { MyDayView as WireMyDayView } from "../../../desk-api/wire/my-day";
+export type { MyDayOutlineNode, MyDayView };
 
-/** An outline row as My day serves it: a row with a `repeat` rule also carries `recurrence`, computed by the Balance engine's recurrence rule. */
-export type MyDayOutlineNode = Omit<OutlineNode, "children"> & { children: MyDayOutlineNode[]; recurrence?: RecurrenceProjection };
 function withRecurrence(node: OutlineNode): MyDayOutlineNode {
   const recurrence = recurrenceProjection(node);
   return { ...node, children: node.children.map(withRecurrence), ...(recurrence ? { recurrence } : {}) };
-}
-export interface MyDayView {
-  work: {
-    confirmedIds: string[];
-    selection: { kind: "automatic" } | { kind: "manual"; id: string } | { kind: "unavailable"; id: string; reason: string };
-  };
-  studioStatus: "synced" | "unavailable" | "disabled";
-  studioTasks: { id: string; slug: string }[];
-  studioProjects: StudioProjectLink[];
-  revision: number;
-  configuredCaps: { cap: number; topN: number };
-  capsOverridden: boolean;
-  inbox: OutlineNode[];
-  date: string;
-  phase: "proposed" | "started" | "closed";
-  cap: number;
-  topN: number;
-  items: TodayItem[];
-  alternates: TodayItem[];
-  wins: { taskId: string; title: string }[];
-  outline: MyDayOutlineNode;
-  observation: Pick<BalanceDayProjection, "status" | "observedAt"> | null;
-  sources: MyDayMeta["sources"];
-  touchTrackingSince: string | null;
-  yesFilter: string[];
-  undos: { receipt: string; title: string }[];
-  dayUndo: { receipt: string; text: string } | null;
-  handoffs?: TaskHandoffLines;
-  links: DeskLinkView[];
 }
 const withHandoffs = (view: MyDayView, db: Database, desk: DeskOptions, now: number): MyDayView => (desk.dispatch ? { ...view, handoffs: taskHandoffLines(db, desk.dispatch, now) } : view);
 function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection, projection?: BalanceDayProjection): Omit<MyDayView, "links"> {
@@ -317,3 +290,5 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     return { view, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) };
   }).immediate();
 }
+
+type _WireMyDaySource = Expect<SameShape<MyDayMeta["sources"][number], WireMyDayView["sources"][number]>>;

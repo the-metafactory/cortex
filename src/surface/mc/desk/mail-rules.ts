@@ -14,37 +14,12 @@ import { attachMail, endLink, linkByRun, linkTargetOf, offDeskIds, type LinkTarg
 import { readClassifications } from "./classify";
 import { isSuspicious, suspicionContext, type SuspicionContext } from "./mail-suspicion";
 
-export { DEFAULT_MAIL_RULES, MAIL_RULES_SQL, RULE_ACTIONS, RULE_MATCHES, type MailRulesConfig, type RuleAction, type RuleMatch, type RuleTarget } from "./mail-rules-schema";
+export { DEFAULT_MAIL_RULES, MAIL_RULES_SQL, type MailRulesConfig, type RuleTarget } from "./mail-rules-schema";
+import type { MailRule, MailRuleView } from "../../../desk-api/wire/mail";
+export type { MailRule, MailRuleView };
 
 export const RULES_GRANT = "mail.rules";
 export const LATER_MS = 7 * DAY_MS;
-
-export interface MailRule {
-  id: string;
-  match: RuleMatch;
-  value: string;
-  action: RuleAction;
-  on: boolean;
-  createdAt: number;
-  lastRunAt: number | null;
-  count: number;
-  held: number | null;
-  released: boolean;
-  target: RuleTarget | null;
-}
-
-export interface MailRuleView {
-  id: string;
-  match: RuleMatch;
-  value: string;
-  action: RuleAction;
-  on: boolean;
-  sentence: string;
-  lastRunAt: number | null;
-  count: number;
-  held: number | null;
-  target: RuleTarget | null;
-}
 
 export interface RuleProposal {
   key: string;

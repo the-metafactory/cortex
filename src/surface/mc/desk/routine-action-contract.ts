@@ -2,6 +2,8 @@ import { RemovalActionSchema } from "./routine-removal-contract";
 import { z } from "zod";
 import { LifecycleActionSchema } from "./routine-lifecycle-contract";
 import { ScheduleActionSchema } from "./routine-schedule-contract";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { RoutineAction as WireRoutineAction } from "../../../desk-api/wire/routines";
 
 export const LegacyRoutineActionSchema = z.object({
   requestId: z.string().regex(/^[\w-]{8,64}$/),
@@ -16,3 +18,5 @@ export const RoutineResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(false), error: z.string(), uncertain: z.literal(true).optional() }),
 ]);
 export type RoutineResult = z.infer<typeof RoutineResultSchema>;
+
+type _WireRoutineAction = Expect<SameShape<RoutineAction, WireRoutineAction>>;

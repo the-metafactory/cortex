@@ -1,4 +1,5 @@
-export { HANDOFF_STATES, MAX_INSTRUCTION, OPEN_STATES, type HandoffState } from "./handoff";
+export { MAX_INSTRUCTION, OPEN_STATES, type HandoffState } from "./handoff";
+export { HANDOFF_STATES } from "../../../desk-api/wire/handoff";
 
 export const MAX_FINDINGS = 5;
 export const MAX_FINDING = 400;

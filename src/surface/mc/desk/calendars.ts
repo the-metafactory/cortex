@@ -1,5 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { DeskCalendar as WireDeskCalendar } from "../../../desk-api/wire/calendar";
 
 export const CalendarSchema = z.object({
   source: z.string().min(1),
@@ -86,3 +88,5 @@ export function changeCalendar(db: Database, change: CalendarChange): boolean {
     return legacy > 0;
   }).immediate();
 }
+
+type _WireDeskCalendar = Expect<SameShape<DeskCalendar, WireDeskCalendar>>;

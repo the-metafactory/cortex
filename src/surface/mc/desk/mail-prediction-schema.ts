@@ -1,5 +1,5 @@
-export const PREDICTED_ACTIONS = ["archive", "junk", "trash", "reply", "plan", "todo", "keep"] as const;
-export type PredictedAction = (typeof PREDICTED_ACTIONS)[number];
+import { PREDICTED_ACTIONS, SIMILARITY_BASES } from "../../../desk-api/wire/mail";
+import type { PredictedAction, SimilarityBasis } from "../../../desk-api/wire/mail";
+export { PREDICTED_ACTIONS, SIMILARITY_BASES };
+export type { PredictedAction, SimilarityBasis };
 
-export const SIMILARITY_BASES = ["content", "sender"] as const;
-export type SimilarityBasis = (typeof SIMILARITY_BASES)[number];
