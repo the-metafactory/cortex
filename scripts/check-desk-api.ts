@@ -4,13 +4,13 @@ import { DESK_API_ROUTES } from "../src/desk-api/routes";
 import { DESK_API_VERSION, deskContract } from "../src/desk-api/version";
 import { gitShow, resolveBaseRef } from "./lib/git";
 
-export const DESK_API_SNAPSHOT = "src/desk-api/generated/desk-api-contract.json";
+const DESK_API_SNAPSHOT = "src/desk-api/generated/desk-api-contract.json";
 
 export interface DeskApiSnapshot {
-  version: string;
-  routes: string[];
-  phraseCodes: string[];
-  vocabulary: string[];
+  readonly version: string;
+  readonly routes: readonly string[];
+  readonly phraseCodes: readonly string[];
+  readonly vocabulary: readonly string[];
 }
 
 const SEMVER = /^(\d+)\.(\d+)\.\d+$/;
@@ -26,7 +26,7 @@ function vocabularyEntries(name: string, value: unknown): string[] {
   return [`${name}: ${JSON.stringify(value)}`];
 }
 
-export function currentSnapshot(): DeskApiSnapshot {
+function currentSnapshot(): DeskApiSnapshot {
   const contract = deskContract();
   return {
     version: DESK_API_VERSION,
