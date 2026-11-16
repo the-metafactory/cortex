@@ -3,6 +3,7 @@ import { McSchema } from "../../../common/types/config";
 import { checkSourceOutput } from "../../../cli/cortex/commands/desk";
 import { parseSourceOutput } from "../desk/sources/command";
 import { commandTransport } from "../desk/transports";
+import type { DeskPush } from "../desk/interrupt";
 
 const example = (name: string): Promise<string> => Bun.file(new URL(`../../../../docs/desk/examples/${name}`, import.meta.url)).text();
 
@@ -42,5 +43,21 @@ describe("documented Desk contracts", () => {
     expect(await failed.send(push)).toEqual({ status: "failed", error: "Unavailable" });
     const slow = commandTransport([process.execPath, "-e", "await Bun.sleep(5000)"], 50);
     expect(await slow.send(push)).toMatchObject({ status: "failed" });
+  });
+
+  it("reports invalid push metadata as a failed delivery without running the command", async () => {
+    const sent: string[] = [];
+    const transport = commandTransport(["notify"], 1000, async (_argv, stdin) => {
+      sent.push(stdin);
+      return { code: 0, stdout: "", stderr: "" };
+    });
+    const push = { key: "m1", title: "Meeting", why: "Starts soon" };
+    for (const reason of [{ code: "meeting.soon" }, { code: "unknown", phrase: { code: "unknown" } }]) {
+      const result = await transport.send({ ...push, reason } as unknown as DeskPush);
+      expect(result).toMatchObject({ status: "failed", error: expect.stringContaining("The transport command did not finish:") });
+    }
+    expect(sent).toEqual([]);
+    expect(await transport.send(push)).toEqual({ status: "sent" });
+    expect(sent).toEqual([JSON.stringify(push)]);
   });
 });

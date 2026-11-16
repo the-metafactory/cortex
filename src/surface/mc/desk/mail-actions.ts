@@ -1,3 +1,4 @@
+import { MailDraftCommandRequestSchema, MailDraftCommandResultSchema, MailReportCommandRequestSchema, MailReportCommandResultSchema } from "../../../desk-sdk/mail-command-contract";
 import { MAX_REPLY_CHARS } from "../../../conversations/domain-adapters/mail/reply-draft-contract";
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
@@ -90,16 +91,6 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Move
 
 export type DraftResult = ({ ok: true; message: string; id: string } & ActWording) | ActRefusal;
 
-function draftId(stdout: string): string {
-  try {
-    const printed: unknown = JSON.parse(stdout);
-    const id = typeof printed === "object" && printed !== null && "id" in printed ? printed.id : undefined;
-    return typeof id === "string" ? id.trim() : "";
-  } catch {
-    return "";
-  }
-}
-
 /**
  * Runs the configured draft command for one listed mail: stdin `{ action: "draft", account, messageId, to, subject, body }`.
  * The command saves a reply in the account's Drafts and never sends it. The item stays on the Desk either way.
@@ -114,13 +105,13 @@ export async function draftReply(mail: ListedMail, body: string, deps: Omit<Move
   const key = draftKey(mail.id);
   if (!deps.ledger.claim(key)) return refuse(409, "A draft for this mail is already being saved.", { code: "act.busy", params: { kind: "draft" } });
   try {
-    const stdin = JSON.stringify({ action: "draft", account: mail.account, messageId: mail.id, to: mail.from.address, subject: replySubject(mail.subject), body });
+    const stdin = JSON.stringify(MailDraftCommandRequestSchema.parse({ action: "draft", account: mail.account, messageId: mail.id, to: mail.from.address, subject: replySubject(mail.subject), body }));
     const result = await deps.run(argv, stdin, config.timeoutSeconds * 1000);
     if (result.code !== 0) {
       const line = oneLine(result.stderr || result.stdout, `the draft command exited with code ${result.code}.`);
       return failed(502, `The draft was not saved: ${line}`, line, "draft");
     }
-    return { ok: true, message: `Reply saved in your ${mail.account} Drafts.`, id: draftId(result.stdout), messagePhrase: { code: "mail.reply-drafted", params: { account: mail.account } } };
+    return { ok: true, message: `Reply saved in your ${mail.account} Drafts.`, id: MailDraftCommandResultSchema.parse(result.stdout).id, messagePhrase: { code: "mail.reply-drafted", params: { account: mail.account } } };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     if (err instanceof CommandTimeout) return failed(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`, why, "draft");
@@ -138,16 +129,6 @@ export interface MailReportConfig {
 
 const reportKey = (messageId: string): string => `report:${messageId}`;
 
-const reportMessage = (stdout: string, fallback: string): string => {
-  try {
-    const out: unknown = JSON.parse(stdout);
-    const message = typeof out === "object" && out !== null && "message" in out && typeof out.message === "string" ? oneLine(out.message, fallback) : fallback;
-    return message.length > 0 && message.length <= 300 ? message : fallback;
-  } catch {
-    return fallback;
-  }
-};
-
 /**
  * Runs the configured report command for one listed mail: stdin `{ action: "report", account, messageId, to? }`. With
  * `to`, the adapter saves a draft to that address with the original attached as message/rfc822, for the principal to
@@ -159,13 +140,13 @@ export async function reportMail(mail: ListedMail, report: MailReportConfig | un
   const key = reportKey(mail.id);
   if (!deps.ledger.claim(key)) return refuse(409, "This mail is already being reported.", { code: "act.busy", params: { kind: "report" } });
   try {
-    const stdin = JSON.stringify({ action: "report", account: mail.account, messageId: mail.id, ...(report.to ? { to: report.to } : {}) });
+    const stdin = JSON.stringify(MailReportCommandRequestSchema.parse({ action: "report", account: mail.account, messageId: mail.id, ...(report.to ? { to: report.to } : {}) }));
     const result = await deps.run(report.command, stdin, report.timeoutSeconds * 1000);
     if (result.code !== 0) {
       const line = oneLine(result.stderr || result.stdout, `the report command exited with code ${result.code}.`);
       return failed(502, `The mail was not reported: ${line}`, line, "report");
     }
-    return { ok: true, message: reportMessage(result.stdout, report.to ? `A report draft to ${report.to} is in your ${mail.account} Drafts. Send it from there.` : "The mail was reported."), messagePhrase: { code: "mail.reported", params: report.to ? { to: report.to } : {} } };
+    return { ok: true, message: oneLine(MailReportCommandResultSchema.parse(result.stdout).message, report.to ? `A report draft to ${report.to} is in your ${mail.account} Drafts. Send it from there.` : "The mail was reported."), messagePhrase: { code: "mail.reported", params: report.to ? { to: report.to } : {} } };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     if (err instanceof CommandTimeout) return failed(504, `The report command ${err.message}. A draft may exist; check Drafts.`, why, "report");
