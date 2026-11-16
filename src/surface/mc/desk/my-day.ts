@@ -90,6 +90,30 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
   else delete node.dueDate;
   stampTouched(node, date);
 }
+function recordDefer(meta: MyDayMeta, node: OutlineNode, date: string, receipt: string, after: string): void {
+  const earlier = meta.undos.find(u => u.receipt === receipt && !u.used);
+  const before = earlier ? earlier.before : node.deferredUntil;
+  meta.undos = meta.undos.filter(u => u !== earlier);
+  meta.undos.push({ receipt, taskId: node.id, date, ...(before ? { before } : {}), after, used: false });
+  node.deferredUntil = after;
+}
+
+/** Puts an open task away until `after` (a day), with the same undo record as My Day's Not today; deferring again under one receipt keeps the first earlier value. Null when the task is not in the outline. */
+export function deferTaskUntil(args: { db: Database; desk: DeskOptions; now: number; taskId: string; after: string; receipt: string }): { deferredUntil: string } | null {
+  const { db, desk, now, taskId, after, receipt } = args;
+  return db.transaction(() => {
+    const meta = loadMeta(db);
+    const state = loadMyDayState(db, desk, meta, localDay(now));
+    const node = findNode(state.outline, taskId);
+    if (!node) return null;
+    recordDefer(meta, node, localDay(now), receipt, after);
+    meta.revision += 1;
+    saveBalanceState(db, state);
+    saveMeta(db, meta);
+    return { deferredUntil: after };
+  }).immediate();
+}
+
 /** `reopenable` makes an `outline-complete` of an open task return an undo receipt that My Day `undo` turns into a reopen. */
 export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection; reopenable?: boolean }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string } {
   const { db, desk, now, date, requestId, command, source, studio } = args;
@@ -184,10 +208,8 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         const current = viewOf(state, meta, desk, date, studio);
         if (current.phase === "closed" || !current.items.some(i => i.task.id === command.id)) throw new Error("Choose an item in My day.");
         const node = requiredNode(state, command.id);
-        const after = shiftDays(date, 1);
         undo = requestId;
-        meta.undos.push({ receipt: undo, taskId: node.id, date, ...(node.deferredUntil ? { before: node.deferredUntil } : {}), after, used: false });
-        node.deferredUntil = after;
+        recordDefer(meta, node, date, undo, shiftDays(date, 1));
         break;
       }
       case "today-add":
