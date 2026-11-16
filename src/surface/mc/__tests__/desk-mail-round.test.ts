@@ -13,11 +13,11 @@ afterEach(async () => {
   rig = undefined;
 });
 
-async function openOneMailRound(): Promise<MailRoundRig> {
-  rig = await openMailRoundRig(roundAt(2, 8));
-  rig.setState({ mail: [roundMail("a", roundAt(2, 7))] });
-  rig.setNow(roundAt(2, 8, 31));
-  return rig;
+async function oneMailRound(): Promise<MailRoundRig> {
+  const opened = await openMailRoundRig(roundAt(2, 8));
+  opened.setState({ mail: [roundMail("a", roundAt(2, 7))] });
+  opened.setNow(roundAt(2, 8, 31));
+  return opened;
 }
 
 describe("mc.desk.mailRounds", () => {
@@ -55,7 +55,7 @@ describe("a durable scheduled mail round", () => {
   });
 
   it("reconciles membership through the existing mail route and starts a queued successor immediately when a slot passed", async () => {
-    await openOneMailRound();
+    rig = await oneMailRound();
     const first = await rig.get();
     rig.setState({ mail: [roundMail("a", roundAt(2, 7)), roundMail("b", roundAt(2, 8, 45))] });
     rig.setNow(roundAt(2, 13, 31));
@@ -69,7 +69,7 @@ describe("a durable scheduled mail round", () => {
   });
 
   it("keeps an unfinished round through midnight and later slots without a duplicate", async () => {
-    await openOneMailRound();
+    rig = await oneMailRound();
     const round = (await rig.get()).mailRound;
     rig.setState({ mail: [roundMail("a", roundAt(2, 7)), roundMail("b", roundAt(2, 14))] });
     rig.setNow(roundAt(3, 0, 5));
@@ -85,7 +85,7 @@ describe("a durable scheduled mail round", () => {
   });
 
   it("prunes a finished round with its operation receipts after the retention", async () => {
-    await openOneMailRound();
+    rig = await oneMailRound();
     const round = (await rig.get()).mailRound;
     expect(round?.due).toBe(true);
     expect((await readAnswer(await rig.postRound(putBackBody(round!, "mail:a", "req-prune-a")))).ok).toBe(true);
