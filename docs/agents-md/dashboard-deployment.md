@@ -25,6 +25,7 @@ The `build:dashboard` + `watch:dashboard` scripts in `package.json` codify step 
 
 **Architecture:**
 - `cortex` serves the REST API + WebSocket at `localhost:8767` locally, or via the CF Worker at `grove.meta-factory.ai/api/*` in production (`src/surface/mc/worker/`).
+- The daemon serves the bundled dashboard from `dist/dashboard-v2` at `/mc/`. Without `mc.ui.dir`, `/` redirects to `/mc/` and keeps the query string; with `mc.ui.dir` the external UI owns `/` and the bundled dashboard stays at `/mc/`.
 - The dashboard frontend is static HTML/JS hosted on CF Pages.
 - Frontend connects to the API via URL params (`?api=`) or auto-detection.
 - CF Access cookies cover dashboard + API on each TLD (`.ai`, `.dev`, `.io`) — no cross-origin cookie issue, no bypass-everyone policies (see Critical Rules).

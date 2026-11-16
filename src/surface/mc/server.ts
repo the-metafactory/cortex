@@ -202,7 +202,31 @@ export const DASHBOARD_DIST = join(
   "dashboard-v2"
 );
 
-const DASHBOARD_ASSET_EXT = /^\/[\w.-]+\.(js|css|svg|png|jpe?g|gif|webp|ico|map|woff2?)$/;
+const DASHBOARD_ASSET_EXT = /^[\w.-]+\.(js|css|svg|png|jpe?g|gif|webp|ico|map|woff2?)$/;
+
+const CONSOLE_PATH = "/mc";
+
+function dashboardAssetName(pathname: string, prefix: string): string | undefined {
+  const name = pathname.slice(prefix.length);
+  if (name.length === 0 || name.includes("..")) return undefined;
+  return DASHBOARD_ASSET_EXT.test(name) ? name : undefined;
+}
+
+function dashboardShellResponse(path: string, origin: string): Response {
+  return new Response(Bun.file(path), {
+    headers: { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(origin) },
+  });
+}
+
+async function bundledAssetResponse(root: string, name: string): Promise<Response> {
+  const file = Bun.file(join(root, name));
+  if (!(await file.exists())) return new Response("Not Found", { status: 404 });
+  return new Response(file);
+}
+
+function consoleRedirect(search: string): Response {
+  return new Response(null, { status: 302, headers: { location: `${CONSOLE_PATH}/${search}` } });
+}
 
 async function externalUiResponse(root: string, name: string, headers?: HeadersInit): Promise<Response> {
   try {
@@ -267,6 +291,7 @@ export interface MissionControlViews {
 
 export interface StartServerOptions extends MissionControlViews {
   processManager?: ProcessManager;
+  dashboardDist?: string;
   degraded?: DegradedInfo;
   spawn?: SpawnFn;
   notify?: MaybeNotifyDeps;
@@ -282,6 +307,7 @@ export function startServer(
   options: StartServerOptions = {}
 ): ServerContext {
   const uiDirectory = config.ui ? resolveUiDirectory(config.ui.dir) : undefined;
+  const dashboardDist = options.dashboardDist ?? DASHBOARD_DIST;
   if ([options.drafts, options.graphDrafts, options.balanceDrafts, options.flowDrafts].filter(Boolean).length > 1) throw new Error("Configure only one of drafts, graphDrafts, balanceDrafts or flowDrafts");
   const editor = options.graphDrafts
     ? deskGraphDraftEditor(options.graphDrafts.host, options.graphDrafts.deps, options.graphDrafts.options)
@@ -453,23 +479,35 @@ export function startServer(
         ));
       }
 
-      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-        const shellHeaders = { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) };
-        if (uiDirectory) return externalUiResponse(uiDirectory, "index.html", shellHeaders);
-        return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
-          headers: shellHeaders,
-        });
+      if (req.method === "GET" && (url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/`)) {
+        if (url.pathname === CONSOLE_PATH) return consoleRedirect(url.search);
+        return dashboardShellResponse(join(dashboardDist, "index.html"), url.origin);
       }
 
-      if (req.method === "GET" && url.pathname.startsWith("/wake/")) return wakeAssetResponse(url.pathname, DASHBOARD_DIST, url.searchParams.get("sha256"));
+      if (req.method === "GET" && url.pathname === `${CONSOLE_PATH}/index.html`) {
+        return dashboardShellResponse(join(dashboardDist, "index.html"), url.origin);
+      }
 
-      if (req.method === "GET" && DASHBOARD_ASSET_EXT.test(url.pathname)) {
-        const rel = url.pathname.slice(1);
-        if (rel.includes("..") || rel.length === 0) {
-          return new Response("Not Found", { status: 404 });
+      if (req.method === "GET" && url.pathname.startsWith(`${CONSOLE_PATH}/`)) {
+        const name = dashboardAssetName(url.pathname, `${CONSOLE_PATH}/`);
+        if (name === undefined) return new Response("Not Found", { status: 404 });
+        return bundledAssetResponse(dashboardDist, name);
+      }
+
+      if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+        if (uiDirectory) return externalUiResponse(uiDirectory, "index.html", { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) });
+        if (url.pathname === "/") return consoleRedirect(url.search);
+        return dashboardShellResponse(join(dashboardDist, "index.html"), url.origin);
+      }
+
+      if (req.method === "GET" && url.pathname.startsWith("/wake/")) return wakeAssetResponse(url.pathname, dashboardDist, url.searchParams.get("sha256"));
+
+      if (req.method === "GET") {
+        const name = dashboardAssetName(url.pathname, "/");
+        if (name !== undefined) {
+          if (uiDirectory) return externalUiResponse(uiDirectory, name);
+          return bundledAssetResponse(dashboardDist, name);
         }
-        if (uiDirectory) return externalUiResponse(uiDirectory, rel);
-        return new Response(Bun.file(join(DASHBOARD_DIST, rel)));
       }
 
       return new Response("Not Found", { status: 404 });
