@@ -46,7 +46,7 @@ import type { PiSettings } from "../../../conversations/pi";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
 import { MAIL_ROUND_INTERRUPT_REASONS, readMailRound } from "./mail-round";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
-import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
+import type { DeskEvent, DeskGoal, DeskItem, DeskItemKind, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 import { escalationEntries, RULING_NO_MODEL, RULING_POLICY_REFUSED, splitExplanations, type EscalationRulings, type RulingExplainLoop, type RulingLedger } from "./ruling";
 import type { ParserPermissions } from "../../../common/types/desk-parser";
@@ -415,6 +415,10 @@ export async function composeDesk(
     handoff: handoffReady(desk, handing),
     unsubscribe,
   });
+  const unreadableDeferKinds = new Set<DeskItemKind>([
+    ...(rangerResult && rangerResult.error !== null ? (["decision", "grilling"] as const) : []),
+    ...(rulesRead.ok ? [] : (["mail-rule"] as const)),
+  ]);
   const corrected = applyItemDefers(db, applyCorrections(quietAdapterInterrupts([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ ...mailItemOptions(withoutAnsweredRead(mail, answers)), invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
@@ -427,7 +431,7 @@ export async function composeDesk(
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantName),
     ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
-  ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections), wakeFacts, now);
+  ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections), wakeFacts, now, unreadableDeferKinds);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));

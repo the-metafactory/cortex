@@ -12,6 +12,7 @@ const RANGER = {
 
 let rig: MailRoundRig;
 let ranger: ReturnType<typeof Bun.serve>;
+let rangerDown = false;
 let reminderKey: string;
 
 const post = (body: unknown): Promise<Response> => rig.defer(body);
@@ -23,7 +24,8 @@ const keyOf = async (kind: string): Promise<string> => {
 };
 
 beforeEach(async () => {
-  ranger = Bun.serve({ port: 0, fetch: () => Response.json(RANGER) });
+  rangerDown = false;
+  ranger = Bun.serve({ port: 0, fetch: () => (rangerDown ? new Response("down", { status: 500 }) : Response.json(RANGER)) });
   rig = await openMailRoundRig(NOW, { rangerUrl: `http://127.0.0.1:${ranger.port}`, mailDigest: undefined, mailInvitations: undefined });
   rig.setState({ mail: [], events: [roundEvent("next", roundAt(16, 14), roundAt(16, 15))] });
   const id = rig.database().query<{ id: number }, [number, number]>("INSERT INTO desk_notes (kind, text, due_at, created_at) VALUES ('reminder', 'Call the bank', ?, ?) RETURNING id").get(NOW - 60_000, NOW - 3_600_000)?.id;
@@ -79,6 +81,19 @@ describe("deferring work items", () => {
     rig.setNow(roundAt(16, 15, 30));
     const back = (await rig.get()).items.find((entry) => entry.key === reminderKey);
     expect(back?.back?.line).toBe("Back because “Meeting next” has ended.");
+  });
+
+  it("keeps a deferral while its source cannot be read, and the item stays away after recovery", async () => {
+    const key = await keyOf("decision");
+    expect((await post({ action: "defer", key, until: { kind: "tomorrow" } })).status).toBe(200);
+    rangerDown = true;
+    const outage = await rig.get();
+    expect(outage.items.some((item) => item.key === key)).toBe(false);
+    expect(rows()).toBe(1);
+    rangerDown = false;
+    const recovered = await rig.get();
+    expect(recovered.items.some((item) => item.key === key)).toBe(false);
+    expect(recovered.deferred.some((entry) => entry.key === key)).toBe(true);
   });
 
   it("drops the deferral when the source no longer produces the item", async () => {

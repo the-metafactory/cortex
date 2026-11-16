@@ -87,25 +87,25 @@ export function cancelItemDefer(db: Database, key: string): { message: string } 
   return { message: `“${row.title}” is back on the Desk.` };
 }
 
-function wakeItemDefers(db: Database, facts: WakeFacts, produced: ReadonlySet<string>, now: number): void {
+function wakeItemDefers(db: Database, facts: WakeFacts, produced: ReadonlySet<string>, unreadable: ReadonlySet<DeskItemKind>, now: number): void {
   db.transaction(() => {
     for (const row of readRows(db, "snoozed")) {
       const decision = wakeOf(wakeRowOf(row), facts, now);
       if (decision.kind === "back") db.query("UPDATE desk_item_defers SET state = 'back', back_at = ?, reason = ? WHERE item_key = ? AND state = 'snoozed'").run(now, decision.reason, row.item_key);
       else if (decision.kind === "moved") db.query("UPDATE desk_item_defers SET event_title = ?, event_start = ?, until_at = ?, label = ? WHERE item_key = ?").run(decision.event.title, decision.event.at, decision.event.end, `until “${decision.event.title}” ends`, row.item_key);
     }
-    for (const row of db.query<{ item_key: string }, []>("SELECT item_key FROM desk_item_defers").all()) {
-      if (!produced.has(row.item_key)) db.query("DELETE FROM desk_item_defers WHERE item_key = ?").run(row.item_key);
+    for (const row of db.query<{ item_key: string; kind: string }, []>("SELECT item_key, kind FROM desk_item_defers").all()) {
+      if (!produced.has(row.item_key) && !unreadable.has(row.kind as DeskItemKind)) db.query("DELETE FROM desk_item_defers WHERE item_key = ?").run(row.item_key);
     }
     db.query("DELETE FROM desk_item_defers WHERE state = 'back' AND back_at < ?").run(now - BACK_KEEP_DAYS * DAY_MS);
     db.query("DELETE FROM desk_item_defers WHERE created_at < ?").run(now - DEFER_KEEP_DAYS * DAY_MS);
   })();
 }
 
-/** Applies deferrals to the produced items: a waiting item leaves, a returned one leads with why for a day at urgency today or higher, never as an interruption. */
-export function applyItemDefers(db: Database, items: DeskItem[], facts: WakeFacts, now: number): DeskItem[] {
+/** Applies deferrals to the produced items (a deferral whose kind is in `unreadable` survives an absent item, since its source failed to answer): a waiting item leaves, a returned one leads with why for a day at urgency today or higher, never as an interruption. */
+export function applyItemDefers(db: Database, items: DeskItem[], facts: WakeFacts, now: number, unreadable: ReadonlySet<DeskItemKind> = new Set()): DeskItem[] {
   const produced = new Set(items.map((item) => item.key));
-  wakeItemDefers(db, facts, produced, now);
+  wakeItemDefers(db, facts, produced, unreadable, now);
   const waiting = new Set(readRows(db, "snoozed").map((r) => r.item_key));
   const back = new Map(readRows(db, "back").flatMap((r): [string, { line: string; at: number }][] => (r.back_at !== null && now - r.back_at < BACK_SHOWN_MS ? [[r.item_key, { line: backLine(wakeRowOf(r), now), at: r.back_at }]] : [])));
   return items.filter((item) => !waiting.has(item.key)).map((item) => {
