@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -242,6 +242,9 @@
     "CORRECTION_MOVES: archive",
     "CORRECTION_MOVES: junk",
     "CORRECTION_MOVES: trash",
+    "DEFAULT_MAIL_ROUND_SLOTS: \"08:30\"",
+    "DEFAULT_MAIL_ROUND_SLOTS: \"13:30\"",
+    "DEFAULT_MAIL_ROUND_SLOTS: \"16:30\"",
     "DESK_ITEM_KINDS: \"adapter\"",
     "DESK_ITEM_KINDS: \"agent-blocked\"",
     "DESK_ITEM_KINDS: \"agent-failed\"",
@@ -268,6 +271,9 @@
     "FIELD_SCHEMAS: routine",
     "FIELD_SCHEMAS: task",
     "HANDOFF_KEY_PREFIX: \"assistant:\"",
+    "MAIL_ROUND_GROUP_KINDS: \"bundle\"",
+    "MAIL_ROUND_GROUP_KINDS: \"digest\"",
+    "MAIL_ROUND_GROUP_KINDS: \"sweep\"",
     "MAX_INSTRUCTION: 1000",
     "RULE_ACTIONS: \"archive\"",
     "RULE_ACTIONS: \"attach\"",

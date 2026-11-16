@@ -249,6 +249,7 @@ export interface DeskView {
   mailHidden?: import("./mail-snooze").HiddenMail[];
   mailSweeps?: import("./mail-sweep").MailSweepView[];
   mailDigests?: import("./mail-digest").MailDigestView[];
+  mailRound?: ReturnType<typeof import("./mail-round").readMailRound>;
   dmarc?: import("./mail-dmarc").DmarcWeek;
   myDay?: MyDayView;
   mirror?: import("./mirror").WeeklyMirror;

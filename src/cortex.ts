@@ -5037,6 +5037,7 @@ export async function startCortex(
           ...(config.mc.desk.mail.unsubscribe ? { mailUnsubscribe: config.mc.desk.mail.unsubscribe } : {}),
           ...(config.mc.desk.mail.mirror ? { mailMirror: config.mc.desk.mail.mirror } : {}),
           ...(config.mc.desk.mail.digest ? { mailDigest: resolveDigest(config.mc.desk.mail.digest, expandTilde) } : {}),
+          mailRounds: config.mc.desk.mailRounds,
           ...(config.mc.desk.mail.waiting ? { mailWaiting: resolveWaiting(config.mc.desk.mail.waiting, expandTilde) } : {}),
           ...(config.mc.desk.mail.invitations ? { mailInvitations: config.mc.desk.mail.invitations } : {}),
           ...(config.mc.desk.conversations?.local || config.mc.desk.conversations?.cloud
