@@ -72,7 +72,7 @@ const byOpened = (a: StudioThread, b: StudioThread): number => a.opened.localeCo
 const byClosedDesc = (a: StudioThread, b: StudioThread): number => (b.closed ?? b.opened).localeCompare(a.closed ?? a.opened) || a.slug.localeCompare(b.slug);
 const byTime = <T extends { id: string }>(time: (x: T) => string) => (a: T, b: T): number => Date.parse(time(a)) - Date.parse(time(b)) || a.id.localeCompare(b.id);
 
-export function buildStudioView(files: StudioFiles, options: StudioOptions, areas: readonly StudioArea[], problems: StudioProblem[] = []): StudioView {
+export function buildStudioView(files: StudioFiles, options: StudioOptions, areas: readonly StudioArea[], problems: StudioProblem[] = [], assistantName?: string): StudioView {
   const found = [...problems];
 
   const parseAll = <T extends { path: string }>(list: StudioFile[], parse: (path: string, text: string) => Parsed<T>): T[] =>
@@ -89,7 +89,7 @@ export function buildStudioView(files: StudioFiles, options: StudioOptions, area
     return { ...item, policy };
   };
 
-  const threads: StudioThreadView[] = parseAll(files.threads, parseThreadFile).map((t) => ({ ...withPolicy(t), overCap: false, personas: sparPersonas(options, t) }));
+  const threads: StudioThreadView[] = parseAll(files.threads, (path, text) => parseThreadFile(path, text, assistantName)).map((t) => ({ ...withPolicy(t), overCap: false, personas: sparPersonas(options, t) }));
   const active = threads
     .filter((t) => t.state === "active")
     .sort(byOpened)
