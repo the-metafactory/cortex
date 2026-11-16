@@ -708,7 +708,7 @@ async function handleApi(
 
   if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db, graphScope ? { graphScope } : {});
 
-  if (pathname === "/api/desk/items/defer") return handleDeskItemsDefer(req, db, desk);
+  if (pathname === "/api/desk/items/defer") return handleDeskItemsDefer(req, db, desk, vigil);
 
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk, desk?.now ? { now: desk.now } : {});
 

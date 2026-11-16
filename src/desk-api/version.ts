@@ -8,6 +8,7 @@ import { RULE_ACTIONS, RULE_MATCHES } from "../surface/mc/desk/mail-rules-schema
 import { SNOOZE_TIMES } from "../surface/mc/desk/mail-snooze-schema";
 import { SWEEP_WORDS } from "../surface/mc/desk/mail-sweep-schema";
 import { WAITING_OPS } from "../surface/mc/desk/mail-waiting-schema";
+import { DEFERRABLE_ITEM_KINDS } from "../surface/mc/desk/item-defer";
 import { DESK_PHRASE_CODES } from "../surface/mc/desk/phrases";
 import { DESK_ITEM_KINDS, DESK_OUTCOMES } from "../surface/mc/desk/types";
 import { MAIL_ROUND_ACTIONS, MAIL_ROUND_GROUP_KINDS, MAIL_ROUND_UNDO_OUTCOMES } from "../surface/mc/desk/mail-round";
@@ -38,6 +39,7 @@ export function deskContract() {
       RULE_MATCHES,
       SNOOZE_TIMES,
       DEFER_ACTIONS,
+      DEFERRABLE_ITEM_KINDS,
       SWEEP_WORDS,
       WAITING_OPS,
       DESK_ITEM_KINDS,

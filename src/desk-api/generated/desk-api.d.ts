@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.7.0";
+export declare const DESK_API_VERSION = "1.8.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",

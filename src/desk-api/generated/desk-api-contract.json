@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "1.8.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -252,6 +252,13 @@
     "DEFAULT_MAIL_ROUND_SLOTS: \"08:30\"",
     "DEFAULT_MAIL_ROUND_SLOTS: \"13:30\"",
     "DEFAULT_MAIL_ROUND_SLOTS: \"16:30\"",
+    "DEFERRABLE_ITEM_KINDS: \"decision\"",
+    "DEFERRABLE_ITEM_KINDS: \"dmarc\"",
+    "DEFERRABLE_ITEM_KINDS: \"grilling\"",
+    "DEFERRABLE_ITEM_KINDS: \"mail-handoff\"",
+    "DEFERRABLE_ITEM_KINDS: \"mail-rule\"",
+    "DEFERRABLE_ITEM_KINDS: \"mail-waiting\"",
+    "DEFERRABLE_ITEM_KINDS: \"reminder\"",
     "DEFER_ACTIONS: \"defer\"",
     "DEFER_ACTIONS: \"defer.cancel\"",
     "DESK_ITEM_KINDS: \"adapter\"",
