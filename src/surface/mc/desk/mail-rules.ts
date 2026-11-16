@@ -153,6 +153,22 @@ export const listRules = (db: Database): MailRule[] => allRows(db).map(toRule);
 
 export const ruleById = (db: Database, id: string): MailRule | null => listRules(db).find((r) => r.id === id) ?? null;
 
+type MailRulesRead = { ok: true; rules: MailRule[] } | { ok: false; error: string };
+
+/** The approved rules, or the reason the store could not be read. */
+export function readMailRules(db: Database): MailRulesRead {
+  try {
+    return { ok: true, rules: listRules(db) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export const readableRules = (db: Database): MailRule[] => {
+  const read = readMailRules(db);
+  return read.ok ? read.rules : [];
+};
+
 export const ruleViews = (db: Database): MailRuleView[] =>
   listRules(db).map((r) => ({ id: r.id, match: r.match, value: r.value, action: r.action, on: r.on, sentence: ruleSentence(r), lastRunAt: r.lastRunAt, count: r.count, held: r.held, target: r.target }));
 
@@ -192,7 +208,7 @@ const rulesRun = (db: Database): boolean => listGrants(db).has(RULES_GRANT);
 /** Listed mails an approved rule will handle on its next pass. The Desk does not send them to the model; a paused rule's mail goes to the model. */
 export function pendingRuleMail(db: Database, mails: readonly SourceMail[], suspicion: SuspicionContext = suspicionContext(db)): Set<string> {
   if (!rulesRun(db)) return new Set();
-  const rules = listRules(db).filter((r) => r.on && (r.held === null || r.released));
+  const rules = readableRules(db).filter((r) => r.on && (r.held === null || r.released));
   if (rules.length === 0) return new Set();
   const ids = mails.map((m) => m.id);
   const ran = ranIds(db, ids);

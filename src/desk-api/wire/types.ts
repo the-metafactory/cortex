@@ -23,6 +23,11 @@ export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked
 
 export type DeskItemKind = (typeof DESK_ITEM_KINDS)[number];
 
+export const DESK_OUTCOMES = ["archive", "attach", "draft", "ask"] as const;
+
+/** The outcome the Desk suggests for a card, for a client that arranges the mail queue. */
+export type DeskOutcome = (typeof DESK_OUTCOMES)[number];
+
 export interface DeskArea {
   id: string;
   label: string;
@@ -115,6 +120,7 @@ export interface DeskItem {
   freshness?: "fresh" | "stale" | "conflicted" | "unavailable";
   rangerMap?: { key: string; label: string };
   attention?: "action" | "update";
+  outcome?: DeskOutcome;
   dueAt?: string;
   dueFrom?: DeadlineSource;
   sourceRevision?: string;
@@ -233,6 +239,7 @@ export interface DeskView {
   calendarAvailability?: CalendarAvailability;
   routines?: RoutineView;
   mailRules?: MailRuleView[];
+  mailLearning?: boolean;
   mailTrusted?: TrustedView[];
   mailHidden?: HiddenMail[];
   mailSweeps?: MailSweepView[];
