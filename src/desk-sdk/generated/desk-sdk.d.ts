@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.17.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.18.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -1248,7 +1248,7 @@ export interface ObservationRequest {
 	continuation?: string;
 	limit: number;
 }
-export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe" | "report" | "lookupReport";
+export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe" | "report" | "lookupReport" | "invitationReply" | "invitationRemove" | "invitationRestore" | "lookupInvitation";
 export interface DeskMailExecutionConnection {
 	readonly version: number;
 	readonly methods: readonly DeskMailExecutionMethod[];
@@ -1464,6 +1464,41 @@ export declare function mailReportSnapshot(options: {
 	account: string;
 	kind: MailReportKind;
 	input: MailReportInput;
+	provenance: Provenance;
+}): ApprovedSnapshot;
+export declare const INVITATION_REPLIES: readonly [
+	"accept",
+	"decline",
+	"tentative"
+];
+export type InvitationReply = (typeof INVITATION_REPLIES)[number];
+export type InvitationAction = InvitationReply | "remove" | "restore";
+export declare const INVITATION_CAPABILITIES: Record<InvitationAction, string>;
+declare const InvitationInputSchema: z.ZodObject<{
+	message: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	invitation: z.ZodObject<{
+		adapterId: z.ZodString;
+		connectionId: z.ZodString;
+		objectType: z.ZodString;
+		canonicalId: z.ZodString;
+	}, z.core.$strict>;
+	expectedRevision: z.ZodString;
+}, z.core.$strict>;
+export type InvitationInput = z.infer<typeof InvitationInputSchema>;
+export declare function mailInvitationDeclaration(adapterId: string, actions?: readonly InvitationAction[]): AdapterDeclaration;
+export declare function mailInvitationSnapshot(options: {
+	adapterId: string;
+	connectionId: string;
+	account: string;
+	action: InvitationAction;
+	messageId: string;
+	invitationId: string;
+	expectedRevision: string;
 	provenance: Provenance;
 }): ApprovedSnapshot;
 export declare const MAIL_MOVE_CAPABILITY = "mail.move";
