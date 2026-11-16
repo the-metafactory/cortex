@@ -20,6 +20,11 @@ export function writeMailExecutionPackage(dir: string, options: { action?: MailM
   mkdirSync(join(dir, "node_modules", "@the-metafactory"), { recursive: true });
   symlinkSync(new URL("../../../../../", import.meta.url).pathname, join(dir, "node_modules", "@the-metafactory", "cortex"));
   const key = options.stateKey ?? dir;
+  const nativeRequest = action === "invitation"
+    ? `{ version: 1, requestId, ...snapshot.input${invitation === "remove" || invitation === "restore" ? "" : ", reply: " + JSON.stringify(invitation)} }`
+    : action === "report"
+      ? `{ version: 1, requestId, kind: ${JSON.stringify(reportKind)}, message: snapshot.target }`
+      : `{ version: 1, requestId, account: listing.account, messageId: snapshot.target.canonicalId, ${action === "reply" ? "recipient: mail.from.address, subject: mailReplySubject(mail.subject), body: snapshot.input.body" : "context: { operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest }"}${action === "move" ? ', action: "move", target: snapshot.input.target' : action === "trash" ? ', action: "trash", target: "trash"' : action === "restore" ? ', action: "restore", from: snapshot.input.from' : ""} }`;
   const source = `import { mailReplySubject } from "@the-metafactory/cortex/desk-sdk";
 const declaration = ${JSON.stringify(declaration)};
 export function createDeskAdapter(host) {
@@ -47,9 +52,7 @@ export function createDeskAdapter(host) {
         const context = contextFor(request), snapshot = request.snapshot, listing = await host.mail.listed(connection);
         const mail = listing?.mail.find(item => item.ref.messageId === snapshot.target.canonicalId);
         const requestId = identity.capabilityId + ":" + request.ownerRequestId;
-        const native = ${action === "invitation" ? `{ version: 1, requestId, ...snapshot.input${invitation === "remove" || invitation === "restore" ? "" : ", reply: " + JSON.stringify(invitation)} };` : action === "report" ? `{ version: 1, requestId, kind: ${JSON.stringify(reportKind)}, ` : "{ version: 1, requestId, account: listing.account, messageId: snapshot.target.canonicalId, "}
-          ${action === "invitation" ? "" : action === "report" ? "message: snapshot.target" : action === "reply" ? "recipient: mail.from.address, subject: mailReplySubject(mail.subject), body: snapshot.input.body" : "context: { operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest }"}
-          ${action === "move" ? ', action: "move", target: snapshot.input.target' : action === "trash" ? ', action: "trash", target: "trash"' : action === "restore" ? ', action: "restore", from: snapshot.input.from' : ""} ${action === "invitation" ? "" : "};"}
+        const native = ${nativeRequest};
         ${options.forge === "reply" ? 'native.reply = "accept";' : ""}
         ${options.forge === "account" ? 'native.account = "other-account";' : options.forge === "message" ? 'native.messageId = "other-message";' : options.forge === "body" ? 'native.body = "changed";' : options.forge === "context" ? 'native.context = { operationId: "other", attemptId: "other", snapshotDigest: "0".repeat(64) };' : ""}
         ${options.forge === "extra" ? action === "reply" ? 'native.bcc = "other@example.org";' : 'native.url = "https://other.example.org/unapproved";' : ""}
