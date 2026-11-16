@@ -57,15 +57,15 @@ export const SecretRefSchema = z
     message: KEYCHAIN_MACOS_ONLY_MESSAGE,
   });
 
+function secretRefKeychainName(ref: string): string | undefined {
+  return KEYCHAIN_REF_PATTERN.exec(ref)?.[1];
+}
+
 /**
  * Extract the environment-variable NAME from a secret reference, or `undefined`
  * if the string is not a well-formed `env:NAME` reference. Does not touch the
  * environment.
  */
-function secretRefKeychainName(ref: string): string | undefined {
-  return KEYCHAIN_REF_PATTERN.exec(ref)?.[1];
-}
-
 export function secretRefEnvVar(ref: string): string | undefined {
   return SECRET_REF_PATTERN.exec(ref)?.[1];
 }
@@ -91,18 +91,6 @@ export class SecretRefResolutionError extends Error {
   }
 }
 
-/**
- * Resolve a secret reference to its value AT CALL TIME. Reads
- * `env[NAME]` for a `env:NAME` reference; throws {@link SecretRefResolutionError}
- * if the reference is malformed or the variable is unset / empty / whitespace.
- *
- * This is the ONLY function that materializes a secret value. Callers (the
- * harness / provider registry) invoke it at the moment of a provider request
- * and hold the result in the local call frame ONLY — never assign it back onto
- * any config object, and never log it.
- *
- * `env` is injectable for testing; defaults to `process.env`.
- */
 interface ResolveSecretRefOptions {
   platform?: string;
   security?: SurfaceSecretStoreOptions["security"];
@@ -125,6 +113,18 @@ function resolveKeychainRef(name: string, options: ResolveSecretRefOptions): str
   );
 }
 
+/**
+ * Resolve a secret reference to its value AT CALL TIME. Reads
+ * `env[NAME]` for a `env:NAME` reference; throws {@link SecretRefResolutionError}
+ * if the reference is malformed or the variable is unset / empty / whitespace.
+ *
+ * This is the ONLY function that materializes a secret value. Callers (the
+ * harness / provider registry) invoke it at the moment of a provider request
+ * and hold the result in the local call frame ONLY — never assign it back onto
+ * any config object, and never log it.
+ *
+ * `env` is injectable for testing; defaults to `process.env`.
+ */
 export function resolveSecretRef(
   ref: string,
   env: Record<string, string | undefined> = process.env,
