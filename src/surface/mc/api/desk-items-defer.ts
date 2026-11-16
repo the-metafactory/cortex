@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 import { answer, failResponse } from "../desk/act-result";
 import { composeCurrentDay, type DeskRuntime, type DeskVigilSource } from "../desk/compose";
 import { cancelItemDefer, deferItem, deferRefusal, isDeferrableKind, isRefusedKind, ONLY_MAIL_WAITS_FOR_A_PERSON } from "../desk/item-defer";
-import { changeMyDay, deferTaskUntil } from "../desk/my-day";
+import { deferTaskUntil, undoTaskDefer } from "../desk/my-day";
 import { openTask, TASK_HANDOFF_KEY_PREFIX } from "../desk/task-handoff";
 import { readTaskHandoff } from "../desk/task-handoff-store";
 import { localDay } from "../desk/time";
@@ -80,7 +80,7 @@ function deferTaskHandoff(db: Database, desk: DeskOptions, item: DeskItem, choic
 
 function restoreTaskDefer(db: Database, desk: DeskOptions, now: number, key: string): string | null {
   try {
-    changeMyDay({ db, desk, now, date: localDay(now), requestId: `item-defer-undo:${key}:${now}`, command: { op: "undo", receipt: receiptOf(key) } });
+    undoTaskDefer({ db, desk, now, receipt: receiptOf(key) });
     return null;
   } catch (error) {
     return error instanceof Error ? error.message : "The task could not be restored.";

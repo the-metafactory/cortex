@@ -79,6 +79,21 @@ describe("deferring a task-handoff card", () => {
     expect(deferredUntil()).toBe("2026-11-15");
   });
 
+  it("cancels a multi-day deferral on a later day", async () => {
+    await post({ action: "defer", key: KEY, until: { kind: "next-week" } });
+    expect((await post({ action: "defer.cancel", key: KEY }, NOW + 86_400_000)).status).toBe(200);
+    expect(deferredUntil()).toBeUndefined();
+  });
+
+  it("restores the task on every defer and cancel round", async () => {
+    for (let round = 0; round < 2; round += 1) {
+      await post({ action: "defer", key: KEY, until: { kind: "tomorrow" } });
+      expect(deferredUntil()).toBeDefined();
+      expect((await post({ action: "defer.cancel", key: KEY })).status).toBe(200);
+      expect(deferredUntil()).toBeUndefined();
+    }
+  });
+
   it("maps a date choice to that day", async () => {
     expect((await post({ action: "defer", key: KEY, until: { kind: "date", date: "2026-12-01" } })).status).toBe(200);
     expect(deferredUntil()).toBe("2026-12-01");

@@ -93,9 +93,32 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
 function recordDefer(meta: MyDayMeta, node: OutlineNode, date: string, receipt: string, after: string): void {
   const earlier = meta.undos.find(u => u.receipt === receipt && !u.used);
   const before = earlier ? earlier.before : node.deferredUntil;
-  meta.undos = meta.undos.filter(u => u !== earlier);
+  meta.undos = meta.undos.filter(u => u.receipt !== receipt);
   meta.undos.push({ receipt, taskId: node.id, date, ...(before ? { before } : {}), after, used: false });
   node.deferredUntil = after;
+}
+
+function restoreDeferred(state: AppState, previous: MyDayMeta["undos"][number]): void {
+  const node = requiredNode(state, previous.taskId);
+  if (node.deferredUntil !== previous.after) throw new Error("The task changed since Not today. Your newer edit is kept.");
+  if (previous.before) node.deferredUntil = previous.before;
+  else delete node.deferredUntil;
+  previous.used = true;
+}
+
+/** Restores the task put away under `receipt` on any later day, unlike My Day's same-day Undo; a no-op when nothing is recorded or it was used. */
+export function undoTaskDefer(args: { db: Database; desk: DeskOptions; now: number; receipt: string }): void {
+  const { db, desk, now, receipt } = args;
+  db.transaction(() => {
+    const meta = loadMeta(db);
+    const previous = meta.undos.find(u => u.receipt === receipt && !u.used);
+    if (!previous) return;
+    const state = loadMyDayState(db, desk, meta, localDay(now));
+    restoreDeferred(state, previous);
+    meta.revision += 1;
+    saveBalanceState(db, state);
+    saveMeta(db, meta);
+  }).immediate();
 }
 
 /** Puts an open task away until `after` (a day), with the same undo record as My Day's Not today; deferring again under one receipt keeps the first earlier value. Null when the task is not in the outline. */
@@ -239,11 +262,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         const previous = meta.undos.find(u => u.receipt === command.receipt);
         if (!previous || previous.used) break;
         if (previous.date !== date) throw new Error("This Undo belongs to a previous day.");
-        const node = requiredNode(state, previous.taskId);
-        if (node.deferredUntil !== previous.after) throw new Error("The task changed since Not today. Your newer edit is kept.");
-        if (previous.before) node.deferredUntil = previous.before;
-        else delete node.deferredUntil;
-        previous.used = true;
+        restoreDeferred(state, previous);
         break;
       }
       case "todo": {
