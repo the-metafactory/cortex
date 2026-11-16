@@ -7,6 +7,9 @@
   },
   "license": "AGPL-3.0-only",
   "private": true,
+  "engines": {
+    "bun": ">=1.4.4"
+  },
   "exports": {
     "./balance": "./src/balance/index.ts",
     "./surface-sdk": {
