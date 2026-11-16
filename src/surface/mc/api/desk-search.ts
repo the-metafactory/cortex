@@ -4,7 +4,7 @@ import { failResponse } from "../desk/act-result";
 import { currentDayItems, type DeskRuntime, type DeskVigilSource } from "../desk/compose";
 import { isSearchKind, SEARCH_DEFAULT_LIMIT, SEARCH_MAX_LIMIT, SEARCH_MAX_OFFSET, SEARCH_MAX_QUERY, searchDesk, type SearchRequest } from "../desk/search";
 
-export const DESK_SEARCH_PATH = "/api/desk/search";
+export const DESK_SEARCH_PATH = "/api/desk/search"; // glossary-ignore: path
 
 const noStore = { "Cache-Control": "no-store" };
 

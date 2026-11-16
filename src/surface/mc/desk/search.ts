@@ -7,7 +7,7 @@ import { captureEntries } from "./search-captures";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView } from "./studio/view";
 import { assistantNameOf } from "./assistant-name";
-import { matchesQuery, readBalanceNode, workReaders } from "./work-readers";
+import { matchesQuery, workReaders } from "./work-readers";
 import type { DeskItem } from "./types";
 
 export const SEARCH_MAX_QUERY = 200;
@@ -57,8 +57,10 @@ function noteCandidates(db: Database): Candidate[] {
   return listOpenNotes(db).map((note) => ({ kind: note.kind === "reminder" ? "desk-reminder" : "desk-note", id: String(note.id), title: firstLine(note.text), text: note.text, at: note.createdAt, query: {} }));
 }
 
-async function studioCandidates(desk: DeskOptions): Promise<Candidate[]> {
-  if (!desk.studio) return [];
+const studioUnreadable = (problems: readonly { path: string }[]): boolean => problems.some((problem) => problem.path === "." || problem.path.endsWith("/"));
+
+async function studioCandidates(desk: DeskOptions): Promise<{ candidates: Candidate[]; unreadable: boolean }> {
+  if (!desk.studio) return { candidates: [], unreadable: false };
   const { files, problems } = await readStudioFiles(desk.studio.dir);
   const view = buildStudioView(files, desk.studio, desk.areas, problems, assistantNameOf(desk));
   const inbox = view.inbox.map((capture): Candidate => ({
@@ -68,7 +70,7 @@ async function studioCandidates(desk: DeskOptions): Promise<Candidate[]> {
   const threads = [...view.active, ...view.parked, ...view.closed].map((thread): Candidate => ({
     kind: "studio-thread", id: thread.slug, title: thread.question, text: [`Where I stand: ${thread.stand}`, thread.outcomeText].filter(Boolean).join("\n"), at: timeOf(thread.closed ?? thread.opened), query: { thread: thread.slug },
   }));
-  return [...inbox, ...filed, ...threads];
+  return { candidates: [...inbox, ...filed, ...threads], unreadable: studioUnreadable(problems) };
 }
 
 async function workCandidates(deps: SearchDeps, kinds: readonly DeskSearchKind[], query: string): Promise<Candidate[]> {
@@ -78,14 +80,9 @@ async function workCandidates(deps: SearchDeps, kinds: readonly DeskSearchKind[]
   const found = await Promise.all(wanted.map(async (kind) => (await readers[kind]?.search(query, Number.MAX_SAFE_INTEGER, 0))?.items ?? []));
   return found.flat().map((object: WorkObject): Candidate => {
     const kind = object.kind as (typeof WORK_KINDS)[number];
-    return { kind, id: object.id, title: object.title, text: object.summary, at: null, query: {} };
+    const areaId = kind === "desk-item" ? undefined : deps.desk.areas.find((area) => area.label === object.area)?.id;
+    return { kind, id: object.id, title: object.title, text: object.summary, at: null, query: kind === "desk-item" ? {} : areaId ? { ref: object.id, area: areaId } : { ref: object.id } };
   });
-}
-
-function openQuery(deps: SearchDeps, candidate: Candidate): Record<string, string> {
-  if (candidate.kind !== "balance-task" && candidate.kind !== "balance-project") return candidate.query;
-  const read = readBalanceNode(deps.db, deps.desk, candidate.kind, candidate.id);
-  return read.state === "available" ? { ref: candidate.id, area: read.area.id } : { ref: candidate.id };
 }
 
 const newestFirst = (candidates: Candidate[]): Candidate[] =>
@@ -100,10 +97,12 @@ const nextPageQuery = (request: SearchRequest, offset: number): string => {
 };
 
 export async function searchDesk(deps: SearchDeps, request: SearchRequest): Promise<DeskSearchResponse> {
-  const unavailableKinds = deps.desk.studio ? [] : request.kinds.filter((kind) => STUDIO_KINDS.includes(kind));
+  const wantsStudio = request.kinds.some((kind) => STUDIO_KINDS.includes(kind));
+  const studio = wantsStudio ? await studioCandidates(deps.desk) : { candidates: [], unreadable: false };
+  const unavailableKinds = !deps.desk.studio || studio.unreadable ? request.kinds.filter((kind) => STUDIO_KINDS.includes(kind)) : [];
   const collected: Candidate[] = [
     ...noteCandidates(deps.db),
-    ...(unavailableKinds.length ? [] : await studioCandidates(deps.desk)),
+    ...(unavailableKinds.length ? [] : studio.candidates),
     ...(await workCandidates(deps, request.kinds, request.q)),
   ];
   const matched = newestFirst(collected.filter((candidate) => request.kinds.includes(candidate.kind) && matchesQuery(request.q, `${candidate.title}\n${candidate.text}`)));
@@ -112,7 +111,7 @@ export async function searchDesk(deps: SearchDeps, request: SearchRequest): Prom
   const hits = page.map((candidate): DeskSearchHit => ({
     kind: candidate.kind, id: candidate.id, title: candidate.title, snippet: snippetOf(request.q, candidate),
     at: candidate.at === null ? null : new Date(candidate.at).toISOString(),
-    open: { ...DESK_SEARCH_OPEN_ROUTES[candidate.kind], query: openQuery(deps, candidate) },
+    open: { ...DESK_SEARCH_OPEN_ROUTES[candidate.kind], query: candidate.query },
   }));
   return { status: hits.length === 0 ? "empty" : "ok", hits, next: matched.length > after && after <= SEARCH_MAX_OFFSET ? nextPageQuery(request, after) : null, unavailableKinds };
 }
