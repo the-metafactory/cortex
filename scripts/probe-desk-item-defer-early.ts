@@ -1,10 +1,10 @@
-import assert from "node:assert/strict";
-import { openMailRoundRig, roundAt, roundMail } from "../src/surface/mc/__tests__/fixtures/mail-round-rig";
 import { runWithTemporaryHome } from "./probe-temp-home";
+import assert from "node:assert/strict";
+import { roundMail, roundAt, openMailRoundRig } from "../src/surface/mc/__tests__/fixtures/mail-round-rig";
 
 async function probe(): Promise<void> {
   const now = roundAt(16, 10);
-  const rig = await openMailRoundRig(now, { mailDigest: undefined, mailInvitations: undefined });
+  const rig = await openMailRoundRig(now, { mailInvitations: undefined, mailDigest: undefined });
   const key = "mail:early-fixture";
   const original = roundMail("early-fixture", now - 1000, { subject: "Venue quote" });
   try {

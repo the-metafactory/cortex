@@ -3,6 +3,8 @@ import { openMailRoundRig, roundAt, roundMail, type MailRoundRig } from "./fixtu
 import { backLine, wakeOf, URGENT_NOW_REASON, type SnoozeRow, type WakeFacts } from "../desk/mail-snooze";
 
 const NOW = roundAt(16, 10);
+const EMPTY_ROW: SnoozeRow = { messageId: "m1", sourceId: null, sender: "priya@example.org", subject: "Venue quote", kind: "time", untilAt: null, eventKey: null, eventTitle: null, eventStart: null, person: null, personName: null, label: "", state: "snoozed", backAt: null, reason: null, createdAt: 0 };
+const NO_FACTS: WakeFacts = { events: new Map(), covered: () => false, wrote: () => null, threadReply: () => null, urgentNow: new Set() };
 const KEY = "mail:early-fixture";
 
 let rig: MailRoundRig;
@@ -53,22 +55,19 @@ describe("an item put away returns early", () => {
   });
 });
 
-const row = (over: Partial<SnoozeRow> = {}): SnoozeRow => ({
-  messageId: "m1", sourceId: null, sender: "priya@example.org", subject: "Venue quote", kind: "time", untilAt: NOW + 10 * 86_400_000, eventKey: null, eventTitle: null, eventStart: null,
-  person: null, personName: null, label: "", state: "snoozed", backAt: null, reason: null, createdAt: NOW, ...over,
-});
-const facts = (over: Partial<WakeFacts> = {}): WakeFacts => ({ events: new Map(), covered: () => false, wrote: () => null, threadReply: () => null, urgentNow: new Set(), ...over });
+const waiting = (over: Partial<SnoozeRow> = {}): SnoozeRow => ({ ...EMPTY_ROW, createdAt: NOW, untilAt: NOW + 10 * 86_400_000, ...over });
+const knowing = (over: Partial<WakeFacts> = {}): WakeFacts => ({ ...NO_FACTS, ...over });
 
 describe("wakeOf early facts", () => {
   it("wakes on a thread reply and names the sender and subject", () => {
-    expect(wakeOf(row(), facts({ threadReply: () => ({ name: "Priya", subject: "Re: Venue" }) }), NOW)).toEqual({ kind: "back", reason: "Priya wrote again: “Re: Venue”" });
+    expect(wakeOf(waiting(), knowing({ threadReply: () => ({ name: "Priya", subject: "Re: Venue" }) }), NOW)).toEqual({ kind: "back", reason: "Priya wrote again: “Re: Venue”" });
   });
   it("wakes any item rated urgency now and names why", () => {
-    const decision = wakeOf(row({ messageId: "reminder:1" }), facts({ urgentNow: new Set(["reminder:1"]) }), NOW, "reminder:1");
+    const decision = wakeOf(waiting({ messageId: "reminder:1" }), knowing({ urgentNow: new Set(["reminder:1"]) }), NOW, "reminder:1");
     expect(decision).toEqual({ kind: "back", reason: URGENT_NOW_REASON });
-    expect(backLine(row({ reason: URGENT_NOW_REASON, kind: "time", untilAt: null }), NOW)).toBe("Back because it is urgent now.");
+    expect(backLine(waiting({ reason: URGENT_NOW_REASON, kind: "time", untilAt: null }), NOW)).toBe("Back because it is urgent now.");
   });
   it("lets a non-mail item ignore thread facts", () => {
-    expect(wakeOf(row(), facts({ threadReply: () => ({}) }), NOW, "reminder:1")).toEqual({ kind: "wait" });
+    expect(wakeOf(waiting(), knowing({ threadReply: () => ({}) }), NOW, "reminder:1")).toEqual({ kind: "wait" });
   });
 });

@@ -59,7 +59,6 @@ const quoted = (title: string): string => `“${title}”`;
 const TIME_CAME = "the time you chose came";
 export const URGENT_NOW_REASON = "it is urgent now";
 
-/** Whether a deferral is over early: the item is rated urgency now, or a mail's thread got a message from someone else. */
 function earlyWake(row: SnoozeRow, facts: WakeFacts, key: string, mailRow: boolean): WakeDecision | null {
   if (facts.urgentNow.has(key)) return { kind: "back", reason: URGENT_NOW_REASON };
   if (!mailRow) return null;
