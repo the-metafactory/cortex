@@ -55,7 +55,17 @@ async function open(kind: "graph-node" | "graph-map" | "work-brief" | "binding")
   return { ...rig, request, calls, nodes, key, create, readback };
 }
 
+type Opened = Awaited<ReturnType<typeof open>>;
+
 describe.each(["graph-node", "graph-map", "work-brief", "binding"] as const)("%s conversation label", kind => {
+  const legacyLabel = (r: Opened, alsoLabel?: string): { args: string[] } => {
+    const recorded = recordedGraphOperation(r.db, r.request.operationId)!;
+    recorded.args[recorded.args.indexOf("--label") + 1] = "ivy:conversation";
+    if (alsoLabel) recorded.args.push("--label", alsoLabel);
+    recordGraphOperation(r.db, r.request.operationId, recorded, GRAPH_NODE_NOW);
+    return recorded;
+  };
+
   test("a fresh filing and its retry use desk:conversation", async () => {
     const r = await open(kind);
     await r.create();
@@ -67,10 +77,7 @@ describe.each(["graph-node", "graph-map", "work-brief", "binding"] as const)("%s
   test("a legacy operation reads back its exact argv and retries without filing another node", async () => {
     const r = await open(kind);
     await r.create();
-    const recorded = recordedGraphOperation(r.db, r.request.operationId)!;
-    recorded.args[recorded.args.indexOf("--label") + 1] = "ivy:conversation";
-    recorded.args.push("--label", "desk:conversation");
-    recordGraphOperation(r.db, r.request.operationId, recorded, GRAPH_NODE_NOW);
+    const recorded = legacyLabel(r);
     r.nodes.clear();
     r.nodes.set(r.key(recorded.args), "40");
     r.calls.length = 0;
@@ -81,6 +88,14 @@ describe.each(["graph-node", "graph-map", "work-brief", "binding"] as const)("%s
     expect(r.calls.slice(1).map(args => flag(args, "--label"))).toEqual(["ivy:conversation", "ivy:conversation"]);
     expect(r.nodes.size).toBe(1);
     expect(recordedGraphOperation(r.db, r.request.operationId)?.args).toContain("ivy:conversation");
+  });
+
+  test("an operation recorded with several labels keeps the first, which is the one soma scopes the marker lookup to", async () => {
+    const r = await open(kind);
+    await r.create();
+    legacyLabel(r, "desk:conversation");
+    await r.create();
+    expect(flag(r.calls.at(-1)!, "--label")).toBe("ivy:conversation");
   });
 
   test.each(["{", "null", '["--label", 1]', '["graph", "add"]', '["graph", "add", "--label"]'])("invalid or missing recorded label falls back safely: %s", async args => {
