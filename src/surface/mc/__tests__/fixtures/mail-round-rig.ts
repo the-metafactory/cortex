@@ -25,6 +25,7 @@ export interface MailRoundRig {
   get: () => Promise<DeskView>;
   refresh: () => Promise<DeskView>;
   post: (body: unknown) => Promise<Response>;
+  postRound: (body: unknown) => Promise<Response>;
   reopen: () => void;
   close: () => Promise<void>;
 }
@@ -53,6 +54,46 @@ export const roundEvent = (id: string, start: number, end: number, status: "busy
   calendarId: "primary",
   availability: { status, provenance: "mail round fixture" },
 });
+
+interface QueuedMail {
+  mail_key: string;
+  put_back: number;
+  position: number;
+}
+
+export const queuedMails = (db: Database): QueuedMail[] =>
+  db.query<QueuedMail, []>("SELECT mail_key, put_back, position FROM desk_mail_round_queue ORDER BY put_back DESC, position").all();
+
+export const roundStatuses = (db: Database): { id: string | null; status: string }[] =>
+  db.query<{ id: string; status: string }, []>("SELECT id, status FROM desk_mail_rounds ORDER BY opened_at").all();
+
+const SIDE_EFFECT_TABLES = ["desk_mail_moves", "desk_mail_snoozes", "desk_links", "desk_done", "desk_mail_log"] as const;
+
+interface RoundAnswer {
+  ok: boolean;
+  message?: string;
+  messagePhrase?: { code: string; params?: Record<string, unknown> };
+  undo?: string;
+  outcome?: string;
+  error?: string;
+  mailRound?: DeskView["mailRound"];
+}
+
+export const readAnswer = async (response: Response): Promise<RoundAnswer> => (await response.json()) as RoundAnswer;
+
+export const putBackPayload = (round: { id: string | null; revision: number }, key: string, requestId: string): Record<string, unknown> => ({
+  action: "put-back",
+  roundId: round.id,
+  revision: round.revision,
+  key,
+  requestId,
+});
+
+export function roundSideEffects(db: Database): Record<string, number> {
+  return Object.fromEntries(SIDE_EFFECT_TABLES.map((table) => [table, db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n ?? -1]));
+}
+
+export const roundKeys = (view: { mailRound?: { mails: { key: string }[] } }): string[] => (view.mailRound?.mails ?? []).map((member) => member.key);
 
 export async function openMailRoundRig(now: number, overrides: Partial<DeskOptions> = {}): Promise<MailRoundRig> {
   const dir = mkdtempSync(join(tmpdir(), "mail-round-"));
@@ -115,6 +156,7 @@ export async function openMailRoundRig(now: number, overrides: Partial<DeskOptio
       return JSON.parse(previous) as DeskView;
     },
     post: async (body) => fetch(`${rig.baseUrl()}/api/desk/mail`, { method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body) }),
+    postRound: async (body) => fetch(`${rig.baseUrl()}/api/desk/mail/round`, { method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body) }),
     reopen: () => {
       ctx.stop(true);
       db.close();

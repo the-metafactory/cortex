@@ -3,7 +3,7 @@ import { McSchema } from "../../../common/types/config";
 import { DEFAULT_MAIL_ROUND_SLOTS } from "../../../common/types/desk-mail-rounds";
 import { saveClassification } from "../desk/classify";
 import { addVip } from "../desk/vips";
-import { openMailRoundRig, roundAt, roundEvent, roundMail, type MailRoundRig } from "./fixtures/mail-round-rig";
+import { openMailRoundRig, putBackPayload, readAnswer, roundAt, roundEvent, roundMail, type MailRoundRig } from "./fixtures/mail-round-rig";
 
 const iso = (day: number, hour: number, minute = 0): string => new Date(roundAt(day, hour, minute)).toISOString();
 
@@ -12,6 +12,13 @@ afterEach(async () => {
   await rig?.close();
   rig = undefined;
 });
+
+async function oneMailRound(): Promise<MailRoundRig> {
+  const opened = await openMailRoundRig(roundAt(2, 8));
+  opened.setState({ mail: [roundMail("a", roundAt(2, 7))] });
+  opened.setNow(roundAt(2, 8, 31));
+  return opened;
+}
 
 describe("mc.desk.mailRounds", () => {
   it("defaults to three local slots every day and refuses a malformed or repeated local time", () => {
@@ -48,9 +55,7 @@ describe("a durable scheduled mail round", () => {
   });
 
   it("reconciles membership through the existing mail route and starts a queued successor immediately when a slot passed", async () => {
-    rig = await openMailRoundRig(roundAt(2, 8));
-    rig.setState({ mail: [roundMail("a", roundAt(2, 7))] });
-    rig.setNow(roundAt(2, 8, 31));
+    rig = await oneMailRound();
     const first = await rig.get();
     rig.setState({ mail: [roundMail("a", roundAt(2, 7)), roundMail("b", roundAt(2, 8, 45))] });
     rig.setNow(roundAt(2, 13, 31));
@@ -64,9 +69,7 @@ describe("a durable scheduled mail round", () => {
   });
 
   it("keeps an unfinished round through midnight and later slots without a duplicate", async () => {
-    rig = await openMailRoundRig(roundAt(2, 8));
-    rig.setState({ mail: [roundMail("a", roundAt(2, 7))] });
-    rig.setNow(roundAt(2, 8, 31));
+    rig = await oneMailRound();
     const round = (await rig.get()).mailRound;
     rig.setState({ mail: [roundMail("a", roundAt(2, 7)), roundMail("b", roundAt(2, 14))] });
     rig.setNow(roundAt(3, 0, 5));
@@ -81,19 +84,22 @@ describe("a durable scheduled mail round", () => {
     expect(rig.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_rounds WHERE status = 'open'").get()?.n).toBe(1);
   });
 
-  it("prunes a finished round after the retention and keeps an open one", async () => {
-    rig = await openMailRoundRig(roundAt(2, 8));
-    rig.setState({ mail: [roundMail("a", roundAt(2, 7))] });
-    rig.setNow(roundAt(2, 8, 31));
-    expect((await rig.get()).mailRound?.due).toBe(true);
-    expect((await rig.post({ action: "hide", key: "mail:a" })).status).toBe(200);
+  it("prunes a finished round with its operation receipts after the retention", async () => {
+    rig = await oneMailRound();
+    const round = (await rig.get()).mailRound;
+    expect(round?.due).toBe(true);
+    expect((await readAnswer(await rig.postRound(putBackPayload(round!, "mail:a", "req-prune-a")))).ok).toBe(true);
     await rig.get();
-    const finished = (): number | undefined => rig?.database().query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_rounds WHERE status = 'finished'").get()?.n;
+    const count = (sql: string): number | undefined => rig?.database().query<{ n: number }, []>(sql).get()?.n;
+    const finished = (): number | undefined => count("SELECT COUNT(*) AS n FROM desk_mail_rounds WHERE status = 'finished'");
+    const receipts = (): number | undefined => count("SELECT COUNT(*) AS n FROM desk_mail_round_operations");
     expect(finished()).toBe(1);
+    expect(receipts()).toBe(1);
 
     rig.setNow(roundAt(2, 8, 31) + 8 * 86_400_000);
     await rig.get();
     expect(finished()).toBe(0);
+    expect(receipts()).toBe(0);
   });
 
   it("creates one round on a weekend slot and moves a slot past a shifted meeting chain", async () => {
