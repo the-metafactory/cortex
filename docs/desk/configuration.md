@@ -186,6 +186,8 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 
 ## Mail
 
+`mailRounds.slots` sets when the Desk offers a scheduled mail round. It defaults to `["08:30", "13:30", "16:30"]`, every day including weekends, in the stack's time zone. Each entry is a local `HH:MM` time; a busy or unknown meeting moves that slot to the end of the meeting chain it overlaps or touches. An opening round keeps its membership: later mail waits for the successor, and an unfinished round survives midnight and a restart. `GET /api/desk` returns `mailRound` with the round `id`, `revision`, `due`, `scheduledFor`, `nextScheduledAt`, `waiting`, `groups`, `mails` and `unavailable` sources. The next slot is named even when no round is due, and an empty queue never creates one.
+
 `mail.classifier` is optional. It accepts exactly one of two forms: `command`, or `baseUrl` with `model`. Without a classifier, fixed rules rank mail.
 
 | Classifier key | Default | Value and meaning |
