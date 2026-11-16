@@ -90,6 +90,7 @@ import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
+import { DESK_CONTRACT_PATH, deskContract, withDeskApiVersion } from "../../desk-api/version";
 import { handleDeskAdapterAction } from "./api/desk-adapter";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
@@ -460,7 +461,7 @@ export function startServer(
         const authorizer = options.authorizer?.() ?? null;
         const handoffView = options.handoffView?.() ?? null;
         const doctorView = options.doctorView?.() ?? null;
-        return withActPhrase(req, url.pathname, await handleApi(
+        return withDeskApiVersion(url.pathname, await withActPhrase(req, url.pathname, await handleApi(
           req,
           url,
           db,
@@ -476,7 +477,7 @@ export function startServer(
           authorizer,
           deskRuntime,
           { ...options, vigil: deskVigil(options) },
-        ));
+        )));
       }
 
       if (req.method === "GET" && (url.pathname === CONSOLE_PATH || url.pathname === `${CONSOLE_PATH}/`)) {
@@ -640,7 +641,7 @@ async function handleApi(
   if (pathname === DESK_ADAPTER_ASSET_PATH || pathname.startsWith(`${DESK_ADAPTER_ASSET_PATH}/`)) return handleDeskAdapterAssets(req, url, guard, adapterAssets);
 
   const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
-  const deskBriefRead = pathname === DESK_MEETING_BRIEF_PATH || pathname === DESK_MEETING_PREVIOUS_PATH;
+  const deskBriefRead = pathname === DESK_MEETING_BRIEF_PATH || pathname === DESK_MEETING_PREVIOUS_PATH || pathname === DESK_CONTRACT_PATH;
   if (deskFlowsRead || deskBriefRead || (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname))) {
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
@@ -675,6 +676,11 @@ async function handleApi(
   if (pathname === "/api/desk") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
     return handleGetDesk(db, desk, vigil);
+  }
+
+  if (pathname === DESK_CONTRACT_PATH) {
+    if (req.method !== "GET") return methodNotAllowed(["GET"]);
+    return Response.json(deskContract());
   }
 
   if (pathname === "/api/desk/plan") return handleDeskPlan(req, db, desk, vigil);

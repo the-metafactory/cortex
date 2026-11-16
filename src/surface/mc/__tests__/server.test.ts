@@ -6,6 +6,9 @@ import { dirname, join } from "path";
 import { tmpdir } from "os";
 import { existsSync, rmSync } from "fs";
 import { fileURLToPath } from "url";
+import { DESK_API_VERSION } from "../../../desk-api/version";
+import { DESK_PHRASE_CODES } from "../desk/phrases";
+import { DESK_ITEM_KINDS } from "../desk/types";
 import type { Database } from "bun:sqlite";
 import type { Server } from "bun";
 import type { WsClientRegistry } from "../ws/client-registry";
@@ -89,6 +92,39 @@ describe("mission-control server", () => {
     expect(typeof body.version).toBe("string");
     expect(typeof body.uptime).toBe("number");
     expect(typeof body.wsClients).toBe("number");
+  });
+
+  it("serves the Desk API contract handshake", async () => {
+    const res = await fetch(`http://localhost:${testPort}/api/desk/contract`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-desk-api-version")).toBe("1.0.0");
+    const body = await res.json();
+    expect(body.version).toBe(DESK_API_VERSION);
+    expect(body.phraseCodes).toEqual([...DESK_PHRASE_CODES]);
+    expect(Object.keys(body.vocabularies).sort()).toEqual([
+      "ADAPTER_CAPABILITY_ACTION", "CORRECTION_MOVES", "DESK_ITEM_KINDS", "FIELD_SCHEMAS", "HANDOFF_KEY_PREFIX",
+      "MAX_INSTRUCTION", "RULE_ACTIONS", "RULE_MATCHES", "SNOOZE_TIMES", "STUDIO_RESPOND_ACTION", "SWEEP_WORDS", "WAITING_OPS",
+    ]);
+    expect(body.vocabularies.DESK_ITEM_KINDS).toEqual([...DESK_ITEM_KINDS]);
+  });
+
+  it("answers 405 to POST on the contract handshake", async () => {
+    const res = await fetch(`http://localhost:${testPort}/api/desk/contract`, { method: "POST" });
+    expect(res.status).toBe(405);
+  });
+
+  it("refuses a rebound Host on the contract handshake", async () => {
+    const res = await fetch(`http://localhost:${testPort}/api/desk/contract`, { headers: { Host: "evil.example" } });
+    expect(res.status).toBe(403);
+  });
+
+  it("stamps the Desk API version on Desk, conversation and vigil responses only", async () => {
+    for (const path of ["/api/desk", "/api/conversations", "/api/vigil/subjects"]) {
+      const res = await fetch(`http://localhost:${testPort}${path}`);
+      expect(res.headers.get("x-desk-api-version")).toBe("1.0.0");
+    }
+    const health = await fetch(`http://localhost:${testPort}/health`);
+    expect(health.headers.get("x-desk-api-version")).toBeNull();
   });
 
   it("responds 404 on unknown routes", async () => {
