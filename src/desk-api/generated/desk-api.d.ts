@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.5.0";
+export declare const DESK_API_VERSION = "1.6.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -367,6 +367,13 @@ export type DeskPhrase = {
 	params?: {
 		startsAt: string;
 	};
+} | {
+	code: "meeting.ended";
+	params: {
+		endedAt: string;
+	};
+} | {
+	code: "meeting.dismissed";
 } | {
 	code: "reminder.due";
 	params?: {
@@ -1620,6 +1627,7 @@ declare const DESK_ITEM_KINDS: readonly [
 	"mail-junk",
 	"reminder",
 	"meeting",
+	"meeting-after",
 	"mail-rule",
 	"dmarc",
 	"mail-waiting",

@@ -25,6 +25,8 @@ export type DeskPhrase =
   | { code: "goal.check-regressed"; params: { lastRanAt: string } }
   | { code: "goal.reading"; params: { at: string; wordingAvailable: boolean } }
   | { code: "meeting.soon"; params?: { startsAt: string } }
+  | { code: "meeting.ended"; params: { endedAt: string } }
+  | { code: "meeting.dismissed" }
   | { code: "reminder.due"; params?: { dueAt: string } }
   | { code: "mail.meeting-today"; params: { eventKey: string } }
   | { code: "mail.deadline-today"; params: { dueAt: string } }

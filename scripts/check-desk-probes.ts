@@ -132,6 +132,7 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
 export const PROBE_RUNS: readonly string[] = [
   "probe-desk-adapter-assets.ts",
   "probe-desk-adapter-canary.ts",
+  "probe-desk-after-meeting.ts",
   "probe-desk-adapter-limits.ts",
   "probe-desk-adapter-packages.ts",
   "probe-desk-adapter-registry.ts",

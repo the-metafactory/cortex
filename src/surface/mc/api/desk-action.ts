@@ -1,5 +1,9 @@
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
+import { answer } from "../desk/act-result";
+import { calendarEvents } from "../desk/calendar-events";
+import { dismissAfterMeeting, MEETING_AFTER_KIND, MEETING_DISMISS_ACTION } from "../desk/meeting-after";
+import { DAY_MS, startOfDay } from "../desk/time";
 import { isPromotable, PROMOTABLE_LABELS, setGrant } from "../desk/autonomy";
 import { isRangerAction, oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner } from "../desk/actions";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
@@ -11,6 +15,7 @@ export interface DeskActionDeps {
   run?: RangerRunner;
   fetchImpl?: RangerFetch;
   now?: () => number;
+  db?: Database;
 }
 
 /**
@@ -20,11 +25,12 @@ export interface DeskActionDeps {
  */
 export async function handleDeskAction(req: Request, runtime: DeskRuntime | undefined, deps: DeskActionDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
+  const body = (await req.json().catch(() => null)) as { action?: unknown; key?: unknown } | null;
+  if (body?.action === MEETING_DISMISS_ACTION) return dismissMeetingCard(body.key, runtime, deps);
   const desk = runtime?.options;
   const ledger = runtime?.ledger;
   const cli = desk?.rangerCli;
   if (!ledger || !desk?.enabled || !desk.rangerUrl || !cli?.bin) return fail(409, "Ranger actions are not set up on this stack.");
-  const body = (await req.json().catch(() => null)) as { action?: unknown; key?: unknown } | null;
   if (!isRangerAction(body?.action) || typeof body.key !== "string") return fail(400, "An action and an item key are required.");
 
   let plan;
@@ -47,6 +53,16 @@ export async function handleDeskAction(req: Request, runtime: DeskRuntime | unde
   } finally {
     ledger.release(plan.claimKey);
   }
+}
+
+function dismissMeetingCard(key: unknown, runtime: DeskRuntime | undefined, deps: DeskActionDeps): Response {
+  if (!runtime?.options?.enabled) return fail(409, "The Desk is turned off on this stack.");
+  if (typeof key !== "string" || !key.startsWith(`${MEETING_AFTER_KIND}:`)) return fail(400, "A meeting-after item key is required.");
+  if (!deps.db) return fail(503, "The Desk store is not available on this stack.");
+  const now = (deps.now ?? runtime.now ?? Date.now)();
+  const readings = runtime.sourceCache?.cached() ?? [];
+  const events = readings.flatMap((reading) => reading.events.map((event) => ({ ...event, area: reading.area, sourceId: reading.id })));
+  return answer(dismissAfterMeeting(deps.db, calendarEvents(events, startOfDay(now), startOfDay(now) + DAY_MS), key, now));
 }
 
 /**
