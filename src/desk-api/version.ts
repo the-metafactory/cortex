@@ -10,9 +10,10 @@ import { WAITING_OPS } from "../surface/mc/desk/mail-waiting-schema";
 import { DESK_PHRASE_CODES } from "../surface/mc/desk/phrases";
 import { DESK_ITEM_KINDS } from "../surface/mc/desk/types";
 import { MAIL_ROUND_ACTIONS, MAIL_ROUND_GROUP_KINDS, MAIL_ROUND_UNDO_OUTCOMES } from "../surface/mc/desk/mail-round";
+import { OUTLINE_REPEAT_FIELDS, OUTLINE_REPEAT_MODES, OUTLINE_REPEAT_UNITS, OUTLINE_TIME_FIELDS } from "../surface/mc/desk/balance-command";
 import { DEFAULT_MAIL_ROUND_SLOTS } from "../common/types/desk-mail-rounds";
 
-export const DESK_API_VERSION = "1.2.0";
+export const DESK_API_VERSION = "1.3.0";
 const DESK_API_VERSION_HEADER = "x-desk-api-version";
 export const DESK_CONTRACT_PATH = "/api/desk/contract";
 
@@ -40,6 +41,10 @@ export function deskContract() {
       MAIL_ROUND_ACTIONS,
       MAIL_ROUND_UNDO_OUTCOMES,
       DEFAULT_MAIL_ROUND_SLOTS,
+      OUTLINE_TIME_FIELDS,
+      OUTLINE_REPEAT_MODES,
+      OUTLINE_REPEAT_UNITS,
+      OUTLINE_REPEAT_FIELDS,
     },
   };
 }
