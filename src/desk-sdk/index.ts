@@ -168,3 +168,4 @@ export type { MailMoveAction, MailMoveInput, MailMoveTarget } from "../conversat
 export { MAIL_REPLY_DRAFT_CAPABILITY } from "../conversations/domain-adapters/mail/reply-draft-contract";
 export { mailReplyDraftDeclaration, mailReplyDraftSnapshot } from "../conversations/domain-adapters/mail/reply-draft-contract";
 export type { ApprovedSnapshot, Provenance } from "../conversations/domain-adapters/operations/types";
+export * from "./conformance";

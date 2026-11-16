@@ -85,7 +85,7 @@ export interface ConformanceReport {
 	mailQueries?: ConformanceMailQuery[];
 }
 export declare function formatReport(report: ConformanceReport): string;
-export declare const DESK_ADAPTER_SDK_VERSION = "1.15.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.16.0";
 /** The connection id every conformance run uses for the package's one synthetic connection. */
 export declare const CONFORMANCE_CONNECTION_ID = "conformance-connection";
 export interface MailExecutionProvider {

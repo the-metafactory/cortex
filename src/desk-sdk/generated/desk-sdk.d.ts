@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.15.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.16.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -1518,6 +1518,64 @@ export declare function mailReplyDraftSnapshot(options: {
 	policy?: "local" | "cloud";
 	capability?: CapabilityDeclaration;
 }): ApprovedSnapshot;
+/** An invitation as the rule sees it: its SEQUENCE, its start and optional end as ISO instants, and whether it repeats. */
+export interface InvitationFacts {
+	readonly sequence: number;
+	readonly start: string;
+	readonly end?: string;
+	readonly recurring?: boolean;
+}
+/** A mail as the reply rule sees it. `inReplyTo` and `references` hold message ids without angle brackets. */
+export interface ReplyFacts {
+	readonly id: string;
+	readonly from: string;
+	readonly receivedAt: string;
+	readonly inReplyTo?: readonly string[];
+	readonly references?: readonly string[];
+}
+export type InvitationOpenRule = (invitation: InvitationFacts, answeredSequence: number | undefined, now: number) => boolean;
+export type RepliesToRule = (sent: Pick<ReplyFacts, "id" | "from">, candidates: readonly ReplyFacts[]) => string[];
+export declare const MAX_REPLIES = 10;
+/**
+ * The reference rule for whether an invitation is still open. It is open when it is not answered at the same or a newer
+ * SEQUENCE and not over. It is over at its end, or at its start when it has no end. A recurring invitation is never over.
+ */
+export declare const invitationOpen: InvitationOpenRule;
+/**
+ * The reference rule for which mails reply to a sent mail. A candidate replies when it names the sent mail's id in
+ * In-Reply-To or References, has a different id and comes from a different address. At most 10, oldest first.
+ */
+export declare const repliesTo: RepliesToRule;
+export interface InvitationOpenVector {
+	readonly name: string;
+	readonly input: {
+		readonly invitation: InvitationFacts;
+		readonly answeredSequence: number | undefined;
+		readonly now: number;
+	};
+	readonly expected: boolean;
+}
+export interface RepliesToVector {
+	readonly name: string;
+	readonly input: {
+		readonly sent: Pick<ReplyFacts, "id" | "from">;
+		readonly candidates: readonly ReplyFacts[];
+	};
+	readonly expected: readonly string[];
+}
+export declare const INVITATION_OPEN_VECTORS: readonly InvitationOpenVector[];
+export declare const REPLIES_TO_VECTORS: readonly RepliesToVector[];
+export interface ConformanceFailure {
+	readonly rule: "invitationOpen" | "repliesTo";
+	readonly name: string;
+	readonly expected: unknown;
+	readonly actual: unknown;
+}
+/** Runs every vector against an adapter's own rules and returns the vectors it fails; an empty list means it conforms. */
+export declare function runDeskRuleVectors(rules: {
+	invitationOpen: InvitationOpenRule;
+	repliesTo: RepliesToRule;
+}): ConformanceFailure[];
 /**
  * The call a package's module supplies for one query capability. The host passes the validated fetch request for
  * the capability and releases the result only after it parses as a `QueryPage`.
