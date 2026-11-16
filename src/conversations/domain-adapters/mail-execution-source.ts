@@ -9,6 +9,8 @@ export interface MailExecutionProvider {
   lookupMove?(input: unknown): Promise<unknown>;
   unsubscribe?(input: unknown): Promise<unknown>;
   lookupUnsubscribe?(input: unknown): Promise<unknown>;
+  report?(input: unknown): Promise<unknown>;
+  lookupReport?(input: unknown): Promise<unknown>;
 }
 
 export interface MailExecutionConnections {

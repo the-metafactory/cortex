@@ -1,7 +1,7 @@
 import type { DeskAdapterConnection } from "./index";
 import type { ApprovedSnapshot, LookupRequest } from "../conversations/domain-adapters/operations/types";
 
-export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe";
+export type DeskMailExecutionMethod = "draft" | "lookup" | "move" | "restore" | "lookupMove" | "unsubscribe" | "lookupUnsubscribe" | "report" | "lookupReport";
 
 export interface DeskMailExecutionConnection {
   readonly version: number;

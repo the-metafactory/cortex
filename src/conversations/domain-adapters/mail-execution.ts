@@ -3,6 +3,7 @@ import type { DeskAdapterConnection, DeskMailExecutionBridge, DeskMailExecutionM
 import { replySubject } from "./mail/reply-subject";
 import { unsubscribeMethod } from "./mail/unsubscribe-method";
 import { admittedCallKey, admittedDispatch, admittedLookup, connectionKey, DeskBackendUnavailableError } from "./package-backend";
+import { MAIL_REPORT_CAPABILITY, MAIL_REPORT_KINDS, MailReportInputSchema, type MailReportKind, MailReportOutputSchema } from "./mail/report-contract";
 import { mailBindingFor } from "./mail-read";
 import type { MailExecutionConnections } from "./mail-execution-source";
 import type { OperationJournalStore } from "./operations/journal";
@@ -15,7 +16,7 @@ export interface MailExecutionSource extends MailExecutionConnections {
   journal(): OperationJournalStore;
 }
 
-const MAIL_EXECUTION_METHODS: readonly DeskMailExecutionMethod[] = ["draft", "lookup", "move", "restore", "lookupMove", "unsubscribe", "lookupUnsubscribe"];
+const MAIL_EXECUTION_METHODS: readonly DeskMailExecutionMethod[] = ["draft", "lookup", "move", "restore", "lookupMove", "unsubscribe", "lookupUnsubscribe", "report", "lookupReport"];
 
 const METHODS: Record<string, readonly DeskMailExecutionMethod[]> = {
   "mail.reply-draft.create": ["draft", "lookup"],
@@ -23,12 +24,17 @@ const METHODS: Record<string, readonly DeskMailExecutionMethod[]> = {
   "mail.trash": ["move", "lookupMove"],
   "mail.restore": ["restore", "lookupMove"],
   "mail.unsubscribe": ["unsubscribe", "lookupUnsubscribe"],
+  [MAIL_REPORT_CAPABILITY.draft]: ["report", "lookupReport"],
+  [MAIL_REPORT_CAPABILITY.spam]: ["report", "lookupReport"],
+  [MAIL_REPORT_CAPABILITY.phishing]: ["report", "lookupReport"],
 };
-const LOOKUPS = new Set<DeskMailExecutionMethod>(["lookup", "lookupMove", "lookupUnsubscribe"]);
+const LOOKUPS = new Set<DeskMailExecutionMethod>(["lookup", "lookupMove", "lookupUnsubscribe", "lookupReport"]);
 const REQUIRED: Record<string, readonly DeskMailExecutionMethod[]> = {
   ...METHODS,
   "mail.move": ["move", "restore", "lookupMove"],
   "mail.trash": ["move", "restore", "lookupMove"],
+  [MAIL_REPORT_CAPABILITY.spam]: ["report", "restore", "lookupReport"],
+  [MAIL_REPORT_CAPABILITY.phishing]: ["report", "restore", "lookupReport"],
 };
 const nativeBase = { version: z.literal(1), requestId: z.string().regex(/^[A-Za-z0-9._:@-]{1,200}$/), account: z.string().min(1), messageId: z.string().min(1) };
 const nativeContext = z.object({ operationId: z.string().min(1), attemptId: z.string().min(1), snapshotDigest: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -37,6 +43,7 @@ const NATIVE_INPUT: Record<string, z.ZodType> = {
   move: z.object({ ...nativeBase, context: nativeContext, action: z.enum(["move", "trash"]), target: z.enum(["archive", "junk", "trash"]) }).strict(),
   restore: z.object({ ...nativeBase, context: nativeContext, action: z.literal("restore"), from: z.string().min(1) }).strict(),
   unsubscribe: z.object({ ...nativeBase, context: nativeContext }).strict(),
+  report: MailReportInputSchema.extend({ version: z.literal(1), requestId: z.string().min(1), kind: z.enum(MAIL_REPORT_KINDS) }).strict(),
 };
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const fail = (code: string, message: string): never => { throw new DeskBackendUnavailableError({ code, message }); };
@@ -109,6 +116,8 @@ export function mailExecutionBridge(source: MailReadSource | undefined, executio
       const requestId = `${snapshot.capabilityId}:${context.ownerRequestId}`;
       if (LOOKUPS.has(method)) {
         if (input !== requestId) return fail("mail_execution_scope", "The lookup belongs to another owner request.");
+      } else if (method === "report") {
+        if (!admittedDispatch() || !record(input) || canonicalWire(input.message) !== canonicalWire(snapshot.target) || canonicalWire({ message: input.message }) !== canonicalWire(snapshot.input) || input.requestId !== requestId || snapshot.capabilityId !== MAIL_REPORT_CAPABILITY[input.kind as MailReportKind]) return fail("mail_execution_scope", "The report must name the approved message, kind and request.");
       } else {
         if (!admittedDispatch() || !record(input) || input.version !== 1 || input.requestId !== requestId || input.account !== binding.account || input.messageId !== snapshot.target?.canonicalId) return fail("mail_execution_scope", "The provider call does not match the approved message and account.");
         const original = snapshot.input;
@@ -129,6 +138,10 @@ export function mailExecutionBridge(source: MailReadSource | undefined, executio
       }
       scoped(context, connection);
       const value = z.json().parse(await invoke.call(provider, structuredClone(input)));
+      if (method === "report") {
+        const output = MailReportOutputSchema.safeParse(value);
+        if (!output.success || canonicalWire(output.data.ref) !== canonicalWire(snapshot.target)) return fail("mail_execution_scope", "The provider report result does not match the approved message.");
+      }
       if (record(value) && typeof value.account === "string" && value.account !== binding.account) return fail("mail_execution_scope", "The provider result belongs to another account.");
       if (method === "lookupMove" && record(value) && value.status === "found") {
         const original = value.request;

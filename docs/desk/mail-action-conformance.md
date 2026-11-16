@@ -44,7 +44,7 @@ SDK 1.13 adds optional `host.mailExecution`. A package still exports only `creat
 
 The selector can return an existing version-1 Mail connection, including Helm's `CliConnection` or a fake implementing the same methods. The package receives neither that object nor credentials. `bridge.connection(connection)` returns only its version and supported method names, or `null` when the provider is absent or its version is missing/unsupported. A package must leave such actions unavailable; it must not substitute a native or fake connection. A connection's metadata grants no execution permission.
 
-Check that metadata includes the action's required methods before declaring it available: draft plus lookup, unsubscribe plus lookupUnsubscribe, or move/restore/lookupMove for moves and Trash. The bridge also refuses provider calls missing those recovery methods. Trash has no non-restorable fallback.
+Check that metadata includes the action's required methods before declaring it available: draft plus lookup, unsubscribe plus lookupUnsubscribe, report plus lookupReport (spam and phishing also need restore), or move/restore/lookupMove for moves and Trash. The bridge also refuses provider calls missing those recovery methods. Trash has no non-restorable fallback.
 
 Inside a host-admitted action callback, use `bridge.invoke(connection, method, input)`. Inputs have these exact fields; extra fields such as draft `cc`/`bcc`, unsubscribe URLs, headers or command overrides are rejected before calling the provider.
 
@@ -54,7 +54,7 @@ Inside a host-admitted action callback, use `bridge.invoke(connection, method, i
 | `move` | `{ version, requestId, account, messageId, context, action, target }`, with `action: "move" \| "trash"` and the approved `archive`/`junk`/`trash` target |
 | `restore` | `{ version, requestId, account, messageId, context, action: "restore", from }`, preserving the approved location precondition |
 | `unsubscribe` | `{ version, requestId, account, messageId, context }`; the bound source must list RFC one-click headers, and the provider owns their execution |
-| `lookup`, `lookupMove`, `lookupUnsubscribe` | The exact `requestId` string for the admitted operation and its capability |
+| `lookup`, `lookupMove`, `lookupUnsubscribe`, `lookupReport` | The exact `requestId` string for the admitted operation and its capability |
 
 `version` is the existing native interface number `1`. `requestId` is `${capabilityId}:${ownerRequestId}`, using the approved operation's identifiers, and follows the native interface's 1–200 character `[A-Za-z0-9._:@-]` format. `context` is `{ operationId, attemptId, snapshotDigest }`. Every mutation is checked against the exact admitted snapshot, its message target and its single host-bound account. Draft text is never trimmed. Its recipient comes from the listed sender, and its subject is `mailReplySubject(listed.subject)` from the public SDK, sharing the native reply helper. A method from another capability is refused. The method set contains no send or arbitrary command call.
 

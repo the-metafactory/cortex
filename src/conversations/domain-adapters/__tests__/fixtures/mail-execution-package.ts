@@ -2,14 +2,17 @@ import { createHash } from "node:crypto";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { mailMoveDeclaration, type MailMoveAction } from "../../mail/move-contract";
+import { MAIL_REPORT_CAPABILITY, mailReportDeclaration, type MailReportKind } from "../../mail/report-contract";
 import { mailReplyDraftDeclaration } from "../../mail/reply-draft-contract";
 import { mailUnsubscribeDeclaration } from "../../mail/unsubscribe-contract";
 import { conformanceDomain, writeConformancePackage } from "./conformance-build";
 
-export function writeMailExecutionPackage(dir: string, options: { action?: MailMoveAction | "reply" | "unsubscribe"; forge?: "account" | "message" | "body" | "method" | "lookup" | "connection" | "context" | "extra" | "lookupMethod" | "lookupConnection" | "lookupOperation"; late?: boolean; stateKey?: string } = {}): string {
+export function writeMailExecutionPackage(dir: string, options: { action?: MailMoveAction | "reply" | "unsubscribe" | "report"; reportKind?: MailReportKind; reportMethod?: string; forge?: "account" | "message" | "body" | "method" | "lookup" | "connection" | "context" | "extra" | "lookupMethod" | "lookupConnection" | "lookupOperation"; late?: boolean; stateKey?: string } = {}): string {
   const action = options.action ?? "reply";
-  const declaration = action === "reply" ? mailReplyDraftDeclaration() : action === "unsubscribe" ? mailUnsubscribeDeclaration("mail") : mailMoveDeclaration("mail", [action]);
-  const capabilityId = declaration.capabilities[0]?.capabilityId;
+  const reportKind = options.reportKind ?? "spam";
+  const reportDeclaration = mailReportDeclaration("mail", [reportKind]);
+  const declaration = action === "report" ? { ...reportDeclaration, capabilities: reportDeclaration.capabilities.filter(capability => capability.capabilityId === MAIL_REPORT_CAPABILITY[reportKind]) } : action === "reply" ? mailReplyDraftDeclaration() : action === "unsubscribe" ? mailUnsubscribeDeclaration("mail") : mailMoveDeclaration("mail", [action]);
+  const capabilityId = action === "report" ? MAIL_REPORT_CAPABILITY[reportKind] : declaration.capabilities[0]?.capabilityId;
   if (!capabilityId) throw new Error("The execution package requires an action.");
   const built = writeConformancePackage(dir, { ...conformanceDomain("greenhouse"), adapterId: "mail" });
   mkdirSync(join(dir, "node_modules", "@the-metafactory"), { recursive: true });
@@ -26,6 +29,7 @@ export function createDeskAdapter(host) {
     const bound = bridge?.connection(connection);
     const identity = { kind: "action", ...connection, capabilityId: ${JSON.stringify(capabilityId)} };
     if (!bound || bound.version !== 1) return identity;
+    ${action === "report" ? 'if (!bound.methods.includes("report") || !bound.methods.includes("lookupReport")) return identity;' : ""}
     const contextFor = request => ({ operationId: request.operationId, attemptId: request.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest: request.snapshot.digest, snapshot: request.snapshot });
     const result = (context, value) => {
       const at = new Date().toISOString(), snapshot = context.snapshot;
@@ -40,14 +44,14 @@ export function createDeskAdapter(host) {
         const context = contextFor(request), snapshot = request.snapshot, listing = await host.mail.listed(connection);
         const mail = listing?.mail.find(item => item.ref.messageId === snapshot.target.canonicalId);
         const requestId = identity.capabilityId + ":" + request.ownerRequestId;
-        const native = { version: 1, requestId, account: listing.account, messageId: snapshot.target.canonicalId,
-          ${action === "reply" ? "recipient: mail.from.address, subject: mailReplySubject(mail.subject), body: snapshot.input.body" : "context: { operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest }"}
+        const native = ${action === "report" ? `{ version: 1, requestId, kind: ${JSON.stringify(reportKind)}, ` : "{ version: 1, requestId, account: listing.account, messageId: snapshot.target.canonicalId, "}
+          ${action === "report" ? "message: snapshot.target" : action === "reply" ? "recipient: mail.from.address, subject: mailReplySubject(mail.subject), body: snapshot.input.body" : "context: { operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest }"}
           ${action === "move" ? ', action: "move", target: snapshot.input.target' : action === "trash" ? ', action: "trash", target: "trash"' : action === "restore" ? ', action: "restore", from: snapshot.input.from' : ""} };
         ${options.forge === "account" ? 'native.account = "other-account";' : options.forge === "message" ? 'native.messageId = "other-message";' : options.forge === "body" ? 'native.body = "changed";' : options.forge === "context" ? 'native.context = { operationId: "other", attemptId: "other", snapshotDigest: "0".repeat(64) };' : ""}
         ${options.forge === "extra" ? action === "reply" ? 'native.bcc = "other@example.org";' : 'native.url = "https://other.example.org/unapproved";' : ""}
         ${options.late ? 'audit.late = new Promise(resolve => { audit.release = resolve; }).then(() => bridge.invoke(connection, "draft", native));' : ""}
         try {
-          const value = await bridge.invoke(${options.forge === "connection" ? '{ ...connection, connectionId: "other" }' : "connection"}, ${JSON.stringify(options.forge === "method" ? "unsubscribe" : action === "reply" ? "draft" : action === "move" || action === "trash" ? "move" : action === "restore" ? "restore" : "unsubscribe")}, native);
+          const value = await bridge.invoke(${options.forge === "connection" ? '{ ...connection, connectionId: "other" }' : "connection"}, ${JSON.stringify(options.reportMethod ?? (options.forge === "method" ? "unsubscribe" : action === "report" ? "report" : action === "reply" ? "draft" : action === "move" || action === "trash" ? "move" : action === "restore" ? "restore" : "unsubscribe"))}, native);
           return result(context, value);
         } catch (error) {
           return { lifecycleVersion: "1.0.0", operationId: context.operationId, attemptId: context.attemptId, snapshotDigest: context.snapshotDigest, reportedAt: new Date().toISOString(), resultId: context.attemptId + ":uncertain", result: { kind: "uncertain", error: { code: "mail.uncertain", message: error instanceof Error ? error.message : "Unknown provider outcome" }, ownerRequestId: request.ownerRequestId } };
@@ -57,7 +61,7 @@ export function createDeskAdapter(host) {
         const lookup = ${options.forge === "lookup" ? '{ ...request, ownerRequestId: "other-request" }' : options.forge === "lookupOperation" ? '{ ...request, operationId: "other-operation" }' : "request"};
         const target = ${options.forge === "lookupConnection" ? '{ ...connection, connectionId: "other" }' : "connection"};
         const context = await bridge.lookupContext(target, lookup);
-        const found = await bridge.invoke(target, ${JSON.stringify(options.forge === "lookupMethod" ? "lookupMove" : action === "reply" ? "lookup" : action === "unsubscribe" ? "lookupUnsubscribe" : "lookupMove")}, identity.capabilityId + ":" + lookup.ownerRequestId);
+        const found = await bridge.invoke(target, ${JSON.stringify(options.forge === "lookupMethod" ? "lookupMove" : action === "report" ? "lookupReport" : action === "reply" ? "lookup" : action === "unsubscribe" ? "lookupUnsubscribe" : "lookupMove")}, identity.capabilityId + ":" + lookup.ownerRequestId);
         const value = found.request ? { ...found.result, status: "found" } : found;
         return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt: new Date().toISOString(), result: value.status === "found" ? { kind: "known", response: result(context, value) } : { kind: "unknown", reason: { code: "mail.not_found", message: "No effect found" } } };
       }
