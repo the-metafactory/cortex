@@ -76,7 +76,7 @@ test.each([
 
 test("a moved meeting refreshes the put-away phrase and label together", () => {
   snoozeMail(db, listed, { kind: "meeting", event: "cal:fixture:review" }, { now: NOW, readings: [reading] });
-  wakeSnoozes(db, { events: new Map([["cal:fixture:review", { title: "Renamed meeting", at: NOW + 120_000, end: NOW + 7_200_000 }]]), covered: () => true, wrote: () => null }, NOW);
+  wakeSnoozes(db, { events: new Map([["cal:fixture:review", { title: "Renamed meeting", at: NOW + 120_000, end: NOW + 7_200_000 }]]), covered: () => true, wrote: () => null, conversationReply: () => null, urgentNow: new Set() }, NOW);
   expect(readSnooze(db, mail.id)).toMatchObject({ label: "until “Renamed meeting” ends", labelPhrase: { code: "mail.put-away-meeting", params: { title: "Renamed meeting" } } });
 });
 

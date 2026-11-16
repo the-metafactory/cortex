@@ -12,7 +12,8 @@ export const ITEM_DEFER_SQL = [
     state TEXT NOT NULL,
     back_at INTEGER,
     reason TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    urgent_at_defer INTEGER NOT NULL DEFAULT 0
   )`,
   "CREATE INDEX IF NOT EXISTS desk_item_defers_state ON desk_item_defers (state, created_at)",
 ];
