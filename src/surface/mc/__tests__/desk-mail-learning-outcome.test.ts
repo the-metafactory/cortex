@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { handleGetDesk } from "../api/desk";
 import { HandledLedger } from "../desk/actions";
@@ -53,11 +53,16 @@ describe("GET /api/desk mail learning and outcomes", () => {
     expect((await read()).mailLearning).toBe(false);
   });
 
-  it("leaves the learning flag out and serves the rest when the rule store cannot be read", async () => {
-    db.exec("DROP TABLE desk_mail_rules");
-    const view = await read();
-    expect(view).not.toHaveProperty("mailLearning");
-    expect(view.items.some((item) => item.kind === "mail")).toBe(true);
+  it("leaves the learning flag out, serves the rest and says so in the log when the rule store cannot be read", async () => {
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      db.exec("DROP TABLE desk_mail_rules");
+      const view = await read();
+      expect(view).not.toHaveProperty("mailLearning");
+      expect(view).not.toHaveProperty("mailRules");
+      expect(view.items.some((item) => item.kind === "mail")).toBe(true);
+      expect(log.mock.calls.map((call) => String(call[0]))).toContainEqual(expect.stringContaining("desk: mail rule store unreadable:"));
+    } finally { log.mockRestore(); }
   });
 
   it("suggests attach, draft, archive or nothing from the card's own actions and attention", async () => {

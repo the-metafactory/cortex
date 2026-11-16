@@ -153,14 +153,15 @@ export const listRules = (db: Database): MailRule[] => allRows(db).map(toRule);
 
 export const ruleById = (db: Database, id: string): MailRule | null => listRules(db).find((r) => r.id === id) ?? null;
 
-type MailRulesRead = { ok: true; rules: MailRule[] } | { ok: false; error: string };
+type MailRulesRead = { ok: true; rules: MailRule[] } | { ok: false };
 
-/** The approved rules, or the reason the store could not be read. */
+/** The approved rules, or that the store could not be read (said once in the log, so no caller has to repeat it). */
 export function readMailRules(db: Database): MailRulesRead {
   try {
     return { ok: true, rules: listRules(db) };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    console.error(`desk: mail rule store unreadable: ${err instanceof Error ? err.message : String(err)}`);
+    return { ok: false };
   }
 }
 
@@ -169,8 +170,10 @@ export const readableRules = (db: Database): MailRule[] => {
   return read.ok ? read.rules : [];
 };
 
-export const ruleViews = (db: Database): MailRuleView[] =>
-  listRules(db).map((r) => ({ id: r.id, match: r.match, value: r.value, action: r.action, on: r.on, sentence: ruleSentence(r), lastRunAt: r.lastRunAt, count: r.count, held: r.held, target: r.target }));
+export const ruleViewsOf = (rules: readonly MailRule[]): MailRuleView[] =>
+  rules.map((r) => ({ id: r.id, match: r.match, value: r.value, action: r.action, on: r.on, sentence: ruleSentence(r), lastRunAt: r.lastRunAt, count: r.count, held: r.held, target: r.target }));
+
+export const ruleViews = (db: Database): MailRuleView[] => ruleViewsOf(listRules(db));
 
 /** Rule runs, newest first, for Done for you and the weekly mirror. */
 export function ruleRuns(db: Database, q: { since?: number; ruleId?: string; limit?: number } = {}): RuleRun[] {

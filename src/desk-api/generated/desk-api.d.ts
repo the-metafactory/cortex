@@ -1634,7 +1634,7 @@ declare const DESK_OUTCOMES: readonly [
 	"draft",
 	"ask"
 ];
-/** The outcome the Desk suggests for a card, for a client that arranges the mail queue. */
+/** The outcome the Desk suggests for a card, served on mail cards today; the vocabulary is the Desk's, so a later rule may suggest one for another kind. */
 export type DeskOutcome = (typeof DESK_OUTCOMES)[number];
 export interface DeskArea {
 	id: string;

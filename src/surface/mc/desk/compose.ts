@@ -29,7 +29,7 @@ import { junkReviewItems } from "./mail-junk";
 import { listKey, offerContext, unsubscribeOffers, unsubscribeView, type UnsubscribeConfig, type UnsubscribeOffer } from "./mail-unsubscribe";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
-import { DEFAULT_MAIL_RULES, digestedIds, heldItems, pendingRuleMail, proposalItems, proposeRules, readMailRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
+import { DEFAULT_MAIL_RULES, digestedIds, heldItems, pendingRuleMail, proposalItems, proposeRules, readMailRules, ruleViewsOf, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
 import { withMailOutcome } from "./mail-outcome";
 import { AHEAD_DAYS, TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
@@ -484,7 +484,7 @@ export async function composeDesk(
     mailRound,
     ...(rulesRead.ok ? { mailLearning: knownRules.length === 0 } : {}),
     ...(canMove ? { mailSweeps: sweeps.map(sweepView) } : {}),
-    ...(canMove && rulesRead.ok ? { mailRules: ruleViews(db) } : {}),
+    ...(canMove && rulesRead.ok ? { mailRules: ruleViewsOf(knownRules) } : {}),
     mailTrusted: trustedViews(db),
     mailHidden: hiddenMail(db),
     ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
