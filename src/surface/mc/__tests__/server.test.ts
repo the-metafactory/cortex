@@ -6,6 +6,7 @@ import { dirname, join } from "path";
 import { tmpdir } from "os";
 import { existsSync, rmSync } from "fs";
 import { fileURLToPath } from "url";
+import { DESK_SEARCH_OPEN_ROUTES } from "../../../desk-api/wire/search";
 import { DESK_API_VERSION } from "../../../desk-api/version";
 import { DESK_PHRASE_CODES } from "../desk/phrases";
 import { DESK_ITEM_KINDS, DESK_OUTCOMES } from "../desk/types";
@@ -102,11 +103,12 @@ describe("mission-control server", () => {
     expect(body.version).toBe(DESK_API_VERSION);
     expect(body.phraseCodes).toEqual([...DESK_PHRASE_CODES]);
     expect(Object.keys(body.vocabularies).sort()).toEqual([
-      "ADAPTER_CAPABILITY_ACTION", "CORRECTION_MOVES", "DEFAULT_MAIL_ROUND_SLOTS", "DEFERRABLE_ITEM_KINDS", "DEFER_ACTIONS", "DESK_ITEM_KINDS", "DESK_OUTCOMES", "FIELD_SCHEMAS", "HANDOFF_KEY_PREFIX",
+      "ADAPTER_CAPABILITY_ACTION", "CORRECTION_MOVES", "DEFAULT_MAIL_ROUND_SLOTS", "DEFERRABLE_ITEM_KINDS", "DEFER_ACTIONS", "DESK_ITEM_KINDS", "DESK_OUTCOMES", "DESK_SEARCH_OPEN_ROUTES", "FIELD_SCHEMAS", "HANDOFF_KEY_PREFIX",
       "MAIL_ROUND_ACTIONS", "MAIL_ROUND_GROUP_KINDS", "MAIL_ROUND_UNDO_OUTCOMES", "MAX_INSTRUCTION", "OUTLINE_REPEAT_FIELDS", "OUTLINE_REPEAT_MODES", "OUTLINE_REPEAT_UNITS", "OUTLINE_TIME_FIELDS", "RULE_ACTIONS", "RULE_MATCHES", "SNOOZE_TIMES", "STUDIO_RESPOND_ACTION", "SWEEP_WORDS", "WAITING_OPS",
     ]);
     expect(body.vocabularies.DESK_ITEM_KINDS).toEqual([...DESK_ITEM_KINDS]);
     expect(body.vocabularies.DESK_OUTCOMES).toEqual([...DESK_OUTCOMES]);
+    expect(body.vocabularies.DESK_SEARCH_OPEN_ROUTES).toEqual(DESK_SEARCH_OPEN_ROUTES);
     expect(Object.keys(body.vocabularies.FIELD_SCHEMAS)).toContain("row");
     expect(body.vocabularies.FIELD_SCHEMAS.row.required).toEqual(["title", "area", "repeat"]);
   });
