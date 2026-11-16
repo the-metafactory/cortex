@@ -21,6 +21,7 @@ const seed = (): AppState => ({
     leaf("legacy", { repeat: legacy, startDate: "2026-11-10", deferredUntil: "2026-11-14", dueDate: "2026-11-20" }),
     leaf("plain"),
     leaf("calendar", { dueDate: "2026-11-02", repeat: { unit: "week", interval: 2, weekdays: [1, 4], mode: "calendar", anchor: "2026-11-02", timesDone: 1 } }),
+    leaf("finished", { done: true, completedAt: "2026-11-12", dueDate: "2026-11-02", repeat: { unit: "week", interval: 2, weekdays: [1, 4], mode: "calendar", anchor: "2026-11-02", occurrence: "2026-11-16", timesDone: 1 } }),
     { id: "project", title: "project", weight: 50, ordering: "parallel", done: true, children: [leaf("child")] },
   ] }] },
   log: [], settings: { ...DEFAULT_SETTINGS }, dayState: null, history: { deficits: {}, lastSurfaced: {} },
@@ -113,6 +114,10 @@ describe("outline start, put-away and repeat over the Desk My day route", () => 
   it("keeps a calendar repeat's anchor and place in its cycle when only the stopping settings change", async () => {
     expect((await edit("calendar", { repeat: { unit: "week", interval: 2, weekdays: [1, 4], count: 4 } })).status).toBe(200);
     expect(row(stored(), "calendar").repeat).toEqual({ unit: "week", interval: 2, weekdays: [1, 4], count: 4, mode: "calendar", anchor: "2026-11-02", timesDone: 1 });
+  });
+  it("recomputes the pending occurrence when a completed calendar repeat changes its interval", async () => {
+    expect((await edit("finished", { repeat: { unit: "week", interval: 3, weekdays: [1, 4] } })).status).toBe(200);
+    expect(row(stored(), "finished").repeat?.occurrence).toBe("2026-11-23");
   });
   it("switches a calendar repeat to completion and back", async () => {
     expect((await edit("calendar", { repeat: { unit: "day", interval: 2, mode: "completion" } })).status).toBe(200);
