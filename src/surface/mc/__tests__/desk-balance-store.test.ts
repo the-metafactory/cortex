@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyDayToHistory, DEFAULT_SETTINGS, selectToday, type AppState } from "../../../balance";
 import { initDatabase } from "../db/init";
+import { BalanceStateSchema } from "../desk/balance-store-schema";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 
 function fixture(): AppState {
@@ -168,5 +169,21 @@ describe("Mission Control balance storage", () => {
     } finally {
       db.close();
     }
+  });
+  describe("external.source", () => {
+    const withSource = (source: unknown) => {
+      const state = fixture();
+      const target = state.outline.children[1]?.children[0];
+      if (!target) throw new Error("Missing fixture row");
+      target.external = { source, syncedAt: "2026-10-30T12:00:00Z" } as never;
+      return state;
+    };
+    test.each(["jira", "tana", "linear"])("keeps %s unchanged", (source) => {
+      const parsed = BalanceStateSchema.parse(withSource(source));
+      expect(parsed.outline.children[1]?.children[0]?.external?.source).toBe(source);
+    });
+    test.each(["", 7, null])("rejects %p", (source) => {
+      expect(BalanceStateSchema.safeParse(withSource(source)).success).toBe(false);
+    });
   });
 });
