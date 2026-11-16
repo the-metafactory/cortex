@@ -23,6 +23,7 @@ import { MEETING_BRIEF_SQL } from "../desk/meeting-brief-schema";
 import { WORKER_HANDOFF_SQL } from "../desk/worker-handoff-store";
 import { TASK_HANDOFF_SQL } from "../desk/task-handoff-schema";
 import { MAIL_ROUND_COLUMNS, MAIL_ROUND_SQL } from "../desk/mail-round-schema";
+import { MEETING_AFTER_SQL } from "../desk/meeting-after";
 
 const sqlList = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(",");
 
@@ -188,6 +189,7 @@ export const TABLE_NAMES = [
   "desk_mail_rounds",
   "desk_mail_round_queue",
   "desk_mail_round_operations",
+  "desk_meeting_dismissals",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -225,6 +227,7 @@ export const SCHEMA_SQL: string[] = [
   "CREATE INDEX IF NOT EXISTS desk_mail_round_finished ON desk_mail_rounds (status, finished_at)",
   "CREATE TABLE IF NOT EXISTS desk_mail_round_queue (mail_key TEXT PRIMARY KEY, source_id TEXT NOT NULL, account TEXT, message_id TEXT NOT NULL, mail TEXT NOT NULL CHECK(json_valid(mail)), queued_at INTEGER NOT NULL, position INTEGER NOT NULL, put_back INTEGER NOT NULL DEFAULT 0)",
   ...MAIL_ROUND_SQL,
+  ...MEETING_AFTER_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_capability_installs (

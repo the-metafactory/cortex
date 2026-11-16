@@ -28,7 +28,7 @@ const EARLIER = NOW - 3_600_000;
 const iso = (at: number): string => new Date(at).toISOString();
 const WORDING = "A goal's original wording.";
 const DAY_MS = 24 * 3_600_000;
-const WHY_CODES = "ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious".split(" ");
+const WHY_CODES = "ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon meeting.ended reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious".split(" ");
 const LABEL_CODES: readonly string[] = [
   "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "mail.put-away-time",
   "mail.put-away-meeting", "mail.put-away-person", "correction.source", "mail.correction", "mail.sweep-category",
@@ -45,7 +45,7 @@ let ranger: RangerState;
 let rangerServer: ReturnType<typeof Bun.serve>;
 let runtime: DeskRuntime;
 let waiting: Map<string, WaitingTask>;
-let source: { items: SourceMail[]; events: { id: string; title: string; start: string }[] };
+let source: { items: SourceMail[]; events: { id: string; title: string; start: string; end?: string }[] };
 
 beforeEach(() => {
   setSystemTime(NOW);
@@ -124,7 +124,7 @@ function noteRetry(status: "failed" | "done", message: string | null): void {
 
 test("pins the exact Desk phrase vocabulary and its union coverage", () => {
   expect<readonly string[]>(DESK_ITEM_PHRASE_CODES).toEqual([...WHY_CODES, ...LABEL_CODES]);
-  expect<readonly string[]>(DESK_ACT_PHRASE_CODES).toEqual("act.done act.invalid act.forbidden act.unknown-target act.closed-item act.busy act.not-set-up act.unavailable act.duplicate act.method act.failed act.refused mail.moved mail.restored mail.domain-blocked mail.unimportant-moved mail.unimportant-hidden mail.reply-drafted mail.reported mail.correction-recorded mail.corrected mail.swept mail.sweep-undone mail.snoozed mail.snooze-cancelled mail.hidden mail.hide-undone mail.kept mail.unsubscribed mail.unsubscribe-rule-archived mail.dismissed mail.dismissal-undone mail.sender-trusted mail.opened mail.attached mail.attach-undone mail.linked mail.link-undone mail.handed mail.handoff-approved mail.handoff-discarded mail.handoff-retried mail.invite-proposed mail.invite-replied mail.studio-added mail.studio-proposed create.done create.kept autonomy.set handoff.done routine.saved routine.paused routine.resumed routine.removed routine.installed routine.denied routine.approved routine.auto routine.approval routine.discarded studio.done studio.spar-queued ranger.action-done ranger.action-queued mail.put-back mail.put-back-undone mail.put-back-next-round".split(" "));
+  expect<readonly string[]>(DESK_ACT_PHRASE_CODES).toEqual("act.done act.invalid act.forbidden act.unknown-target act.closed-item act.busy act.not-set-up act.unavailable act.duplicate act.method act.failed act.refused mail.moved mail.restored mail.domain-blocked mail.unimportant-moved mail.unimportant-hidden mail.reply-drafted mail.reported mail.correction-recorded mail.corrected mail.swept mail.sweep-undone mail.snoozed mail.snooze-cancelled mail.hidden mail.hide-undone mail.kept mail.unsubscribed mail.unsubscribe-rule-archived mail.dismissed mail.dismissal-undone mail.sender-trusted mail.opened mail.attached mail.attach-undone mail.linked mail.link-undone mail.handed mail.handoff-approved mail.handoff-discarded mail.handoff-retried mail.invite-proposed mail.invite-replied mail.studio-added mail.studio-proposed create.done create.kept autonomy.set handoff.done routine.saved routine.paused routine.resumed routine.removed routine.installed routine.denied routine.approved routine.auto routine.approval routine.discarded studio.done studio.spar-queued ranger.action-done ranger.action-queued mail.put-back mail.put-back-undone mail.put-back-next-round meeting.dismissed".split(" "));
   expect<readonly string[]>(DESK_PHRASE_CODES).toEqual([...DESK_ITEM_PHRASE_CODES, ...DESK_ACT_PHRASE_CODES, ...DESK_BRIEF_PHRASE_CODES]);
   const coversUnion: Exclude<DeskPhrase["code"], typeof DESK_PHRASE_CODES[number]> extends never ? true : never = true;
   expect(coversUnion).toBe(true);
@@ -179,7 +179,7 @@ test("GET /api/desk serves every why phrase code beside its original sentence or
 
   withMail();
   const meetingStart = iso(NOW + 5 * 60_000);
-  source.events = [{ id: "review", title: "Budget review", start: meetingStart }];
+  source.events = [{ id: "review", title: "Budget review", start: meetingStart }, { id: "ended", title: "Budget review", start: iso(NOW - 10 * 60_000), end: iso(NOW - 5 * 60_000) }];
   source.items = [letter("received"), letter("possible", { subject: "Budget review agenda" }), letter("linked"), letter("vip"), letter("ranked"), letter("deadline", { dueAt: iso(NOW + 3_600_000) }), letter("quiet"), letter("precedent"), letter("unsubscribe", { headers: { listUnsubscribe: "<https://lists.example.test/leave>" } }), letter("invite", { invitation: {
     method: "REQUEST", uid: "invitation", sequence: 0, summary: "Invitation content", start: meetingStart,
     organizer: { address: "organizer@example.test" }, attendee: { address: "reader@example.test", status: "NEEDS-ACTION" }, attendees: 2,
@@ -197,6 +197,7 @@ test("GET /api/desk serves every why phrase code beside its original sentence or
   view = await read();
   check(view, `reminder:${reminder.id}`, `You asked to be reminded today at ${clock(NOW - 60_000)}.`, { code: "reminder.due", params: { dueAt: iso(NOW - 60_000) } });
   check(view, `meeting:cal:fixture:review@${NOW + 5 * 60_000}`, "It starts in 5 minutes.", { code: "meeting.soon", params: { startsAt: meetingStart } });
+  check(view, `meeting-after:cal:fixture:ended@${NOW - 10 * 60_000}`, "It ended 5 minutes ago.", { code: "meeting.ended", params: { endedAt: iso(NOW - 5 * 60_000) } });
   check(view, "mail:received", `It arrived today at ${clock(EARLIER)}.`, { code: "mail.received", params: { receivedAt: iso(EARLIER) } });
   expectWhyContent(check(view, "mail:possible", `It may be about "Budget review" today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-possible", params: { meetingStart } }), { meetingTitle: "Budget review" });
   expectWhyContent(check(view, "mail:linked", `${CLASSIFIER_REASON}. The meeting is today at ${clock(Date.parse(meetingStart))}.`, { code: "mail.meeting-linked", params: { meetingStart } }), { reason: CLASSIFIER_REASON, meetingTitle: "Budget review" });

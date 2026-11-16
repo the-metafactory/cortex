@@ -690,7 +690,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/my-day") return handleDeskMyDay(req, db, desk, vigil);
 
-  if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
+  if (pathname === "/api/desk/action") return handleDeskAction(req, desk, { db });
 
   if (pathname === "/api/desk/adapter") return handleDeskAdapterAction(req, desk);
 

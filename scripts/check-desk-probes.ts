@@ -135,6 +135,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-adapter-limits.ts",
   "probe-desk-adapter-packages.ts",
   "probe-desk-adapter-registry.ts",
+  "probe-desk-after-meeting.ts",
   "probe-desk-balance-binding.ts",
   "probe-desk-balance-observation.ts",
   "probe-desk-balance-read.ts",

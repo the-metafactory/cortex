@@ -82,6 +82,9 @@ interface RoundAnswer {
 
 export const readAnswer = async (response: Response): Promise<RoundAnswer> => (await response.json()) as RoundAnswer;
 
+export const postDeskJson = (baseUrl: string, path: string, body: unknown): Promise<Response> =>
+  fetch(`${baseUrl}${path}`, { method: "POST", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify(body) });
+
 export const putBackPayload = (round: { id: string | null; revision: number }, key: string, requestId: string): Record<string, unknown> => ({
   action: "put-back",
   roundId: round.id,

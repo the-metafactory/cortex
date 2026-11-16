@@ -368,6 +368,13 @@ export type DeskPhrase = {
 		startsAt: string;
 	};
 } | {
+	code: "meeting.ended";
+	params: {
+		endedAt: string;
+	};
+} | {
+	code: "meeting.dismissed";
+} | {
 	code: "reminder.due";
 	params?: {
 		dueAt: string;
@@ -1620,6 +1627,7 @@ declare const DESK_ITEM_KINDS: readonly [
 	"mail-junk",
 	"reminder",
 	"meeting",
+	"meeting-after",
 	"mail-rule",
 	"dmarc",
 	"mail-waiting",
