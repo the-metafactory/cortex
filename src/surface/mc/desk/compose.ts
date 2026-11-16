@@ -38,7 +38,7 @@ import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { applyItemDefers, deferredItems } from "./item-defer";
-import { backSnoozes, deferredMail as deferredMailList, hiddenMail, quietSnoozeReturns, snoozeFacts, wakeSnoozes, waitingMailIds, withSnoozeBack } from "./mail-snooze";
+import { newlyUrgentIds, rememberOwnAddresses, backSnoozes, deferredMail as deferredMailList, hiddenMail, quietSnoozeReturns, snoozeFacts, wakeSnoozes, waitingMailIds, withSnoozeBack } from "./mail-snooze";
 import { AUTO_LINK_DONE, backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import { taskHandoffItems, workingHandoffs, type TaskDispatchBus } from "./task-handoff";
@@ -272,6 +272,7 @@ export async function composeDesk(
     return { myDay: readMyDay(db, desk, now, source, projection ?? undefined), studio };
   });
   loseTaskLinks(db, myDay, now);
+  rememberOwnAddresses(db, readings);
   const wakeFacts = snoozeFacts(db, readings, availability);
   wakeSnoozes(db, wakeFacts, now);
   followMeetingLinks(db, wakeFacts, now);
@@ -426,7 +427,7 @@ export async function composeDesk(
   const deferredIds = waitingMailIds(db);
   const deferredReadings = readings.flatMap((r) => r.mail.filter((m) => deferredIds.has(m.id)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const ratedDeferred = deferredReadings.length > 0 ? markInterrupts(mailItems({ ...mailItemOptions(deferredReadings), invitations: new Map() }), rules, readDeliveries(db), now, interruptContext) : [];
-  const urgentIds = new Set(ratedDeferred.filter((item) => item.urgency === "now").map((item) => mailIdOf(item.key)));
+  const urgentIds = newlyUrgentIds(db, new Set(ratedDeferred.filter((item) => item.urgency === "now").map((item) => mailIdOf(item.key))));
   const urgentWoken = new Set(wakeSnoozes(db, { ...wakeFacts, urgentNow: new Set([...urgentIds].map((id) => `mail:${id}`)) }, now));
   const urgentBack = backSnoozes(db, now);
   const urgentCards = ratedDeferred.filter((item) => urgentWoken.has(mailIdOf(item.key))).map((item) => withSnoozeBack(item, urgentBack.get(mailIdOf(item.key))));

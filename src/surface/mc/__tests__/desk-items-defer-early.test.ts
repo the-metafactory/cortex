@@ -53,6 +53,26 @@ describe("an item put away returns early", () => {
     rig.setNow(NOW + 120_000);
     expect((await rig.refresh()).deferred.some((entry) => entry.key === KEY)).toBe(true);
   });
+
+  it("still ignores the principal's own address once the sent history is empty", async () => {
+    const sent = { kind: "sent", id: "sent-1", from: { address: "me@example.org" }, to: [{ address: "priya@example.org" }], subject: "Re", sentAt: new Date(NOW).toISOString() } as never;
+    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), sent] });
+    rig.setNow(NOW + 60_000);
+    await rig.refresh();
+    rig.setState({ mail: [roundMail("early-fixture", NOW - 1000, { subject: "Venue quote" }), reply("reply-own", "me@example.org")] });
+    rig.setNow(NOW + 120_000);
+    expect((await rig.refresh()).deferred.some((entry) => entry.key === KEY)).toBe(true);
+  });
+
+  it("keeps a mail away that was already urgency now when it was put away", async () => {
+    rig.database().query("INSERT INTO desk_deliveries (item_key, transport, status, title, error, created_at, updated_at) VALUES (?, 'fixture', 'failed', 'Venue quote', 'fixture failure', ?, ?)").run(KEY, NOW - 500, NOW - 500);
+    await rig.defer({ action: "defer.cancel", key: KEY });
+    expect((await rig.defer({ action: "defer", key: KEY, until: { kind: "next-week" } })).status).toBe(200);
+    rig.setNow(NOW + 120_000);
+    const view = await rig.refresh();
+    expect(view.deferred.some((entry) => entry.key === KEY)).toBe(true);
+    expect(view.items.some((entry) => entry.key === KEY)).toBe(false);
+  });
 });
 
 const waiting = (over: Partial<SnoozeRow> = {}): SnoozeRow => ({ ...EMPTY_ROW, createdAt: NOW, untilAt: NOW + 10 * 86_400_000, ...over });

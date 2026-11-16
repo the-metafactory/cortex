@@ -37,7 +37,10 @@ export async function handleDeskItemsDefer(req: Request, db: Database, runtime: 
   const readings = runtime.sourceCache?.cached() ?? [];
   const listed = resolveListedMail(readings, body.key);
   if (!listed.ok) return failResponse(listed.reason === "unlisted" ? 400 : 409, listed.error);
-  return answer(snoozeMail(db, listed.mail, body.until, { now: (runtime.now ?? Date.now)(), readings }));
+  const now = (runtime.now ?? Date.now)();
+  const desk = runtime.options;
+  const rated = desk ? (await composeCurrentDay(db, runtime, desk, vigil, now)).items.find((entry) => entry.key === body.key) : undefined;
+  return answer(snoozeMail(db, listed.mail, body.until, { now, readings, ...(rated ? { urgentAtDefer: rated.urgency === "now" } : {}) }));
 }
 
 async function deferWorkItem(body: z.infer<typeof DeferRequestSchema>, db: Database, runtime: DeskRuntime, vigil: DeskVigilSource | undefined): Promise<Response> {

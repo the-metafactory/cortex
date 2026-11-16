@@ -127,7 +127,10 @@ export function readingEvents(readings: readonly SourceReading[]): Map<string, S
 /** The facts the wake evaluation reads from the readings, the calendar coverage and the reply index. */
 export function snoozeFacts(db: Database, readings: readonly SourceReading[], availability: CalendarAvailability | undefined, urgentNow: ReadonlySet<string> = new Set()): WakeFacts {
   const mail = readings.filter((r) => r.error === null).flatMap((r) => r.mail);
-  const own = new Set(readings.flatMap((r) => (r.sent ?? []).map((s) => s.from.address.toLowerCase())));
+  const own = new Set([
+    ...readings.flatMap((r) => (r.sent ?? []).map((s) => s.from.address.toLowerCase())),
+    ...db.query<{ address: string }, []>("SELECT address FROM desk_own_addresses").all().map((r) => r.address),
+  ]);
   const isOwn = (address: string): boolean => own.has(address.toLowerCase());
   return {
     urgentNow,
@@ -202,6 +205,25 @@ export function readSnoozes(db: Database, state?: SnoozeState): SnoozeRow[] {
 export function readSnooze(db: Database, messageId: string): SnoozeRow | null {
   const r = db.query<Raw, [string]>("SELECT * FROM desk_mail_snoozes WHERE message_id = ?").get(messageId);
   return r ? rowOf(r) : null;
+}
+
+/** Remembers the addresses the principal sent from, so a thread reply from them is recognised when the sent window is empty. */
+export function rememberOwnAddresses(db: Database, readings: readonly SourceReading[]): void {
+  for (const r of readings) {
+    for (const s of r.sent ?? []) db.query("INSERT OR IGNORE INTO desk_own_addresses (address) VALUES (?)").run(s.from.address.toLowerCase());
+  }
+}
+
+/** Marks each snoozed mail not yet rated with whether it was already urgency now, and returns the ids whose urgency now is news: rated urgent after a rating below now. */
+export function newlyUrgentIds(db: Database, urgentIds: ReadonlySet<string>): Set<string> {
+  const fresh = new Set<string>();
+  db.transaction(() => {
+    for (const row of db.query<{ message_id: string; urgent_at_defer: number | null }, []>("SELECT message_id, urgent_at_defer FROM desk_mail_snoozes WHERE state = 'snoozed' AND kind <> 'hidden'").all()) {
+      if (row.urgent_at_defer === null) db.query("UPDATE desk_mail_snoozes SET urgent_at_defer = ? WHERE message_id = ?").run(urgentIds.has(row.message_id) ? 1 : 0, row.message_id);
+      else if (row.urgent_at_defer === 0 && urgentIds.has(row.message_id)) fresh.add(row.message_id);
+    }
+  })();
+  return fresh;
 }
 
 /** Wakes every snooze whose condition happened, follows a moved meeting, and forgets old rows. Returns the woken message ids. */
@@ -280,22 +302,22 @@ export function resolveSnoozeChoice(choice: SnoozeChoice, ctx: { now: number; ev
   return { ...none, kind: "time", untilAt: at, label: `until ${snoozeWhen(at, ctx.now)}` };
 }
 
-function insertSnooze(db: Database, mail: ListedMail, resolved: Resolved, now: number): void {
+function insertSnooze(db: Database, mail: ListedMail, resolved: Resolved, now: number, urgentAtDefer: boolean | null = null): void {
   db.query(
-    `INSERT INTO desk_mail_snoozes (message_id, source_id, sender, subject, kind, until_at, event_key, event_title, event_start, person, person_name, label, state, back_at, reason, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'snoozed', NULL, NULL, ?)
+    `INSERT INTO desk_mail_snoozes (message_id, source_id, sender, subject, kind, until_at, event_key, event_title, event_start, person, person_name, label, state, back_at, reason, created_at, urgent_at_defer)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'snoozed', NULL, NULL, ?, ?)
      ON CONFLICT(message_id) DO UPDATE SET source_id = excluded.source_id, sender = excluded.sender, subject = excluded.subject, kind = excluded.kind, until_at = excluded.until_at,
        event_key = excluded.event_key, event_title = excluded.event_title, event_start = excluded.event_start, person = excluded.person, person_name = excluded.person_name,
-       label = excluded.label, state = 'snoozed', back_at = NULL, reason = NULL, created_at = excluded.created_at`,
-  ).run(mail.id, mail.sourceId, mail.from.address.toLowerCase(), mail.subject.slice(0, 300), resolved.kind, resolved.untilAt, resolved.eventKey, resolved.eventTitle, resolved.eventStart, resolved.person, resolved.personName, resolved.label, now);
+       label = excluded.label, state = 'snoozed', back_at = NULL, reason = NULL, created_at = excluded.created_at, urgent_at_defer = excluded.urgent_at_defer`,
+  ).run(mail.id, mail.sourceId, mail.from.address.toLowerCase(), mail.subject.slice(0, 300), resolved.kind, resolved.untilAt, resolved.eventKey, resolved.eventTitle, resolved.eventStart, resolved.person, resolved.personName, resolved.label, now, urgentAtDefer === null ? null : urgentAtDefer ? 1 : 0);
 }
 
-export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice, ctx: { now: number; readings: readonly SourceReading[] }): SnoozeResult {
+export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice, ctx: { now: number; readings: readonly SourceReading[]; urgentAtDefer?: boolean }): SnoozeResult {
   const names = new Map(ctx.readings.flatMap((r) => r.mail.flatMap((m): [string, string][] => (m.from.name ? [[m.from.address.toLowerCase(), m.from.name]] : []))));
   const resolved = resolveSnoozeChoice(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
   if (typeof resolved === "string") return refuse(409, resolved);
   const features = mailFeatures(db, mail);
-  insertSnooze(db, mail, resolved, ctx.now);
+  insertSnooze(db, mail, resolved, ctx.now, ctx.urgentAtDefer ?? null);
   logMailDecision(db, features, "snooze", "desk", ctx.now);
   return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. Its read status in your mail stays unchanged.`, until: resolved.label, untilIso: resolved.untilAt === null ? null : new Date(resolved.untilAt).toISOString(), labelPhrase: putAwayPhrase(resolved) };
 }
