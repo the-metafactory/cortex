@@ -7,6 +7,8 @@ import {
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
 import { ConversationResponseUpdateSchema, laneName, type Organize, type SourceView } from "../../../../conversations/types";
+import { CodexReconnect } from "./desk-codex-reconnect";
+import { CODEX_SIGN_IN_NEEDED } from "../../../../conversations/codex-auth-contract";
 import { CreationPanel } from "./desk-conversation-create";
 import { DeskMakePanel } from "./desk-draft-editor";
 import { EMPTY_TRANSCRIPT, transcriptReducer } from "../lib/conversation-stream";
@@ -307,7 +309,8 @@ export function WorkspaceView(c: WorkspaceProps) {
         if (view.kind === "activity") return <p key={key} className="dcv-activity">{view.text}</p>;
         const retry = i === views.length - 1 && !archived && !c.busy && said?.text;
         return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.
-          {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => { c.onRetry(said.text ?? ""); }}>Retry</button>}</p>;
+          {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => { c.onRetry(said.text ?? ""); }}>Retry</button>}
+          {retry && view.text.includes(CODEX_SIGN_IN_NEEDED) && <CodexReconnect />}</p>;
       })}
       {c.liveText && <article className="dcv-msg assistant" aria-label={`${name} is answering`}><small>{name} · answering…</small><AssistantAnswer text={c.liveText} /></article>}
       {c.busy && <div className="dcv-waiting" role="status" aria-label={`${name} is working`}><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div>}
