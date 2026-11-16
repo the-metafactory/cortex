@@ -41,7 +41,7 @@ export type SnoozeEvent = FollowedEvent;
 
 export interface WakeFacts extends EventFacts {
   wrote: (person: string, since: number, except: string) => { name?: string; subject?: string } | null;
-  threadReply: (messageId: string, since: number) => { name?: string; subject?: string } | null;
+  conversationReply: (messageId: string, since: number) => { name?: string; subject?: string } | null;
   urgentNow: ReadonlySet<string>;
 }
 
@@ -62,13 +62,13 @@ export const URGENT_NOW_REASON = "it is urgent now";
 function earlyWake(row: SnoozeRow, facts: WakeFacts, key: string, mailRow: boolean): WakeDecision | null {
   if (facts.urgentNow.has(key)) return { kind: "back", reason: URGENT_NOW_REASON };
   if (!mailRow) return null;
-  const wrote = facts.threadReply(row.messageId, row.createdAt);
+  const wrote = facts.conversationReply(row.messageId, row.createdAt);
   if (!wrote) return null;
   const who = wrote.name ?? row.sender;
   return { kind: "back", reason: `${who} wrote again: ${quoted(wrote.subject ?? row.subject)}` };
 }
 
-/** Whether a snooze is over, over fixture-able facts: the time passed, the meeting ended or can no longer happen, the person wrote after the snooze, or it ended early (see earlyWake). `key` is the Desk item key; a mail row's is its message id. */
+/** Whether a snooze is over, over fixture-able facts: the time passed, the meeting ended or can no longer happen, the person wrote after the snooze, or it ended early (see earlyWake). `key` is the Desk item key; a mail row's is its mail id. */
 export function wakeOf(row: SnoozeRow, facts: WakeFacts, now: number, key: string | null = null): WakeDecision {
   if (row.kind === "hidden") return { kind: "wait" };
   const decision = scheduledWake(row, facts, now);
@@ -134,11 +134,11 @@ export function snoozeFacts(db: Database, readings: readonly SourceReading[], av
   const isOwn = (address: string): boolean => own.has(address.toLowerCase());
   return {
     urgentNow,
-    threadReply: (messageId, since) => {
+    conversationReply: (messageId, since) => {
       const source = mail.find((m) => m.id === messageId);
-      const thread = new Set([messageId, ...(source ? parentsOf(source.headers?.inReplyTo, source.headers?.references) : [])]);
+      const conversation = new Set([messageId, ...(source ? parentsOf(source.headers?.inReplyTo, source.headers?.references) : [])]);
       const listed = mail
-        .filter((m) => m.id !== messageId && !isOwn(m.from.address) && Date.parse(m.receivedAt) >= since && parentsOf(m.headers?.inReplyTo, m.headers?.references).some((p) => thread.has(p)))
+        .filter((m) => m.id !== messageId && !isOwn(m.from.address) && Date.parse(m.receivedAt) >= since && parentsOf(m.headers?.inReplyTo, m.headers?.references).some((p) => conversation.has(p)))
         .sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))[0];
       if (listed) return { ...(listed.from.name ? { name: listed.from.name } : {}), subject: listed.subject };
       const threaded = db
@@ -207,7 +207,7 @@ export function readSnooze(db: Database, messageId: string): SnoozeRow | null {
   return r ? rowOf(r) : null;
 }
 
-/** Remembers the addresses the principal sent from, so a thread reply from them is recognised when the sent window is empty. */
+/** Remembers the addresses the principal sent from, so a conversation reply from them is recognised when the sent window is empty. */
 export function rememberOwnAddresses(db: Database, readings: readonly SourceReading[]): void {
   for (const r of readings) {
     for (const s of r.sent ?? []) db.query("INSERT OR IGNORE INTO desk_own_addresses (address) VALUES (?)").run(s.from.address.toLowerCase());
@@ -226,7 +226,7 @@ export function newlyUrgentIds(db: Database, urgentIds: ReadonlySet<string>): Se
   return fresh;
 }
 
-/** Wakes every snooze whose condition happened, follows a moved meeting, and forgets old rows. Returns the woken message ids. */
+/** Wakes every snooze whose condition happened, follows a moved meeting, and forgets old rows. Returns the woken mail ids. */
 export function wakeSnoozes(db: Database, facts: WakeFacts, now: number): string[] {
   const woken: string[] = [];
   db.transaction(() => {

@@ -431,7 +431,7 @@ export async function composeDesk(
   const urgentWoken = new Set(wakeSnoozes(db, { ...wakeFacts, urgentNow: new Set([...urgentIds].map((id) => `mail:${id}`)) }, now));
   const urgentBack = backSnoozes(db, now);
   const urgentCards = ratedDeferred.filter((item) => urgentWoken.has(mailIdOf(item.key))).map((item) => withSnoozeBack(item, urgentBack.get(mailIdOf(item.key))));
-  const corrected = applyItemDefers(db, applyCorrections(quietAdapterInterrupts([...quietSnoozeReturns(markInterrupts([
+  const rated = markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ ...mailItemOptions(withoutAnsweredRead(mail, answers)), invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
@@ -444,7 +444,9 @@ export async function composeDesk(
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantName),
     ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
-  ], rules, readDeliveries(db), now, interruptContext), backSnoozes(db, now)), ...urgentCards], availability, now), activeCorrections), wakeFacts, now, unreadableDeferKinds);
+  ], rules, readDeliveries(db), now, interruptContext);
+  const withReturns = quietAdapterInterrupts([...quietSnoozeReturns(rated, backSnoozes(db, now)), ...urgentCards], availability, now);
+  const corrected = applyItemDefers(db, applyCorrections(withReturns, activeCorrections), wakeFacts, now, unreadableDeferKinds);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));

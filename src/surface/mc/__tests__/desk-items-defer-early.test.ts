@@ -4,7 +4,7 @@ import { backLine, wakeOf, URGENT_NOW_REASON, type SnoozeRow, type WakeFacts } f
 
 const NOW = roundAt(16, 10);
 const EMPTY_ROW: SnoozeRow = { messageId: "m1", sourceId: null, sender: "priya@example.org", subject: "Venue quote", kind: "time", untilAt: null, eventKey: null, eventTitle: null, eventStart: null, person: null, personName: null, label: "", state: "snoozed", backAt: null, reason: null, createdAt: 0 };
-const NO_FACTS: WakeFacts = { events: new Map(), covered: () => false, wrote: () => null, threadReply: () => null, urgentNow: new Set() };
+const NO_FACTS: WakeFacts = { events: new Map(), covered: () => false, wrote: () => null, conversationReply: () => null, urgentNow: new Set() };
 const KEY = "mail:early-fixture";
 const SENT_BY_ME = { kind: "sent", id: "sent-1", from: { address: "me@example.org" }, to: [{ address: "priya@example.org" }], subject: "Re", sentAt: new Date(NOW).toISOString() } as never;
 
@@ -81,7 +81,7 @@ const knowing = (over: Partial<WakeFacts> = {}): WakeFacts => ({ ...NO_FACTS, ..
 
 describe("wakeOf early facts", () => {
   it("wakes on a thread reply and names the sender and subject", () => {
-    expect(wakeOf(waiting(), knowing({ threadReply: () => ({ name: "Priya", subject: "Re: Venue" }) }), NOW)).toEqual({ kind: "back", reason: "Priya wrote again: “Re: Venue”" });
+    expect(wakeOf(waiting(), knowing({ conversationReply: () => ({ name: "Priya", subject: "Re: Venue" }) }), NOW)).toEqual({ kind: "back", reason: "Priya wrote again: “Re: Venue”" });
   });
   it("wakes any item rated urgency now and names why", () => {
     const decision = wakeOf(waiting({ messageId: "reminder:1" }), knowing({ urgentNow: new Set(["reminder:1"]) }), NOW, "reminder:1");
@@ -89,6 +89,6 @@ describe("wakeOf early facts", () => {
     expect(backLine(waiting({ reason: URGENT_NOW_REASON, kind: "time", untilAt: null }), NOW)).toBe("Back because it is urgent now.");
   });
   it("lets a non-mail item ignore thread facts", () => {
-    expect(wakeOf(waiting(), knowing({ threadReply: () => ({}) }), NOW, "reminder:1")).toEqual({ kind: "wait" });
+    expect(wakeOf(waiting(), knowing({ conversationReply: () => ({}) }), NOW, "reminder:1")).toEqual({ kind: "wait" });
   });
 });
