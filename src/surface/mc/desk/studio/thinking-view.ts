@@ -1,11 +1,7 @@
 import type { AreaPolicy } from "../types";
 import type { StudioThreadView, StudioView } from "./view";
-
-export type ThinkingBudget = "open" | "spent" | "off";
-
-export type ThreadThinking =
-  | { kind: "unavailable"; reason: string }
-  | { kind: "ready"; budget: ThinkingBudget; reason: string | null; runs: { id: string; mode: string; status: "pending" | "failed"; reason: string }[] };
+import type { ThinkingBudget, ThreadThinking } from "../../../../desk-api/wire/studio";
+export type { ThreadThinking };
 
 const BUDGET_REASON: Record<ThinkingBudget, (policy: AreaPolicy) => string | null> = {
   open: () => null,

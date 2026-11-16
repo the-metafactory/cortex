@@ -1,9 +1,8 @@
 import { DAY_MS, startOfDay } from "./time";
+import type { DeadlineSource } from "../../../desk-api/wire/types";
 
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
-
-export type DeadlineSource = "source" | "classifier";
 
 /** The local day a deadline falls on (its midnight), or null when the value is neither a date nor a date-time with an offset. */
 export function deadlineDay(dueAt: string): number | null {

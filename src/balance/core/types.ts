@@ -1,17 +1,6 @@
-export type NodeId = string;
-export type Effort = 1 | 2 | 4;
-export interface Recurrence {
-    unit: "day" | "week" | "month";
-    interval: number;
-    weekdays?: number[];
-    count?: number;
-    until?: string;
-    timesDone?: number;
-    mode?: RecurrenceMode;
-    anchor?: string;
-    occurrence?: string;
-}
-export type RecurrenceMode = "calendar" | "completion";
+import type { NodeId, Effort, Recurrence, RecurrenceMode, OutlineNode, TodayItem } from "../../desk-api/wire/balance";
+export type { NodeId, Effort, Recurrence, RecurrenceMode, OutlineNode, TodayItem };
+
 export interface RecurrenceOutcome {
     taskId: NodeId;
     planned: string;
@@ -19,32 +8,6 @@ export interface RecurrenceOutcome {
     completedOn?: string;
     skippedOn?: string;
     recordedOn: string;
-}
-export interface OutlineNode {
-    id: NodeId;
-    title: string;
-    weight: number;
-    ordering: "parallel" | "sequential";
-    children: OutlineNode[];
-    note?: string;
-    done?: boolean;
-    completedAt?: string;
-    createdAt?: string;
-    touchedAt?: string;
-    effort?: Effort;
-    estimateMinutes?: number;
-    dueDate?: string;
-    leadDays?: number;
-    startDate?: string;
-    deferredUntil?: string;
-    focusMonth?: string;
-    repeat?: Recurrence;
-    context?: string;
-    external?: {
-        source: string;
-        url?: string;
-        syncedAt: string;
-    };
 }
 export interface CompletionEvent {
     taskId: NodeId;
@@ -80,17 +43,6 @@ export interface DayState {
     date: string;
     confirmed: NodeId[];
     closed: boolean;
-}
-export interface TodayItem {
-    task: OutlineNode;
-    areaId: NodeId;
-    areaTitle: string;
-    path: string[];
-    context?: string;
-    score: number;
-    urgency: number;
-    reason: "due" | "balance" | "focus";
-    trace: string;
 }
 export interface ContextHours {
     days: number[];

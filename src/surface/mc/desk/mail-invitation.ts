@@ -16,57 +16,17 @@ import { clock, DAY_MS, localDay, startOfDay } from "./time";
 import { DEFAULT_SLOTS, type InvitationSlotsConfig, type InvitationsConfig, type InviteReply, type InviteStatus } from "./mail-invitation-schema";
 
 export { DEFAULT_SLOTS, INVITATIONS_SQL, INVITE_REPLIES, type InvitationsConfig, type InviteReply } from "./mail-invitation-schema";
+import type { InvitationConflict, ConflictCheck, InvitationDecision, InvitationView } from "../../../desk-api/wire/mail";
+export type { InvitationDecision, InvitationView };
 
 const HOUR_MS = 3_600_000;
 const STEP_MS = 30 * 60_000;
 const MAX_CONFLICTS = 5;
 const PER_DAY = 2;
 
-export interface InvitationConflict {
-  title: string;
-  at: number;
-  end?: number;
-  calendar: string;
-  maybe: boolean;
-}
-
-export type ConflictCheck =
-  | { kind: "clear" }
-  | { kind: "conflicts"; events: InvitationConflict[] }
-  | { kind: "unknown"; reasons: string[] };
-
 export interface Slot {
   at: number;
   end: number;
-}
-
-export interface InvitationDecision {
-  reply: InviteReply;
-  status: InviteStatus;
-  at: number;
-  fallsAway: string | null;
-  result: string | null;
-  calendar: string | null;
-}
-
-export interface InvitationView {
-  uid: string;
-  summary: string;
-  when: string;
-  startIso: string;
-  endIso: string;
-  start: string;
-  end?: string;
-  allDay?: boolean;
-  location?: string;
-  organizer: string;
-  recurring?: boolean;
-  status?: string;
-  attendee: boolean;
-  conflicts: ConflictCheck;
-  conflictLine: string;
-  canReply: boolean;
-  decision?: InvitationDecision;
 }
 
 export const invitationSpan = (inv: Pick<MailInvitation, "start" | "end" | "allDay">): Slot => {

@@ -2,32 +2,10 @@ import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { gitlabIssueRef } from "../adapters/gitlab/fetch";
 import { DAY_MS, startOfDay } from "./time";
+import type { DecisionAction, DecisionOutcomeState, DeskDecision } from "../../../desk-api/wire/decisions";
 
 export const DECISION_RETENTION_MS = 90 * DAY_MS;
 const MAX_DETAIL = 300;
-
-export type DecisionAction = "ranger.rule" | "ranger.approve" | "ranger.retry" | "ranger.run-now";
-
-type DecisionOutcomeState = "not-requested" | "pending" | "accepted" | "queued" | "failed";
-
-export interface DecisionOutcome {
-  state: DecisionOutcomeState;
-  detail: string | null;
-  at: number;
-}
-
-export interface DeskDecision {
-  id: string;
-  key: string;
-  title: string;
-  target: { repo: string; nodeId: string; link: string | null };
-  action: DecisionAction;
-  text: string | null;
-  decidedAt: number;
-  outcome: DecisionOutcome;
-  withdrawable: false;
-  supersededBy: { id: string; decidedAt: number } | null;
-}
 
 interface DecisionInput {
   operationKey: string;

@@ -2,9 +2,8 @@ import type { Database } from "bun:sqlite";
 import { HOST_NAME_RE as HOST } from "../../../common/host-name";
 import type { SourceMail } from "./sources/command";
 import { isVip, listVips } from "./vips";
-
-export const SUSPICION_CODES = ["dmarc", "spf", "dkim", "reply-to", "display-name", "link", "classifier"] as const;
-export type SuspicionCode = (typeof SUSPICION_CODES)[number];
+import type { SuspicionCode } from "../../../desk-api/wire/mail";
+export type { SuspicionCode };
 
 export interface SuspicionReason {
   code: SuspicionCode;

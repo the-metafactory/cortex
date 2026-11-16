@@ -1,8 +1,7 @@
-export const RULE_MATCHES = ["sender", "domain", "list", "subject"] as const;
-export type RuleMatch = (typeof RULE_MATCHES)[number];
-
-export const RULE_ACTIONS = ["archive", "junk", "trash", "digest", "attach"] as const;
-export type RuleAction = (typeof RULE_ACTIONS)[number];
+import { RULE_MATCHES, RULE_ACTIONS } from "../../../desk-api/wire/mail";
+import type { RuleMatch, RuleAction, RuleTarget } from "../../../desk-api/wire/mail";
+export { RULE_MATCHES, RULE_ACTIONS };
+export type { RuleMatch, RuleAction, RuleTarget };
 
 export const RULE_STATES = ["on", "off"] as const;
 export type RuleState = (typeof RULE_STATES)[number];
@@ -58,16 +57,6 @@ export const MAIL_RULES_SQL = [
   "CREATE INDEX IF NOT EXISTS desk_mail_rule_runs_rule ON desk_mail_rule_runs (rule_id, created_at)",
   "CREATE INDEX IF NOT EXISTS desk_mail_rule_runs_time ON desk_mail_rule_runs (created_at)",
 ];
-
-export const RULE_TARGET_KINDS = ["task", "thread"] as const;
-export type RuleTargetKind = (typeof RULE_TARGET_KINDS)[number];
-
-/** Where an attach rule puts matching mail: a fixed task or Studio thread. */
-export interface RuleTarget {
-  kind: RuleTargetKind;
-  key: string;
-  title: string;
-}
 
 export const RULE_TARGET_COLUMNS = [
   { table: "desk_mail_rules", column: "target_kind", ddl: "ALTER TABLE desk_mail_rules ADD COLUMN target_kind TEXT" },

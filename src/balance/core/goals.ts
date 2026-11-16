@@ -1,6 +1,8 @@
 import { required } from "./required";
 import { type AppState, type CompletionEvent, type OutlineNode, FOCUS_BOOST, MAX_FOCUS_PER_MONTH, } from "./types";
 import { collectLeaves, focusContainment, monthOf } from "./scheduler";
+import type { AreaReview, CompletionReview } from "../../desk-api/wire/balance";
+export type { AreaReview, CompletionReview };
 export interface StreakInfo {
     current: number;
     showedUpLast7: number;
@@ -55,27 +57,6 @@ export function validateFocusChange(root: OutlineNode, nodeId: string, month: st
         return `A month holds at most ${MAX_FOCUS_PER_MONTH} focus projects — drop one first. (That limit is the feature.)`;
     }
     return null;
-}
-export interface AreaReview {
-    areaId: string;
-    areaTitle: string;
-    targetShare: number;
-    actualShare: number;
-    completions: number;
-}
-export interface CompletionReview {
-    wins: {
-        title: string;
-        date: string;
-        areaTitle: string;
-    }[];
-    areas: AreaReview[];
-    focus: {
-        title: string;
-        done: number;
-        total: number;
-    }[];
-    totalCompletions: number;
 }
 export function completionReview(state: AppState, events: CompletionEvent[], month: string): CompletionReview {
     const { outline } = state;

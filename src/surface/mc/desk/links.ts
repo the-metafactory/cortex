@@ -8,7 +8,9 @@ import { snoozeWhen } from "./mail-snooze-schema";
 import { DAY_MS } from "./time";
 import type { LinkReceipt, DeskLinkView, LinkFromKind, LinkOrigin, LinkRow, LinkState, LinkToKind, MailSnapshot } from "./links-schema";
 
-export { LINKS_SQL, type LinkReceipt, type DeskLinkView, type LinkRow, type MailSnapshot } from "./links-schema";
+export { LINKS_SQL, type LinkReceipt, type LinkRow, type MailSnapshot } from "./links-schema";
+import type { EventLink } from "../../../desk-api/wire/links";
+export type { EventLink };
 
 interface Raw {
   id: string;
@@ -88,14 +90,6 @@ const nodeIn = (day: OutlineDay, id: string): OutlineNode | null => {
 export function taskLinks(db: Database, day: OutlineDay): DeskLinkView[] {
   const kept = (r: LinkRow): boolean => (r.toKind !== "task" || nodeIn(day, r.toKey) !== null) && (r.fromKind !== "task" || nodeIn(day, taskIdOf(r.fromKey)) !== null);
   return rows(db, "state = 'linked' AND (to_kind = 'task' OR from_kind = 'task')").filter(kept).map(viewOf);
-}
-
-export interface EventLink {
-  id: string;
-  kind: LinkFromKind;
-  key: string;
-  title: string;
-  origin: LinkOrigin;
 }
 
 const MEETING_LINKED = "state = 'linked' AND to_kind = 'meeting' AND (to_end IS NULL OR to_end >= ?)";

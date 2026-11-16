@@ -1,7 +1,6 @@
 import { DEFAULT_YES_FILTER } from "../yes-filter";
 import type { StudioThinking } from "./thinking";
-import type { ThreadThinking } from "./thinking-view";
-import { sparPersonas, type SparPersona } from "./relates";
+import { sparPersonas } from "./relates";
 import type { AreaPolicy, DeskArea, StudioOptions } from "../types";
 import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioCapture, type StudioProposal, type StudioTarget, type StudioThread } from "./format";
 
@@ -23,19 +22,13 @@ export interface StudioProblem {
   reason: string;
 }
 
-export interface StudioThreadView extends StudioThread {
-  policy: AreaPolicy;
-  place?: number;
-  overCap: boolean;
-  personas: SparPersona[];
-  thinking?: ThreadThinking;
-}
-
 export interface StudioProposalView extends StudioProposal {
   policy: AreaPolicy;
 }
 
 export { DEFAULT_YES_FILTER } from "../yes-filter";
+import type { StudioThreadView } from "../../../../desk-api/wire/studio";
+export type { StudioThreadView };
 
 export interface YesFilter {
   questions: string[];

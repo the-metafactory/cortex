@@ -1,8 +1,7 @@
-export const MAIL_LOG_ACTIONS = ["archive", "junk", "trash", "restore", "unimportant", "draft", "plan", "todo", "snooze", "opened", "ignored", "kept", "gone", "digest", "unsubscribe", "expect-answer", "no-answer", "waiting-done", "studio", "assistant", "accept", "decline", "not-phishing", "attach"] as const;
-export type MailLogAction = (typeof MAIL_LOG_ACTIONS)[number];
-
-export const MAIL_LOG_WHERE = ["desk", "client", "rule", "correction", "conversation", "auto"] as const;
-export type MailLogWhere = (typeof MAIL_LOG_WHERE)[number];
+import { MAIL_LOG_ACTIONS, MAIL_LOG_WHERE } from "../../../desk-api/wire/mail";
+import type { MailLogAction, MailLogWhere } from "../../../desk-api/wire/mail";
+export { MAIL_LOG_ACTIONS, MAIL_LOG_WHERE };
+export type { MailLogAction, MailLogWhere };
 
 export const PRINCIPAL_ACTED_WHERE: ReadonlySet<MailLogWhere> = new Set<MailLogWhere>(["desk", "client", "conversation"]);
 
