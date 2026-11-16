@@ -223,7 +223,7 @@ const ADDRESS_RE = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
 
 type Resolved = Pick<SnoozeRow, "kind" | "untilAt" | "eventKey" | "eventTitle" | "eventStart" | "person" | "personName" | "label">;
 
-function resolve(choice: SnoozeChoice, ctx: { now: number; events: ReadonlyMap<string, SnoozeEvent>; names: ReadonlyMap<string, string> }): Resolved | string {
+export function resolveSnoozeChoice(choice: SnoozeChoice, ctx: { now: number; events: ReadonlyMap<string, SnoozeEvent>; names: ReadonlyMap<string, string> }): Resolved | string {
   const none = { eventKey: null, eventTitle: null, eventStart: null, person: null, personName: null };
   if (choice.kind === "meeting") {
     const event = ctx.events.get(choice.event);
@@ -255,7 +255,7 @@ function insertSnooze(db: Database, mail: ListedMail, resolved: Resolved, now: n
 
 export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice, ctx: { now: number; readings: readonly SourceReading[] }): SnoozeResult {
   const names = new Map(ctx.readings.flatMap((r) => r.mail.flatMap((m): [string, string][] => (m.from.name ? [[m.from.address.toLowerCase(), m.from.name]] : []))));
-  const resolved = resolve(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
+  const resolved = resolveSnoozeChoice(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
   if (typeof resolved === "string") return refuse(409, resolved);
   const features = mailFeatures(db, mail);
   insertSnooze(db, mail, resolved, ctx.now);

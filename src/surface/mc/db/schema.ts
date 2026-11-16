@@ -15,6 +15,7 @@ import { MAIL_JUDGEMENT_SQL } from "../desk/mail-judgement-schema";
 import { WAITING_SQL } from "../desk/mail-waiting-schema";
 import { HANDOFF_COLUMNS, HANDOFF_SQL } from "../desk/mail-handoff-schema";
 import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
+import { ITEM_DEFER_SQL } from "../desk/item-defer-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
 import { INTERRUPT_SWITCHES_SQL } from "../desk/interrupt-switches";
 import { LINKS_SQL } from "../desk/links-schema";
@@ -215,6 +216,7 @@ export const SCHEMA_SQL: string[] = [
   ...TASK_HANDOFF_SQL,
   ...INVITATIONS_SQL,
   ...SNOOZE_SQL,
+  ...ITEM_DEFER_SQL,
   ...INTERRUPT_SWITCHES_SQL,
   ...LINKS_SQL,
   ...MEETING_BRIEF_SQL,

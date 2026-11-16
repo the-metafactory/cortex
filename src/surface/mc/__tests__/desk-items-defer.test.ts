@@ -10,9 +10,7 @@ import { openMailRoundRig, roundAt, roundEvent, roundMail, type MailRoundRig } f
 const NOW = roundAt(16, 10);
 let rig: MailRoundRig;
 
-const post = (body: unknown): Promise<Response> => fetch(`${rig.baseUrl()}/api/desk/items/defer`, {
-  method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body),
-});
+const post = (body: unknown): Promise<Response> => rig.defer(body);
 
 beforeEach(async () => {
   rig = await openMailRoundRig(NOW, { mailDigest: undefined, mailInvitations: undefined });

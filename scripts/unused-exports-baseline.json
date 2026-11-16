@@ -626,7 +626,7 @@
   "src/surface/mc/desk/mail-rules.ts": 9,
   "src/surface/mc/desk/mail-similar.ts": 8,
   "src/surface/mc/desk/mail-snooze-schema.ts": 1,
-  "src/surface/mc/desk/mail-snooze.ts": 7,
+  "src/surface/mc/desk/mail-snooze.ts": 5,
   "src/surface/mc/desk/mail-studio.ts": 2,
   "src/surface/mc/desk/mail-suspicion.ts": 1,
   "src/surface/mc/desk/mail-sweep.ts": 3,

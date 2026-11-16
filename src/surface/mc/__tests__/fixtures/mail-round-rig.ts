@@ -26,6 +26,7 @@ export interface MailRoundRig {
   refresh: () => Promise<DeskView>;
   post: (body: unknown) => Promise<Response>;
   postRound: (body: unknown) => Promise<Response>;
+  defer: (body: unknown) => Promise<Response>;
   reopen: () => void;
   close: () => Promise<void>;
 }
@@ -157,6 +158,7 @@ export async function openMailRoundRig(now: number, overrides: Partial<DeskOptio
     },
     post: async (body) => fetch(`${rig.baseUrl()}/api/desk/mail`, { method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body) }),
     postRound: async (body) => fetch(`${rig.baseUrl()}/api/desk/mail/round`, { method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body) }),
+    defer: async (body) => fetch(`${rig.baseUrl()}/api/desk/items/defer`, { method: "POST", headers: { "content-type": "application/json", origin: rig.baseUrl() }, body: JSON.stringify(body) }),
     reopen: () => {
       ctx.stop(true);
       db.close();

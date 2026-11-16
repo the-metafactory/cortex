@@ -35,6 +35,7 @@ import { AHEAD_DAYS, TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
+import { applyItemDefers, deferredItems } from "./item-defer";
 import { backSnoozes, deferredMail, hiddenMail, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
 import { AUTO_LINK_DONE, backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
@@ -414,7 +415,7 @@ export async function composeDesk(
     handoff: handoffReady(desk, handing),
     unsubscribe,
   });
-  const corrected = applyCorrections(quietAdapterInterrupts([...markInterrupts([
+  const corrected = applyItemDefers(db, applyCorrections(quietAdapterInterrupts([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ ...mailItemOptions(withoutAnsweredRead(mail, answers)), invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now, assistantName), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
@@ -426,7 +427,7 @@ export async function composeDesk(
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now, assistantName),
     ...(desk.dispatch ? taskHandoffItems(taskHandoffs, desk.dispatch, now) : []),
     ...adapterRows,
-  ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections);
+  ], rules, readDeliveries(db), now, { switches: interruptSwitches, vips: vipSet, today: todayCalendar, feedback: readFeedback(db, now) })], availability, now), activeCorrections), wakeFacts, now);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
@@ -459,7 +460,7 @@ export async function composeDesk(
     topN: myDay.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items: dayItems,
-    deferred: deferredMail(db, now),
+    deferred: [...deferredMail(db, now), ...deferredItems(db, now)],
     today: [
       ...buildToday(ranger, dayItems, desk.areas, now),
       ...todayCalendar,
