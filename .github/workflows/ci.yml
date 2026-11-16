@@ -200,7 +200,7 @@ jobs:
         run: bun scripts/check.ts test
 
   test-min-bun:
-    name: Test (oldest supported Bun)
+    name: Test (declared minimum Bun)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
