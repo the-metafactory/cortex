@@ -19,9 +19,9 @@
  * is the only one that matters).
  *
  * Consumed by the OPT-IN package.json wrappers — `deploy:dashboard`,
- * `deploy:worker`, `db:migrate:safe` (docs/agents-md/dashboard-deployment.md).
+ * `deploy:worker`, `db:migrate:safe` (docs/agent-guide/dashboard-deployment.md).
  * These are NET-NEW additive scripts; the MANUAL deploy commands documented
- * in CLAUDE.md / dashboard-deployment.md are unchanged and still work.
+ * in dashboard-deployment.md are unchanged and still work.
  *
  * Surfaces:
  *   dashboard   <root>/dist/dashboard-v2/**            (CF Pages build output;
