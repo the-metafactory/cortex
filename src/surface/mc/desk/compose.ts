@@ -31,7 +31,8 @@ import { junkReviewItems } from "./mail-junk";
 import { listKey, offerContext, unsubscribeOffers, unsubscribeView, type UnsubscribeConfig, type UnsubscribeOffer } from "./mail-unsubscribe";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
-import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
+import { DEFAULT_MAIL_RULES, digestedIds, heldItems, pendingRuleMail, proposalItems, proposeRules, readMailRules, ruleViewsOf, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
+import { withMailOutcome } from "./mail-outcome";
 import { AHEAD_DAYS, TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
@@ -374,7 +375,9 @@ export async function composeDesk(
   const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, conversations: deps.conversations, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, explanations, explanationProblems, escalationRulings })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
-  const ruleCards = [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet).filter((p) => canMove || p.action === "attach"), now)];
+  const rulesRead = readMailRules(db);
+  const knownRules = rulesRead.ok ? rulesRead.rules : [];
+  const ruleCards = rulesRead.ok ? [...heldItems(knownRules, rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet).filter((p) => canMove || p.action === "attach"), now)] : [];
   const dmarc = desk.mailDmarc ? dmarcWeek(db, now, desk.mailDmarc) : null;
   const areaOf = (id: string | null): string | null => readings.find((r) => r.id === id)?.area ?? null;
   const dmarcCards = desk.mailDmarc ? dmarcItems(db, now, desk.mailDmarc, areaOf) : [];
@@ -432,7 +435,7 @@ export async function composeDesk(
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
   const mailLog = mailLogFor(db, unbundled.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
-  const items = unbundled.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
+  const items = unbundled.map(item => item.kind === "mail" ? withMailOutcome(withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now)) : item);
 
   const digests = mailGroups?.digests.groups ?? [];
   if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects).map((goal) => { const areas = desk.areas.filter((area) => area.goals.includes(goal.id)); return { ...goal, local: areas.length === 0 || areas.some((area) => area.policy !== "cloud") }; }), now, cloudAreas), localSources, now);
@@ -481,9 +484,11 @@ export async function composeDesk(
     chime: rules.chime,
     notifications: rules.notifications,
     decisions: readDecisions(db, now),
-    autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier) }),
+    autonomy: buildAutonomy(db, done, { rangerActions, studio: Boolean(desk.studio), canMove, canInstall: Boolean(desk.routines?.capabilityBuild?.install), classifier: suggestsActions(desk.mailClassifier), rulesOn: new Set(knownRules.filter((r) => r.on).map((r) => r.id)) }),
     mailRound,
-    ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
+    ...(rulesRead.ok ? { mailLearning: knownRules.length === 0 } : {}),
+    ...(canMove ? { mailSweeps: sweeps.map(sweepView) } : {}),
+    ...(canMove && rulesRead.ok ? { mailRules: ruleViewsOf(knownRules) } : {}),
     mailTrusted: trustedViews(db),
     mailHidden: hiddenMail(db),
     ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
@@ -599,13 +604,14 @@ interface AutonomyCaps {
   canMove: boolean;
   canInstall: boolean;
   classifier: boolean;
+  rulesOn: ReadonlySet<string>;
 }
 
 function buildAutonomy(db: Database, done: DoneEntry[], caps: AutonomyCaps): DeskView["autonomy"] {
   const grants = listGrants(db);
   const shown = done.filter((d) => d.status !== "running").slice(0, 10);
   const ruleOf = rulesOfRuns(db, shown.filter((d) => d.action.startsWith("mail.rule")).map((d) => d.itemKey));
-  const on = new Set(listRules(db).filter((r) => r.on).map((r) => r.id));
+  const on = caps.rulesOn;
   const readiness: Record<PromotableAction, () => boolean> = {
     "ranger.retry": () => caps.rangerActions,
     "studio.capture": () => caps.studio,

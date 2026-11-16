@@ -1636,6 +1636,14 @@ declare const DESK_ITEM_KINDS: readonly [
 	"adapter"
 ];
 export type DeskItemKind = (typeof DESK_ITEM_KINDS)[number];
+declare const DESK_OUTCOMES: readonly [
+	"archive",
+	"attach",
+	"draft",
+	"ask"
+];
+/** The outcome the Desk suggests for a card, served on mail cards today; the vocabulary is the Desk's, so a later rule may suggest one for another kind. */
+export type DeskOutcome = (typeof DESK_OUTCOMES)[number];
 export interface DeskArea {
 	id: string;
 	label: string;
@@ -1725,6 +1733,7 @@ export interface DeskItem {
 		label: string;
 	};
 	attention?: "action" | "update";
+	outcome?: DeskOutcome;
 	dueAt?: string;
 	dueFrom?: DeadlineSource;
 	sourceRevision?: string;
@@ -1843,6 +1852,7 @@ export interface DeskView {
 	calendarAvailability?: CalendarAvailability;
 	routines?: RoutineView;
 	mailRules?: MailRuleView[];
+	mailLearning?: boolean;
 	mailTrusted?: TrustedView[];
 	mailHidden?: HiddenMail[];
 	mailSweeps?: MailSweepView[];
