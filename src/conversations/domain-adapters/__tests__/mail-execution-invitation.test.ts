@@ -25,8 +25,9 @@ function invitationProvider(options: { omit?: readonly string[] } = {}) {
     restore: () => Promise.resolve({}),
     lookupInvitation: input => { lookups.push(input); return Promise.resolve({ status: "found", request: inputs[0], result: { ref: (inputs[0] as { invitation: unknown }).invitation, revision: "r2" } }); },
   };
-  const provider = Object.fromEntries(Object.entries(full).filter(([key]) => !options.omit?.includes(key)));
-  return { inputs, lookups, connection: (): MailExecutionProvider => provider };
+  const provider: Record<string, unknown> = { ...full };
+  for (const name of options.omit ?? []) delete provider[name];
+  return { inputs, lookups, connection: () => provider as MailExecutionProvider };
 }
 
 const snapshotFor = (action: InvitationAction) => (context: MailActionScenarioContext) => mailInvitationSnapshot({ ...context, action, messageId: SCENARIO_MESSAGE, invitationId: "invitation-example", expectedRevision: "r1" });
