@@ -4,7 +4,7 @@ slug: cortex-product-vsa
 effort: E3
 phase: observe
 started: 2026-11-16T00:00:00.000Z
-updated: 2026-11-16T00:00:00.000Z
+updated: 2026-11-17T00:00:00.000Z
 ---
 
 ## Problem
@@ -23,7 +23,7 @@ Cortex is busy, and the goals its principals hand it barely move. Evidence read 
 
 - **Level 1 — Life outcome.** A principal's scheduled agent work runs without anyone watching it. When a job that serves one of their goals stops, or a gate has waited on them too long, they get one text within a day that says what stopped. Otherwise cortex stays quiet, and no maintainer reads the issue list to find out what matters.
 - **Level 2 — System behavior.** Every scheduled fire reaches a process or produces a text. Every run lands in the ledger with its real outcome and the goal it serves. Vigil texts goal-job failures and long gate waits, and digests the rest. The open backlog holds only issues that cite a failing criterion in this file, and every PR is reviewed by Sage before it merges.
-- **Level 3 — Mechanism.** Reflex fires, the activation bridge resolves the target, and the process runner runs the spec. A route-parity check fails when a spec and its route disagree. Run envelopes carry `serves.goal` and the downstream job's outcome. Vigil counts consecutive failures, tracks gate age, and sends held texts after quiet hours. Sage runs in-process through the ReviewConsumer. Ranger claims only nodes that cite an ISC here.
+- **Level 3 — Mechanism.** Reflex fires, the activation bridge resolves the target, and the process runner runs the spec. A route-parity check fails when a spec and its route disagree. Run envelopes carry `serves.goal` and the downstream job's outcome. Vigil counts consecutive failures, tracks gate age, and sends held texts after quiet hours. Sage runs in-process through the ReviewConsumer. Ranger claims only nodes that cite an ISC here. An external UI such as Threva reads every engine fact from the versioned Desk API (`src/desk-api/routes.ts`) and computes none itself, so the bundled Desk can leave cortex once its features are covered.
 
 Euphoric surprise: a week where the open-issue count is lower on Sunday than on Monday, and the only messages from cortex were two texts that each named a failed goal job and how to rerun it.
 
@@ -84,6 +84,10 @@ Every Reflex fire either reaches its process or texts the principal, and two fai
 ### Health
 - [x] ISC-15: The latest CI run on `main` concluded `success`.
 
+### Desk API for an external UI
+- [ ] ISC-20: Each engine fact Threva shows is served by a route in `src/desk-api/routes.ts`: whether an item waits on the user, a Studio thread's visible notes, its draft, dates and request states, the Day queue order, and the nightly thinking limit and count.
+- [ ] ISC-21: Decisions records the principal's dated sign-off of a parity list that marks every bundled Desk feature present in Threva, and the bundled Desk is not removed before it.
+
 ### Anti-criteria
 - [ ] ISC-16: Anti: No change removes or loosens a yes-gate on deploy, money, delete, publish or outbound message.
 - [ ] ISC-17: Anti: No issue closed in the bankruptcy is deleted or referenced by an open PR.
@@ -109,6 +113,8 @@ Every Reflex fire either reaches its process or texts the principal, and two fai
 | 16 | Diff the policy and permission rules before and after each PR; no removals from ask or deny. |
 | 18 | Budget unit test that offers a fourth text on one budget day; then `sqlite3` over `vigil_text_receipts` grouped by `budget_day`, max count at most 3. |
 | 19 | Confidentiality-gate CI result on the PR; a grep for goal wording returns nothing. |
+| 20 | For each listed fact, `grep` its route in `src/desk-api/routes.ts` and one request against a dev stack returns it; Threva's source has no local rule for it (`buildQueue` and the three Studio note rules are gone). |
+| 21 | `grep -n "parity: signed off" VSA.md`, dated, and `git log` shows the bundled Desk's removal after that date. |
 
 ## Features
 
@@ -119,6 +125,7 @@ Every Reflex fire either reaches its process or texts the principal, and two fai
 | F-vigil: consecutive-failure rule, quiet-hours carry-over, gate-age rule | ISC-7–9, 18 | cortex |
 | F-bankruptcy: close old uncited issues in scope, agent issues cite ISCs | ISC-10, 11, 17 | cortex |
 | F-claims: ranger claim gate and Sage ISC lens for cortex | ISC-12–14 | ranger, sage |
+| F-desk-api: serve the Desk's derived state to Threva, then the parity sign-off | ISC-20, 21 | cortex, threva-app |
 
 Order: F-vigil first (goal jobs fail silently today), then F-routes, then F-bankruptcy once ISC-1 is confirmed and its scope is decided.
 
@@ -128,3 +135,4 @@ Order: F-vigil first (goal jobs fail silently today), then F-routes, then F-bank
 - 2026-11-16: The bankruptcy scope is undecided: which authors' and labels' issues may be closed is open for the maintainers. ISC-10 and ISC-17 apply only within the scope once it is recorded here.
 - 2026-11-16: confirmed: levels 1-2 (jcfischer). Level 3 stays the builders' to change.
 - 2026-11-16: Goal IDs only, because the repo is public (`gh repo view`: PUBLIC) and goal wording stays in each principal's private home.
+- 2026-11-17: Added ISC-20 and ISC-21 (jcfischer), so the Desk API work for Threva cites a criterion here. The open grilling nodes #3652, #3653, #3655, #3657, #3663, #3707 and #3795 serve ISC-20, and #3708 serves ISC-21. #3755 (mail classifier retraining) serves neither. Numbering continues after ISC-19 so existing citations stay valid.
