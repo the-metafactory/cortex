@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.11.0";
+export declare const DESK_API_VERSION = "1.12.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -554,6 +554,10 @@ export interface MaterialLink {
 	href?: string;
 	text?: string;
 	textTruncated?: true;
+	also?: {
+		slug: string;
+		question: string;
+	}[];
 }
 export interface LogEntry {
 	at?: string;
@@ -613,6 +617,126 @@ export interface StudioProjectLink {
 	state: ThreadState | null;
 	openNotes: number | null;
 }
+export type StudioThreadOutcome = {
+	open: true;
+	text: string;
+} | {
+	open: false;
+	outcome: ThreadOutcome;
+	closed: string | null;
+	expect: string | null;
+	reviewOn: string | null;
+	text: string;
+};
+export interface StudioThreadDerived {
+	waitsOnYou: boolean;
+	needsResponse: boolean;
+	notes: {
+		open: AssistantNote[];
+		kept: AssistantNote[];
+	};
+	standProposal: AssistantNote | null;
+	ideas: AssistantNote[];
+	outcome: StudioThreadOutcome;
+	where: {
+		state: ThreadState;
+		place: number | null;
+		maxActive: number;
+		opened: string;
+	};
+}
+export interface DeskStudioThread extends StudioThreadView {
+	derived: StudioThreadDerived;
+}
+export interface StudioTarget {
+	thread?: string;
+	place?: "new";
+	area?: string;
+	reason: string;
+}
+export interface StudioCapture {
+	id: string;
+	path: string;
+	at: string;
+	via: string;
+	text: string;
+	target?: StudioTarget;
+}
+export interface StudioProposal {
+	id: string;
+	path: string;
+	type: ThreadType;
+	areas: string[];
+	proposed: string;
+	question: string;
+	why: string;
+	target: StudioTarget;
+}
+export interface StudioProposalView extends StudioProposal {
+	policy: AreaPolicy;
+}
+export interface StudioProblem {
+	path: string;
+	reason: string;
+}
+export interface YesFilter {
+	questions: string[];
+	fromConfig: boolean;
+}
+export type StudioThinking = {
+	kind: "unavailable";
+	reason: string;
+} | {
+	kind: "ready";
+	dailyRuns: {
+		local: number;
+		cloud: number;
+	};
+	runs: {
+		runUuid: string;
+		id?: number;
+		queuedAt?: string;
+		finishedAt?: string | null;
+		substrate?: string | null;
+		result?: string | null;
+		params: {
+			thread: string;
+			mode?: string;
+			requestId?: string;
+		};
+		status: "queued" | "running" | "succeeded" | "failed";
+		reason: string | null;
+		startedAt: string | null;
+		policy: AreaPolicy | null;
+	}[];
+};
+export interface StudioView {
+	personas?: string[];
+	thinking?: StudioThinking;
+	maxActive: number;
+	yesFilter: YesFilter;
+	areas: (DeskArea & {
+		policy: AreaPolicy;
+	})[];
+	active: StudioThreadView[];
+	parked: StudioThreadView[];
+	closed: StudioThreadView[];
+	inbox: StudioCapture[];
+	proposals: StudioProposalView[];
+	problems: StudioProblem[];
+}
+export interface DeskStudioView extends StudioView {
+	active: DeskStudioThread[];
+	parked: DeskStudioThread[];
+	closed: DeskStudioThread[];
+}
+export type DeskStudioResponse = {
+	studio: null;
+} | {
+	directory: string;
+	studio: DeskStudioView;
+	materialText: "untrusted";
+};
 declare const HANDOFF_STATES: readonly [
 	"working",
 	"ready",
@@ -2123,6 +2247,9 @@ export interface DeskErrorBody {
 export interface DeskApiRouteTypes {
 	"GET /api/desk": {
 		response: DeskView | DeskDisabled;
+	};
+	"GET /api/desk/studio": {
+		response: DeskStudioResponse;
 	};
 	"GET /api/desk/my-day": {
 		response: MyDayResponse;

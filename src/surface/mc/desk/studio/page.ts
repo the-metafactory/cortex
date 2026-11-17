@@ -1,7 +1,8 @@
-import { needsResponse } from "./response";
+import type { StudioThreadDerived } from "../../../../desk-api/wire/studio";
+import { allThreads, buildThreadFacts } from "./thread-facts";
 import { threadThinking, type ThreadThinking } from "./thinking-view";
 import type { AreaPolicy } from "../types";
-import { areaLookup, latestNote, sameSource, waitsOnYou, type BoardArea } from "./board";
+import { areaLookup, type BoardArea } from "./board";
 import type { AssistantNote, LogEntry, MaterialLink } from "./format";
 import { dayMonth, outcomeLabel, TYPE_LABEL, withHref } from "./labels";
 import { NO_CONTEXT, relatesTo, type RelatesContext, type Relations, type SparPersona } from "./relates";
@@ -38,29 +39,14 @@ export interface ThreadPage {
 }
 
 const newestFirst = (a: AssistantNote, b: AssistantNote): number => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0);
-const isGhost = (n: AssistantNote): boolean => n.status === "open" && (n.kind === "stand" || n.kind === "idea");
 
-function whereLine(t: StudioThreadView, maxActive: number): string {
+function whereLine(t: StudioThreadDerived["where"], closed: string | null): string {
   const opened = `opened ${dayMonth(t.opened)}`;
-  if (t.state === "closed") return `closed${t.closed ? ` ${dayMonth(t.closed)}` : ""} · ${opened}`;
+  if (t.state === "closed") return `closed${closed ? ` ${dayMonth(closed)}` : ""} · ${opened}`;
   if (t.state === "parked") return `parked · ${opened}`;
-  if (t.place !== undefined) return `place ${t.place} of ${maxActive} · ${opened}`;
+  if (t.place !== null) return `place ${t.place} of ${t.maxActive} · ${opened}`;
   return `over the cap · ${opened}`;
 }
-
-function outcomeOf(t: StudioThreadView): PageOutcome {
-  if (t.state !== "closed") return { open: true, text: t.outcomeText };
-  return {
-    open: false,
-    label: outcomeLabel(t),
-    closed: t.closed ?? null,
-    expect: t.expect ?? null,
-    reviewOn: t.reviewOn ?? null,
-    text: t.outcomeText,
-  };
-}
-
-const allThreads = (studio: StudioView): StudioThreadView[] => [...studio.active, ...studio.parked, ...studio.closed];
 
 export function findThread(studio: StudioView, slug: string): StudioThreadView | undefined {
   return allThreads(studio).find((t) => t.slug === slug);
@@ -72,35 +58,26 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
   const thread = findThread(studio, slug);
   if (!thread) return null;
   const area = areaLookup(studio.areas);
-  const others = allThreads(studio).filter((o) => o.slug !== slug);
-  const notes = [...thread.notes].sort(newestFirst);
-  const stands = notes.filter((n) => isGhost(n) && n.kind === "stand");
+  const { derived, material, notes, latest } = buildThreadFacts(studio, thread);
   return {
     thread,
     personas: thread.personas,
     thinking: threadThinking(studio, thread),
     typeLabel: TYPE_LABEL[thread.type],
-    where: whereLine(thread, studio.maxActive),
+    where: whereLine(derived.where, derived.outcome.open ? null : derived.outcome.closed),
     areas: thread.areas.map(area),
     choices: studio.areas,
     policy: thread.policy,
-    material: thread.material.map((link) => {
-      const { href, ...m } = link;
-      return {
-        ...m,
-        ...withHref(href),
-        also: others.filter((o) => o.material.some((n) => sameSource(link, n))).map((o) => ({ slug: o.slug, question: o.question })),
-      };
-    }),
-    standProposal: stands[0] ?? null,
-    ideas: notes.filter((n) => isGhost(n) && n.kind === "idea"),
-    notes: notes.filter((n) => !isGhost(n) && n.kind !== "relation"),
+    material: material.map(({ href, ...link }) => ({ ...link, ...withHref(href) })),
+    standProposal: derived.standProposal,
+    ideas: derived.ideas,
+    notes,
     proposedRelations: proposedRelations(thread),
-    latest: latestNote(thread.notes),
-    waitsOnYou: waitsOnYou(thread),
-    needsResponse: needsResponse(thread),
+    latest,
+    waitsOnYou: derived.waitsOnYou,
+    needsResponse: derived.needsResponse,
     log: thread.log,
-    outcome: outcomeOf(thread),
+    outcome: derived.outcome.open ? derived.outcome : { open: false, label: outcomeLabel(thread), closed: derived.outcome.closed, expect: derived.outcome.expect, reviewOn: derived.outcome.reviewOn, text: derived.outcome.text },
     relations: relatesTo(thread, studio, ctx),
   };
 }

@@ -10,3 +10,5 @@ export type { RoutineDisplayMode, RoutineDisplayChoice, RoutineDisplaySource, Ro
 export type { DeskAskRouting } from "./ask";
 export type { UnavailableParser } from "./phrases";
 export type { ParserUnavailableCause } from "./parser-routing";
+
+export type { DeskStudioResponse, DeskStudioThread, DeskStudioView, StudioThreadDerived, StudioThreadOutcome } from "./studio";
