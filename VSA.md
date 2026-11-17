@@ -85,8 +85,8 @@ Every Reflex fire either reaches its process or texts the principal, and two fai
 - [x] ISC-15: The latest CI run on `main` concluded `success`.
 
 ### Desk API for an external UI
-- [ ] ISC-20: Each engine fact Threva shows is served by a route in `src/desk-api/routes.ts`: whether an item waits on the user, a Studio thread's visible notes, its draft, dates and request states, the Day queue order, and the nightly thinking limit and count.
-- [ ] ISC-21: Decisions records the principal's dated sign-off of a parity list that marks every bundled Desk feature present in Threva, and the bundled Desk is not removed before it.
+- [ ] ISC-20: Each engine fact Threva shows is served by a route in `src/desk-api/routes.ts`, and Threva computes none of them itself: whether an item waits on the principal, a Studio thread's visible notes, its draft, dates and request states, the Day queue order, and the nightly thinking limit and count. <!-- glossary-ignore: thread -->
+- [ ] ISC-21: `docs/desk/parity.md` lists every bundled Desk feature with where Threva serves it and no row marked missing, Decisions holds a line `YYYY-MM-DD: parity: signed off (<principal>)` for that list, and the bundled Desk is not removed before that date.
 
 ### Anti-criteria
 - [ ] ISC-16: Anti: No change removes or loosens a yes-gate on deploy, money, delete, publish or outbound message.
@@ -114,7 +114,7 @@ Every Reflex fire either reaches its process or texts the principal, and two fai
 | 18 | Budget unit test that offers a fourth text on one budget day; then `sqlite3` over `vigil_text_receipts` grouped by `budget_day`, max count at most 3. |
 | 19 | Confidentiality-gate CI result on the PR; a grep for goal wording returns nothing. |
 | 20 | For each listed fact, `grep` its route in `src/desk-api/routes.ts` and one request against a dev stack returns it; Threva's source has no local rule for it (`buildQueue` and the three Studio note rules are gone). |
-| 21 | `grep -n "parity: signed off" VSA.md`, dated, and `git log` shows the bundled Desk's removal after that date. |
+| 21 | `docs/desk/parity.md` has a row for each feature in the #3708 list and `grep -ci missing` returns 0; `grep -n "parity: signed off" VSA.md` returns one dated line; `git log` shows the bundled Desk's removal after that date. |
 
 ## Features
 
