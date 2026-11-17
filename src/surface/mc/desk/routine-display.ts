@@ -23,7 +23,7 @@ export function readRoutineDisplay(db: Database, scope: Scope): Map<string, Rout
   return stored;
 }
 
-export function writeRoutineDisplay(db: Database, change: RoutineDisplayChange, now = Date.now()): RoutineDisplayResult {
+export function writeRoutineDisplay(db: Database, change: RoutineDisplayChange, now = Date.now()): Omit<RoutineDisplayResult, "entry"> {
   if (change.mode === "automatic") {
     db.query("DELETE FROM desk_routine_display WHERE principal = ? AND stack = ? AND owner = 'reflex' AND routine_id = ?").run(change.principal, change.stack, change.routineId);
   } else {

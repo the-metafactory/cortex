@@ -1,4 +1,5 @@
 import type { BalanceDestination } from "../../../balance";
+import type { BalanceProjectMiss } from "../../../desk-api/wire/balance";
 
 export { balanceDestinations, type BalanceDestination, type DestinationArea } from "../../../balance";
 
@@ -10,10 +11,14 @@ export const isBalanceProjectId = (value: string): boolean => PROJECT_ID.test(va
 export function balanceProjectsByTitle(projects: BalanceDestination[], value: string): BalanceDestination[] {
   return projects.filter(project => project.title.trim().toLocaleLowerCase() === value.trim().toLocaleLowerCase());
 }
-export function resolveBalanceProject(projects: BalanceDestination[], value: string): BalanceDestination | undefined {
+type BalanceProjectResolution = { project: BalanceDestination } | { none: true; reason: BalanceProjectMiss };
+
+export function resolveBalanceProject(projects: BalanceDestination[], value: string): BalanceProjectResolution {
   const byId = projects.find(project => project.id === value);
-  if (byId) return byId;
-  if (isBalanceProjectId(value)) return undefined;
+  if (byId) return { project: byId };
+  if (isBalanceProjectId(value)) return { none: true, reason: "id-shaped" };
   const byTitle = balanceProjectsByTitle(projects, value);
-  return byTitle.length === 1 ? byTitle[0] : undefined;
+  const [only, ...rest] = byTitle;
+  if (only && rest.length === 0) return { project: only };
+  return { none: true, reason: only ? "ambiguous" : "none" };
 }

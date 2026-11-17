@@ -24,3 +24,5 @@ interface ParserRoutingUnavailable extends ParserRoutingEvidence {
 }
 
 export type ParserRouting = ParserRoutingSelected | ParserRoutingUnavailable;
+
+export type ParserUnavailableCause = CandidateReason | "quota-exhausted";

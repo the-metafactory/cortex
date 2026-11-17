@@ -5,7 +5,7 @@ import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { ASK_KINDS, conversationFields, conversationOffer, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, rowProposal, toProposal, validateCard, type AskFields, type DeskProposal, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
 import { CONVERSATION_NOT_WRITTEN, createFromCard, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
 import { ParserPermissionsSchema } from "../../../common/types/desk-parser";
-import { parserRoutingNotice } from "../desk/parser-routing";
+import { parserRoutingNotice, parserRoutingPhrase } from "../desk/parser-routing";
 import { effectivePolicy } from "../desk/studio/view";
 import { listGrants } from "../desk/autonomy";
 import { fileStudioCapture, undoStudioCapture, type CaptureModel } from "../desk/studio/capture";
@@ -94,12 +94,12 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   if (result.kind === "none" && selected?.kind !== "unavailable" && talks) result = { kind: "conversation", fields: {} };
   if (result.kind === "conversation" && !talks) return fail(422, noConversations(assistantNameOf(desk)));
   if (result.kind === "conversation") result = { ...result, fields: conversationFields(text, body.area) };
-  if (result.kind === "none") return Response.json({ ok: false, error: selected?.kind === "unavailable" ? parserRoutingNotice(selected) : selected ? `${parserRoutingNotice(selected)} ${result.reason}` : result.reason, ...(selected ? { routing: selected } : {}) }, { status: selected?.kind === "unavailable" ? 503 : 422, headers: noStore });
+  if (result.kind === "none") return Response.json({ ok: false, error: selected?.kind === "unavailable" ? parserRoutingNotice(selected) : selected ? `${parserRoutingNotice(selected)} ${result.reason}` : result.reason, ...(selected ? { routing: selected, routingPhrase: parserRoutingPhrase(selected) } : {}) }, { status: selected?.kind === "unavailable" ? 503 : 422, headers: noStore });
   const proposal = toProposal(result.kind, result.fields, writable, via);
   if (selected?.kind === "selected") proposal.routing = selected;
   if (talks && result.kind !== "conversation") proposal.alternative = conversationOffer(text, body.area);
   if (!selected && result.kind === "capture" && db && listGrants(db).has("studio.capture")) proposal.automatic = true;
-  return Response.json({ ok: true, proposal }, { headers: noStore });
+  return Response.json({ ok: true, proposal, ...(selected?.kind === "selected" ? { routingPhrase: parserRoutingPhrase(selected) } : {}) }, { headers: noStore });
 }
 
 export async function handleDeskCreate(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskAskDeps = {}): Promise<Response> {

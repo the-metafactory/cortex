@@ -1,25 +1,20 @@
-import type { OutlineNode, TodayItem } from "../../../balance";
+import type { OutlineNode } from "../../../balance";
+import type { TaskRecommendation } from "../../../desk-api/wire/my-day";
 import type { CalendarGap } from "./calendar-availability";
 import type { MyDayView } from "./my-day";
 
-export type TaskRecommendation =
-  | { kind: "fit"; item: TodayItem; minutes: number }
-  | { kind: "normal"; item: TodayItem }
-  | { kind: "unverified"; item: TodayItem }
-  | { kind: "none"; reason: string };
-
 export function nextTask(day: MyDayView, gap: CalendarGap): TaskRecommendation {
-  if (day.phase === "closed") return { kind: "none", reason: "Your day is closed. Your wins are below." };
+  if (day.phase === "closed") return { kind: "none", reason: { code: "day.closed" } };
   const eligible = day.items.filter(item => !item.task.done && (!item.task.deferredUntil || item.task.deferredUntil <= day.date));
   const first = eligible[0];
-  if (!first) return { kind: "none", reason: "No incomplete task is available in this day." };
+  if (!first) return { kind: "none", reason: { code: "day.no-task" } };
   switch (gap.kind) {
-    case "busy": return { kind: "none", reason: "A calendar block is in progress. Your priorities stay available to choose." };
-    case "unknown": return { kind: "unverified", item: first };
-    case "open": return { kind: "normal", item: first };
+    case "busy": return { kind: "none", reason: { code: "day.calendar-busy" } };
+    case "unknown": return { kind: "unverified", item: first, reason: { code: "day.fit-unverified" } };
+    case "open": return { kind: "normal", item: first, reason: { code: "day.first-task" } };
     case "bounded": {
       const fits = eligible.find(item => item.task.estimateMinutes !== undefined && item.task.estimateMinutes <= gap.minutes);
-      return fits ? { kind: "fit", item: fits, minutes: gap.minutes } : { kind: "none", reason: "No task with a known estimate fits this gap. Your overall priorities stay unchanged." };
+      return fits ? { kind: "fit", item: fits, minutes: gap.minutes, reason: { code: "day.task-fits" } } : { kind: "none", reason: { code: "day.no-task-fits" } };
     }
   }
 }
