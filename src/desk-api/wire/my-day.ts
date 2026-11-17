@@ -2,6 +2,19 @@ import type { OutlineNode, RecurrenceProjection, TodayItem, BalanceDayProjection
 import type { StudioProjectLink } from "./studio";
 import type { TaskHandoffLines } from "./handoff";
 import type { DeskLinkView } from "./links";
+import type { CalendarGap } from "./calendar";
+
+export type TaskRecommendation =
+  | { kind: "fit"; item: TodayItem; minutes: number; reason: { code: "day.task-fits" } }
+  | { kind: "normal"; item: TodayItem; reason: { code: "day.first-task" } }
+  | { kind: "unverified"; item: TodayItem; reason: { code: "day.fit-unverified" } }
+  | { kind: "none"; reason: { code: "day.closed" | "day.no-task" | "day.calendar-busy" | "day.no-task-fits" } };
+
+export type TaskRecommendationReason = TaskRecommendation["reason"];
+
+export interface MyDayResponse extends MyDayView {
+  now: { at: number; gap: CalendarGap; next: TaskRecommendation };
+}
 
 interface MyDaySource {
   taskId: string;
