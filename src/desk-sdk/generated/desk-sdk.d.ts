@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.20.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.21.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -313,6 +313,15 @@ declare const ParserPermissionsSchema: z.ZodObject<{
 	}>>;
 }, z.core.$strict>;
 export type ParserPermissions = z.infer<typeof ParserPermissionsSchema>;
+export declare const PREDICTED_ACTIONS: readonly [
+	"archive",
+	"junk",
+	"trash",
+	"reply",
+	"plan",
+	"todo",
+	"keep"
+];
 declare const ASK_KINDS: readonly [
 	"reminder",
 	"note",
@@ -544,6 +553,20 @@ export declare const PushCommandRequestSchema: z.ZodObject<{
 		until: z.ZodNumber;
 	}, z.core.$strip>>;
 }, z.core.$strip>;
+export declare const MAIL_CATEGORIES: readonly [
+	"action",
+	"reply",
+	"meeting",
+	"fyi",
+	"bulk"
+];
+export declare const SUGGESTED_ACTIONS: readonly [
+	"reply",
+	"archive",
+	"link-meeting",
+	"task",
+	"none"
+];
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;

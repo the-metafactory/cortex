@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { basename } from "node:path";
 import { z } from "zod";
+import { MAIL_CATEGORIES, SUGGESTED_ACTIONS } from "../../../desk-sdk/mail-triage-contract";
 import { CLASSIFIER_FORM_ERROR } from "../../../common/types/config";
 import { oneLine } from "./actions";
 import { assertRoute, contentFrom, NOTHING_LEAVES, routeOf, type LocalSources, type PromptContent } from "./source-boundary";
@@ -21,10 +22,7 @@ export const MAIL_COMMITMENTS = ["request", "invitation", "none", "unknown"] as 
 export type MailCommitment = (typeof MAIL_COMMITMENTS)[number];
 export const MAIL_CLASSIFIER_CONTRACT = 3;
 
-export const MAIL_CATEGORIES = ["action", "reply", "meeting", "fyi", "bulk"] as const;
 export type MailCategory = (typeof MAIL_CATEGORIES)[number];
-
-export const SUGGESTED_ACTIONS = ["reply", "archive", "link-meeting", "task", "none"] as const;
 export type SuggestedAction = (typeof SUGGESTED_ACTIONS)[number];
 export const EVIDENCE_KINDS = ["mail", "event", "note"] as const;
 
