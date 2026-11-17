@@ -138,6 +138,7 @@ import { handleDeskRuling } from "./api/desk-ruling";
 import { getVigilSubject } from "../../vigil/db";
 import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
+import { DESK_BALANCE_DESTINATIONS_PATH, handleDeskBalanceDestinations } from "./api/desk-balance-destinations";
 import { DESK_SEARCH_PATH, handleDeskSearch } from "./api/desk-search";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
@@ -767,6 +768,7 @@ async function handleApi(
     return handleGetDeskStudioRelations(req, db, desk, vigil);
   }
 
+  if (pathname === DESK_BALANCE_DESTINATIONS_PATH) return handleDeskBalanceDestinations(req, db, desk);
   if (pathname === DESK_SEARCH_PATH) return handleDeskSearch(req, db, desk, vigil);
 
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });

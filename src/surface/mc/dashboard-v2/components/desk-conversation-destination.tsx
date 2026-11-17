@@ -48,14 +48,15 @@ export function ConversationDestination({ fields, onChange, disabled, project = 
   useEffect(() => {
     if (disabled || !project || reading.kind !== "ready" || !fields.project) return;
     const selected = resolveBalanceProject(projects, fields.project);
-    if (selected && selected.id !== fields.project) onChange({ ...fields, project: selected.id });
+    if ("project" in selected && selected.project.id !== fields.project) onChange({ ...fields, project: selected.project.id });
   }, [reading, projects, fields, onChange, project, disabled]);
   if (reading.kind === "loading") return <div><p role="status">Loading Balance destinations…</p><DestinationPicker label="Area" value="" options={[]} onChange={() => undefined} disabled empty="Loading areas…" />{project && <DestinationPicker label="Parent project" value="" options={[]} onChange={() => undefined} disabled empty="Loading projects…" />}</div>;
   if (reading.kind === "error") return <div><p role="alert">{reading.message}</p><button className="desk-btn" type="button" onClick={() => { setRetry(value => value + 1); }}>Retry destinations</button></div>;
   const { areas } = reading.choices;
+  const projectValue = (value: string): string => { const resolved = resolveBalanceProject(projects, value); return "project" in resolved ? resolved.project.id : value; };
   return <>
     <DestinationPicker label="Area" value={fields.area ?? ""} options={areas.map(area => ({ id: area.id, label: area.label }))} disabled={disabled} empty="No configured areas." onChange={area => { onChange({ ...fields, area, project: projects.some(option => option.area === area && option.id === fields.project) ? fields.project ?? "" : "" }); }} />
-    {project && <DestinationPicker label="Parent project" value={resolveBalanceProject(projects, fields.project ?? "")?.id ?? fields.project ?? ""} options={[{ id: "", label: "Area level — no parent project" }, ...projects]} disabled={disabled || !areas.some(area => area.id === fields.area)} empty="No open projects in this area." onChange={value => { onChange({ ...fields, project: value }); }} />}
+    {project && <DestinationPicker label="Parent project" value={projectValue(fields.project ?? "")} options={[{ id: "", label: "Area level — no parent project" }, ...projects]} disabled={disabled || !areas.some(area => area.id === fields.area)} empty="No open projects in this area." onChange={value => { onChange({ ...fields, project: value }); }} />}
     {project && projects.length === 0 && <p role="status">No open projects in this area. You can use the area-level destination.</p>}
     <button type="button" className="desk-btn ghost" disabled={disabled} onClick={() => { setRetry(value => value + 1); }}>Refresh destinations</button>
   </>;

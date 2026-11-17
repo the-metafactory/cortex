@@ -1,7 +1,7 @@
 import { BALANCE_CREATE_DEDUP_RETENTION_MS, balanceCreateSupport, balanceReference as reference, balanceCreateBindings, createBalanceBinding, createBalanceFacade, type BalanceCreateContract, type BalanceCreateBindingOptions, type BalanceCreateBinding, type BalanceCreateFacadeOptions, type BalanceCreateFacade } from "./create-binding";
 import { z } from "zod";
 import type { AppState, DestinationArea } from "../../../balance";
-import { areaProjects, balanceDestinations, balanceProjectsByTitle, isBalanceProjectId, resolveBalanceProject, type BalanceDestination } from "../../../surface/mc/desk/balance-destinations";
+import { areaProjects, balanceDestinations, balanceProjectsByTitle, resolveBalanceProject, type BalanceDestination } from "../../../surface/mc/desk/balance-destinations";
 import type { AdapterDeclaration, ObjectReference } from "../types";
 import { ObjectReferenceSchema } from "../types";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, objectSchema, ref, referenceSchema } from "./schema";
@@ -127,8 +127,8 @@ export function reviewBalanceTask(fields: BalanceTaskFields, state: AppState, ar
   if (!project) return resolved({ area: areaRef, ...extra, title }, false);
   const open = areaProjects(balanceDestinations(state.outline, areas), area.id);
   const chosen = resolveBalanceProject(open, project);
-  if (chosen) return resolved({ area: areaRef, project: reference(connectionId, "project", chosen.id), ...extra, title }, chosen.id !== project);
-  if (isBalanceProjectId(project)) return refusedReview(`That project is not open in ${area.label}.`, fields);
+  if ("project" in chosen) return resolved({ area: areaRef, project: reference(connectionId, "project", chosen.project.id), ...extra, title }, chosen.project.id !== project);
+  if (chosen.reason === "id-shaped") return refusedReview(`That project is not open in ${area.label}.`, fields);
   const titled = balanceProjectsByTitle(open, project);
   if (titled.length > 1) return { kind: "choice", field: "project", options: titled, reason: `More than one open project in ${area.label} is named ${project}. Choose one.`, fields: { ...fields } };
   return refusedReview(`That project is not open in ${area.label}.`, fields);

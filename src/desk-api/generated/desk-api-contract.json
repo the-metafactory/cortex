@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "1.10.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -20,6 +20,7 @@
     "GET /api/desk",
     "GET /api/desk/balance-surfaces/destinations",
     "GET /api/desk/balance-surfaces/task",
+    "GET /api/desk/balance/destinations",
     "GET /api/desk/calendars",
     "GET /api/desk/connections",
     "GET /api/desk/contract",
