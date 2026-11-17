@@ -7,6 +7,8 @@ The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSI
 
 SDK 1.19.0 adds `invitationReply`, `invitationRemove`, `invitationRestore` and `lookupInvitation` to the Mail execution bridge and exports the invitation contract from `./desk-sdk`.
 
+SDK 1.20.0 adds the `ask.*` phrase codes to the published phrase list.
+
 SDK 1.17.0 adds the `report` and `lookupReport` Mail execution methods.
 
 SDK 1.16.1 changes no export. The Desk wire types moved to `src/desk-api/wire/` (node #3787), which changes the order TypeScript prints some enum members in the generated `.d.ts`; the gate compares that text, so the version moves.

@@ -21,6 +21,7 @@ const item = (n: number, interrupting: boolean): DeskItem => ({
 const view = (items: DeskItem[], notifications = true): DeskView => ({
   generatedAt: 0,
   timeZone: "UTC",
+  snoozeTimes: { later: 1, tomorrow: 2, "next-week": 3 },
   assistantName: "Assistant",
   voice: { enabled: true, input: "browser", output: "browser" },
   displayName: null,

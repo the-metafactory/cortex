@@ -8,7 +8,7 @@ import type { RoutineView } from "./routines";
 import type { ObjectReference } from "./object-reference";
 import type { MailRoundView } from "./mail-round";
 import type { DeskDecision } from "./decisions";
-import type { DmarcWeek, HiddenMail, InvitationView, MailDecisionSummary, MailDigestView, MailRuleView, MailSweepView, MailYesFilter, TrustedView } from "./mail";
+import type { DmarcWeek, HiddenMail, InvitationView, MailDecisionSummary, MailDigestView, MailRuleView, MailSweepView, SnoozeTimes, MailYesFilter, TrustedView } from "./mail";
 import type { HandoffView } from "./handoff";
 import type { EventLink } from "./links";
 import type { WeeklyMirror } from "./mirror";
@@ -236,6 +236,7 @@ export interface DeferredItem {
 
 export interface DeskView {
   timeZone: string;
+  snoozeTimes: SnoozeTimes;
   calendarAvailability?: CalendarAvailability;
   routines?: RoutineView;
   mailRules?: MailRuleView[];

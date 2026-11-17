@@ -1,5 +1,12 @@
 import type { PredictedAction, SimilarityBasis, InviteReply, InviteStatus } from "./mail";
 import type { DeskItemKind } from "./types";
+import type { ParserUnavailableCause } from "./parser-routing";
+
+export interface UnavailableParser {
+  provider: "claude" | "codex" | "pi";
+  cause: ParserUnavailableCause;
+}
+
 
 export interface MailPhraseModifiers {
   vip?: string;
@@ -118,6 +125,13 @@ export type DeskPhrase =
   | { code: "correction.source"; params: { kind: DeskItemKind; source: string } }
   | { code: "mail.correction"; params: { subject: string | null; sender: string; action: string; learnedAction?: PredictedAction; category: string | null } }
   | { code: "mail.sweep-category"; params: { category: string } }
+  | { code: "ask.answered"; params: { provider: "claude" | "codex" | "pi"; unavailable: UnavailableParser[] } }
+  | { code: "ask.no-provider"; params: { unavailable: UnavailableParser[] } }
+  | { code: "ask.invalid-output" }
+  | { code: "ask.timeout" }
+  | { code: "ask.quota-reached" }
+  | { code: "ask.connection-unavailable" }
+  | { code: "ask.failed" }
   | { code: "brief.gap-no-adapter"; params: { kind: string } }
   | { code: "brief.gap-access-denied"; params: { kind: string } }
   | { code: "brief.gap-read-failed"; params: { kind: string } }

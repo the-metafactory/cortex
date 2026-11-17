@@ -217,3 +217,18 @@ export interface DmarcWeek {
 }
 
 export interface MailYesFilter { questions: string[]; commitments: Commitment[]; problems: string[] }
+
+export const SNOOZE_TIMES = ["later", "tomorrow", "next-week"] as const;
+
+export type SnoozeTime = (typeof SNOOZE_TIMES)[number];
+
+export type SnoozeTimes = Record<SnoozeTime, number>;
+
+/** The body of a snooze or defer that succeeded. `until` is the English label, `untilIso` the end as an instant (null when the end is a person or a meeting not yet known), `labelPhrase` the same wording as a code. */
+export interface SnoozeResult {
+  ok: true;
+  message: string;
+  until: string;
+  untilIso: string | null;
+  labelPhrase?: DeskPhrase;
+}

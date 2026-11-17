@@ -33,8 +33,13 @@ export const DESK_BRIEF_PHRASE_CODES = [
   "brief.previous-not-earlier", "brief.previous-target-unavailable", "brief.previous-invalid", "brief.meeting-gone",
 ] as const satisfies readonly DeskPhrase["code"][];
 
+export const DESK_ASK_PHRASE_CODES = [
+  "ask.answered", "ask.no-provider", "ask.invalid-output", "ask.timeout", "ask.quota-reached", "ask.connection-unavailable", "ask.failed",
+] as const satisfies readonly DeskPhrase["code"][];
+
 export const DESK_PHRASE_CODES = [
   ...DESK_ITEM_PHRASE_CODES,
   ...DESK_ACT_PHRASE_CODES,
   ...DESK_BRIEF_PHRASE_CODES,
+  ...DESK_ASK_PHRASE_CODES,
 ] as const satisfies readonly DeskPhrase["code"][];
