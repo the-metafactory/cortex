@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.19.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.20.0";
 declare const AUTH_VERDICTS: readonly [
 	"pass",
 	"fail",
@@ -338,9 +338,9 @@ declare const FIELD_SCHEMAS: {
 				completion: "completion";
 			}>>;
 			unit: z.ZodEnum<{
-				month: "month";
 				day: "day";
 				week: "week";
+				month: "month";
 			}>;
 			interval: z.ZodNumber;
 			weekdays: z.ZodOptional<z.ZodArray<z.ZodNumber>>;
@@ -1345,8 +1345,8 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 		until: z.ZodDiscriminatedUnion<[
 			z.ZodObject<{
 				kind: z.ZodEnum<{
-					tomorrow: "tomorrow";
 					later: "later";
+					tomorrow: "tomorrow";
 					"next-week": "next-week";
 				}>;
 			}, z.core.$strict>,
@@ -1382,9 +1382,9 @@ declare const MailJudgementInputSchema: z.ZodDiscriminatedUnion<[
 			canonicalId: z.ZodString;
 		}, z.core.$strict>;
 		op: z.ZodEnum<{
-			done: "done";
 			snooze: "snooze";
 			"no-answer": "no-answer";
+			done: "done";
 			expect: "expect";
 		}>;
 	}, z.core.$strict>,

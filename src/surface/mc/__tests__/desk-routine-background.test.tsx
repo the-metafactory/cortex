@@ -97,12 +97,18 @@ describe("routine display preference API", () => {
     let routines = byId(await displayPage());
     expect(routines.get("hourly-watch")).toMatchObject({ stored: "scheduled", automatic: "background", mode: "scheduled", source: "stored" });
     expect(routines.get("morning-briefing")).toMatchObject({ stored: "background", automatic: "scheduled", mode: "background", source: "stored" });
-    const cleared = await handleDeskRoutineDisplay(post({ ...scope, routineId: "hourly-watch", mode: "automatic" }), db, runtime, routineOwner());
-    expect(await cleared.json()).toEqual({ owner: "reflex", ...scope, routineId: "hourly-watch", mode: "automatic" });
+    const cleared = await handleDeskRoutineDisplay(post({ ...scope, routineId: "hourly-watch", mode: "automatic" }), db, runtime, routineOwner(), () => saturday);
+    expect(await cleared.json()).toEqual({ owner: "reflex", ...scope, routineId: "hourly-watch", mode: "automatic", entry: { routineId: "hourly-watch", stored: null, automatic: "background", maxDailyStarts: 24, mode: "background", source: "frequency" } });
     expect(readRoutineDisplay(db, scope).has("hourly-watch")).toBe(false);
     routines = byId(await displayPage());
     expect(routines.get("hourly-watch")).toMatchObject({ stored: null, mode: "background", source: "frequency" });
     expect(readRoutineDisplay(db, { ...scope, stack: "other" }).size).toBe(0);
+  });
+  it("returns the effective entry the page shows afterwards, deriving Automatic from frequency", async () => {
+    for (const [routineId, mode] of [["hourly-watch", "scheduled"], ["morning-briefing", "background"], ["hourly-watch", "automatic"]] as const) {
+      const body = await (await handleDeskRoutineDisplay(post({ ...scope, routineId, mode }), db, runtime, routineOwner(), () => saturday)).json() as { entry: unknown };
+      expect(body.entry).toEqual(displayEntry(await displayPage(), routineId));
+    }
   });
   it("keeps existing Background rows as explicit choices without rewriting them", async () => {
     db.query("INSERT INTO desk_routine_display (principal, stack, owner, routine_id, mode, updated_at) VALUES ('jc', 'default', 'reflex', 'studio-overseer', 'background', 1)").run();

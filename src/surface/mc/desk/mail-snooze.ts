@@ -11,7 +11,7 @@ import type { DeferredItem, DeskItem } from "./types";
 import type { DeskPhrase } from "./phrases";
 
 export { SNOOZE_MORNING_HOUR, SNOOZE_SQL, SNOOZE_TIMES, snoozeAt, snoozeWhen, type SnoozeChoice, type SnoozeTime } from "./mail-snooze-schema";
-import type { HiddenMail } from "../../../desk-api/wire/mail";
+import type { HiddenMail, SnoozeResult as WireSnoozeResult } from "../../../desk-api/wire/mail";
 
 export type SnoozeKind = "time" | "meeting" | "person" | "hidden";
 export type SnoozeState = "snoozed" | "back";
@@ -275,7 +275,7 @@ export function withSnoozeBack(item: DeskItem, back: SnoozeBack | undefined): De
 }
 
 interface SnoozeFailure { ok: false; status: number; error: string }
-type SnoozeResult = { ok: true; message: string; until: string; untilIso: string | null; labelPhrase?: DeskPhrase } | SnoozeFailure;
+type SnoozeResult = WireSnoozeResult | SnoozeFailure;
 
 const refuse = (status: number, error: string): SnoozeFailure => ({ ok: false, status, error });
 const ADDRESS_RE = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;

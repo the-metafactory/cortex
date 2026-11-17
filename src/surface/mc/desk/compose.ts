@@ -38,6 +38,7 @@ import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { applyItemDefers, deferredItems } from "./item-defer";
+import { snoozeTimesAt } from "./mail-snooze-schema";
 import { newlyUrgentIds, rememberOwnAddresses, backSnoozes, deferredMail as deferredMailList, hiddenMail, quietSnoozeReturns, snoozeFacts, wakeSnoozes, waitingMailIds, withSnoozeBack } from "./mail-snooze";
 import { AUTO_LINK_DONE, backLinks, followMeetingLinks, loseTaskLinks, meetingLinks, offDeskIds, type EventLink } from "./links";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
@@ -474,6 +475,7 @@ export async function composeDesk(
     studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now, assistantName) : null,
     generatedAt: now,
     timeZone: deskTimeZone(),
+    snoozeTimes: snoozeTimesAt(now),
     displayName: desk.displayName || null,
     assistantName,
     topN: myDay.topN,

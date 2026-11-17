@@ -1,4 +1,6 @@
 import { z } from "zod";
+import type { Expect, SameShape } from "../../../common/types/same-shape";
+import type { RoutineDisplayEntry as WireRoutineDisplayEntry } from "../../../desk-api/wire/routines";
 
 export const ROUTINE_BACKGROUND_THRESHOLD = 6;
 export const ROUTINE_FREQUENCY_WINDOW_MS = 86400000;
@@ -38,6 +40,7 @@ export const RoutineDisplayEntrySchema = z.object({
   return automaticMatches && resolved.mode === entry.mode && resolved.source === entry.source;
 }, "The effective display does not follow the stored choice and frequency");
 export type RoutineDisplayEntry = z.infer<typeof RoutineDisplayEntrySchema>;
+type _WireRoutineDisplayEntry = Expect<SameShape<RoutineDisplayEntry, WireRoutineDisplayEntry>>;
 export const RoutineFrequencySchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("known"), start: instant, end: instant }).strict(),
   z.object({ status: z.literal("unknown"), start: instant, end: instant, reason: z.string().min(1).max(300) }).strict(),

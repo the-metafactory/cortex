@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.10.0";
+export declare const DESK_API_VERSION = "1.11.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -293,6 +293,51 @@ export interface MailYesFilter {
 	commitments: Commitment[];
 	problems: string[];
 }
+declare const SNOOZE_TIMES: readonly [
+	"later",
+	"tomorrow",
+	"next-week"
+];
+export type SnoozeTime = (typeof SNOOZE_TIMES)[number];
+export type SnoozeTimes = Record<SnoozeTime, number>;
+/** The body of a snooze or defer that succeeded. `until` is the English label, `untilIso` the end as an instant (null when the end is a person or a meeting not yet known), `labelPhrase` the same wording as a code. */
+export interface SnoozeResult {
+	ok: true;
+	message: string;
+	until: string;
+	untilIso: string | null;
+	labelPhrase?: DeskPhrase;
+}
+export type ParserProvider = "codex" | "pi";
+export type CandidateProvider = "claude" | ParserProvider;
+export type CandidateReason = "not-configured" | "not-permitted" | "already-attempted" | "parser-incapable" | "missing-reading" | "stale-reading" | "capped" | "quota-ineligible" | "eligible";
+export interface ParserRoutingEvidence {
+	version: 1;
+	attempted: ParserProvider[];
+	candidates: {
+		substrate: CandidateProvider;
+		reason: CandidateReason;
+	}[];
+	fallbackReasons: {
+		provider: ParserProvider;
+		reason: "quota-exhausted";
+	}[];
+	capabilityExclusions: {
+		provider: CandidateProvider;
+		reason: string;
+	}[];
+}
+export interface ParserRoutingSelected extends ParserRoutingEvidence {
+	kind: "selected";
+	provider: ParserProvider;
+	reason: "most-headroom" | "pi-fallback";
+}
+export interface ParserRoutingUnavailable extends ParserRoutingEvidence {
+	kind: "unavailable";
+	reason: string;
+}
+export type ParserRouting = ParserRoutingSelected | ParserRoutingUnavailable;
+export type ParserUnavailableCause = CandidateReason | "quota-exhausted";
 export type CalendarGapReason = {
 	code: "calendar.not-read" | "calendar.read-failed" | "calendar.stale" | "calendar.capability-unknown" | "calendar.output-incomplete" | "calendar.coverage-missing" | "calendar.reading-incomplete" | "calendar.event-outside-coverage" | "calendar.source-unavailable" | "calendar.interval-uncovered";
 	params: {
@@ -741,6 +786,10 @@ export interface MyDayView {
 	} | null;
 	handoffs?: TaskHandoffLines;
 	links: DeskLinkView[];
+}
+export interface UnavailableParser {
+	provider: "claude" | "codex" | "pi";
+	cause: ParserUnavailableCause;
 }
 export interface MailPhraseModifiers {
 	vip?: string;
@@ -1232,6 +1281,27 @@ export type DeskPhrase = {
 		category: string;
 	};
 } | {
+	code: "ask.answered";
+	params: {
+		provider: "claude" | "codex" | "pi";
+		unavailable: UnavailableParser[];
+	};
+} | {
+	code: "ask.no-provider";
+	params: {
+		unavailable: UnavailableParser[];
+	};
+} | {
+	code: "ask.invalid-output";
+} | {
+	code: "ask.timeout";
+} | {
+	code: "ask.quota-reached";
+} | {
+	code: "ask.connection-unavailable";
+} | {
+	code: "ask.failed";
+} | {
 	code: "brief.gap-no-adapter";
 	params: {
 		kind: string;
@@ -1309,35 +1379,6 @@ export interface DeskVoice {
 	output: VoiceProviderId;
 	wake?: DeskWakeOptions;
 }
-export type ParserProvider = "codex" | "pi";
-export type CandidateProvider = "claude" | ParserProvider;
-export type CandidateReason = "not-configured" | "not-permitted" | "already-attempted" | "parser-incapable" | "missing-reading" | "stale-reading" | "capped" | "quota-ineligible" | "eligible";
-export interface ParserRoutingEvidence {
-	version: 1;
-	attempted: ParserProvider[];
-	candidates: {
-		substrate: CandidateProvider;
-		reason: CandidateReason;
-	}[];
-	fallbackReasons: {
-		provider: ParserProvider;
-		reason: "quota-exhausted";
-	}[];
-	capabilityExclusions: {
-		provider: CandidateProvider;
-		reason: string;
-	}[];
-}
-export interface ParserRoutingSelected extends ParserRoutingEvidence {
-	kind: "selected";
-	provider: ParserProvider;
-	reason: "most-headroom" | "pi-fallback";
-}
-export interface ParserRoutingUnavailable extends ParserRoutingEvidence {
-	kind: "unavailable";
-	reason: string;
-}
-export type ParserRouting = ParserRoutingSelected | ParserRoutingUnavailable;
 declare const ASK_KINDS: readonly [
 	"reminder",
 	"note",
@@ -1373,6 +1414,10 @@ export interface ConversationOffer {
 		text: string;
 		area?: string;
 	};
+}
+/** Added to the body of an ask that answered or failed through a routed parser. The English `error` of a failure stays through 1.x. */
+export interface DeskAskRouting {
+	routingPhrase?: DeskPhrase;
 }
 export interface RoutineRequest<A> {
 	requestId: string;
@@ -1493,6 +1538,27 @@ export interface RoutineView {
 	drafts?: RoutineDraftView[];
 	capabilityInstalls?: CapabilityInstallView[];
 	error?: string;
+}
+export type RoutineDisplayMode = "scheduled" | "background";
+export type RoutineDisplayChoice = "automatic" | RoutineDisplayMode;
+export type RoutineDisplaySource = "stored" | "frequency" | "unknown";
+/** How one routine shows on the calendar: the stored choice, the mode its frequency suggests, and the effective mode with where it came from. */
+export interface RoutineDisplayEntry {
+	routineId: string;
+	stored: RoutineDisplayMode | null;
+	automatic: RoutineDisplayMode | null;
+	maxDailyStarts: number | null;
+	mode: RoutineDisplayMode;
+	source: RoutineDisplaySource;
+}
+/** The body of a routine display change that succeeded. `entry` is the effective display afterwards. */
+export interface RoutineDisplayResult {
+	owner: "reflex";
+	principal: string;
+	stack: string;
+	routineId: string;
+	mode: RoutineDisplayChoice;
+	entry: RoutineDisplayEntry;
 }
 export interface ObjectReference {
 	adapterId: string;
@@ -1910,6 +1976,7 @@ export interface DeferredItem {
 }
 export interface DeskView {
 	timeZone: string;
+	snoozeTimes: SnoozeTimes;
 	calendarAvailability?: CalendarAvailability;
 	routines?: RoutineView;
 	mailRules?: MailRuleView[];
