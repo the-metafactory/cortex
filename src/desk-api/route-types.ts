@@ -1,4 +1,4 @@
-import type { DeskView, MyDayResponse } from "./wire";
+import type { DeskView, MyDayResponse, DeskStudioResponse } from "./wire";
 
 declare const BODY: unique symbol;
 
@@ -18,6 +18,7 @@ export interface DeskErrorBody {
 /** The request and response types of the pinned Desk routes, keyed `METHOD /path` as in DESK_API_ROUTES. */
 export interface DeskApiRouteTypes {
   "GET /api/desk": { response: DeskView | DeskDisabled };
+  "GET /api/desk/studio": { response: DeskStudioResponse };
   "GET /api/desk/my-day": { response: MyDayResponse };
 }
 

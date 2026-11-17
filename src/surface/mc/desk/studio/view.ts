@@ -1,8 +1,7 @@
 import { DEFAULT_YES_FILTER } from "../yes-filter";
-import type { StudioThinking } from "./thinking";
 import { sparPersonas } from "./relates";
 import type { AreaPolicy, DeskArea, StudioOptions } from "../types";
-import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioCapture, type StudioProposal, type StudioTarget, type StudioThread } from "./format";
+import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioTarget, type StudioThread } from "./format";
 
 export type StudioArea = DeskArea & { policy?: AreaPolicy };
 
@@ -17,37 +16,9 @@ export interface StudioFiles {
   proposals: StudioFile[];
 }
 
-export interface StudioProblem {
-  path: string;
-  reason: string;
-}
-
-export interface StudioProposalView extends StudioProposal {
-  policy: AreaPolicy;
-}
-
 export { DEFAULT_YES_FILTER } from "../yes-filter";
-import type { StudioThreadView } from "../../../../desk-api/wire/studio";
-export type { StudioThreadView };
-
-export interface YesFilter {
-  questions: string[];
-  fromConfig: boolean;
-}
-
-export interface StudioView {
-  personas?: string[];
-  thinking?: StudioThinking;
-  maxActive: number;
-  yesFilter: YesFilter;
-  areas: (DeskArea & { policy: AreaPolicy })[];
-  active: StudioThreadView[];
-  parked: StudioThreadView[];
-  closed: StudioThreadView[];
-  inbox: StudioCapture[];
-  proposals: StudioProposalView[];
-  problems: StudioProblem[];
-}
+import type { StudioThreadView, StudioView, StudioProblem, StudioProposalView } from "../../../../desk-api/wire/studio";
+export type { StudioThreadView, StudioView, StudioProblem, StudioProposalView } from "../../../../desk-api/wire/studio";
 
 export function effectivePolicy(areaIds: readonly string[], areas: readonly StudioArea[]): { policy: AreaPolicy; unknown: string[] } {
   const byId = new Map(areas.map((a) => [a.id, a.policy ?? "cloud"]));
