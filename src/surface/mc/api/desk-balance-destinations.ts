@@ -26,7 +26,7 @@ export function handleDeskBalanceDestinations(req: Request, db: Database, runtim
   const match = params.get("match");
   const body: BalanceDestinationsResponse = { destinations };
   if (match !== null) {
-    const resolution = resolveBalanceProject(projects, match);
+    const resolution = resolveBalanceProject(projects.filter(destination => destination.project), match);
     body.resolved = "project" in resolution ? { id: resolution.project.id } : resolution;
   }
   return Response.json(body, { headers: noStore });

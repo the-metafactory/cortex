@@ -66,6 +66,11 @@ describe("GET /api/desk/balance/destinations", () => {
     expect((await call("?tasks=1&match=alpha")).body!.resolved).toEqual({ id: "p-alpha" });
   });
 
+  it("does not resolve an area root or its title as a project", async () => {
+    expect((await call("?match=area:work")).body!.resolved).toEqual({ none: true, reason: "id-shaped" });
+    expect((await call("?match=Work")).body!.resolved).toEqual({ none: true, reason: "none" });
+  });
+
   it("answers the disabled response when the Desk is off", async () => {
     expect((await call("", false)).status).toBe(409);
   });
