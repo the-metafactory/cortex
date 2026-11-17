@@ -8,7 +8,7 @@ import { startServer } from "../server";
 import { HandledLedger } from "../desk/actions";
 import { MailClassifier, saveClassification, type MailClassification } from "../desk/classify";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { DESK_ACT_PHRASE_CODES, DESK_ASK_PHRASE_CODES, DESK_BRIEF_PHRASE_CODES, DESK_ITEM_PHRASE_CODES, DESK_PHRASE_CODES, type DeskPhrase } from "../desk/phrases";
+import { DESK_ACT_PHRASE_CODES, DESK_ASK_PHRASE_CODES, DESK_BRIEF_PHRASE_CODES, DESK_ITEM_PHRASE_CODES, DESK_PHRASE_CODES, DESK_TIME_FIRST_PHRASE_CODES, type DeskPhrase } from "../desk/phrases";
 import { setCorrection } from "../desk/corrections";
 import type { MailHandoffWorker } from "../desk/mail-handoff";
 import { mailItems } from "../desk/rank";
@@ -125,7 +125,8 @@ function noteRetry(status: "failed" | "done", message: string | null): void {
 test("pins the exact Desk phrase vocabulary and its union coverage", () => {
   expect<readonly string[]>(DESK_ITEM_PHRASE_CODES).toEqual([...WHY_CODES, ...LABEL_CODES]);
   expect<readonly string[]>(DESK_ACT_PHRASE_CODES).toEqual("act.done act.invalid act.forbidden act.unknown-target act.closed-item act.busy act.not-set-up act.unavailable act.duplicate act.method act.failed act.refused mail.moved mail.restored mail.domain-blocked mail.unimportant-moved mail.unimportant-hidden mail.reply-drafted mail.reported mail.correction-recorded mail.corrected mail.swept mail.sweep-undone mail.snoozed mail.snooze-cancelled mail.hidden mail.hide-undone mail.kept mail.unsubscribed mail.unsubscribe-rule-archived mail.dismissed mail.dismissal-undone mail.sender-trusted mail.opened mail.attached mail.attach-undone mail.linked mail.link-undone mail.handed mail.handoff-approved mail.handoff-discarded mail.handoff-retried mail.invite-proposed mail.invite-replied mail.studio-added mail.studio-proposed create.done create.kept autonomy.set handoff.done routine.saved routine.paused routine.resumed routine.removed routine.installed routine.denied routine.approved routine.auto routine.approval routine.discarded studio.done studio.spar-queued ranger.action-done ranger.action-queued mail.put-back mail.put-back-undone mail.put-back-next-round meeting.dismissed".split(" "));
-  expect<readonly string[]>(DESK_PHRASE_CODES).toEqual([...DESK_ITEM_PHRASE_CODES, ...DESK_ACT_PHRASE_CODES, ...DESK_BRIEF_PHRASE_CODES, ...DESK_ASK_PHRASE_CODES]);
+  expect<readonly string[]>(DESK_TIME_FIRST_PHRASE_CODES).toEqual("day.closed day.no-task day.calendar-busy day.fit-unverified day.first-task day.task-fits day.no-task-fits calendar.not-read calendar.read-failed calendar.stale calendar.capability-unknown calendar.output-incomplete calendar.coverage-missing calendar.reading-incomplete calendar.event-outside-coverage calendar.source-unavailable calendar.interval-uncovered calendar.no-coverage calendar.event-unverified".split(" "));
+  expect<readonly string[]>(DESK_PHRASE_CODES).toEqual([...DESK_TIME_FIRST_PHRASE_CODES, ...DESK_ITEM_PHRASE_CODES, ...DESK_ACT_PHRASE_CODES, ...DESK_BRIEF_PHRASE_CODES, ...DESK_ASK_PHRASE_CODES]);
   const coversUnion: Exclude<DeskPhrase["code"], typeof DESK_PHRASE_CODES[number]> extends never ? true : never = true;
   expect(coversUnion).toBe(true);
   expect(new Set(DESK_PHRASE_CODES).size).toBe(DESK_PHRASE_CODES.length);

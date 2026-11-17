@@ -45,7 +45,7 @@ describe("My day lane and day contract", () => {
   afterEach(() => db.close());
   const change = (command: MyDayCommand, requestId: string = crypto.randomUUID(), extra: { now?: number; date?: string; source?: DeskItem; desk?: DeskOptions } = {}) => changeMyDay({ db, desk, now: NOW, date: DATE, requestId, command, ...extra });
   const renderCalendar = (events: CalendarInterval[], known = true): string => {
-    const calendar: CalendarAvailability = { sources: known ? [{ id: "calendar", kind: "calendar", from: NOW - 86_400_000, to: NOW + 86_400_000, readAt: NOW, calendars: ["work"], provenance: "owned-reader" }] : [{ id: "calendar", kind: "unknown", reason: "The reading is stale." }], events };
+    const calendar: CalendarAvailability = { sources: known ? [{ id: "calendar", kind: "calendar", from: NOW - 86_400_000, to: NOW + 86_400_000, readAt: NOW, calendars: ["work"], provenance: "owned-reader" }] : [{ id: "calendar", kind: "unknown", reason: "The reading is stale.", reasonPhrase: { code: "calendar.stale", params: { source: "calendar" } } }], events };
     return renderToStaticMarkup(createElement(DeskTimeFirst, { day: readMyDay(db, desk, NOW), calendar, now: NOW, before: null, after: null, proposal: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => {}, onThread: () => {} }));
   };
   const currentEvent = (title: string, key: string, start: number, end: number): CalendarInterval => ({ key, source: "calendar", calendar: "Work", calendarId: "work", title, at: NOW + start * 60_000, end: NOW + end * 60_000, availability: { status: "busy", provenance: "owned-provider" } });
@@ -83,7 +83,8 @@ describe("My day lane and day contract", () => {
     expect(renderCalendar([currentEvent("   ", "private", -10, 20)])).toContain("Untitled or private event is in progress");
     const html = renderCalendar([currentEvent("Withheld stale title", "stale", -10, 20)], false);
     expect(html).toContain("Calendar availability is not fully known");
-    expect(html).toContain("The reading is stale.");
+    expect(html).toContain("calendar: The source reading is stale; a refresh is pending.");
+    expect(html).not.toContain("The calendar source is unavailable.");
     expect(html).not.toContain("Withheld stale title");
     expect(renderCalendar([])).toContain("No upcoming busy event in this calendar reading");
   });
@@ -135,10 +136,11 @@ describe("My day lane and day contract", () => {
     const recommendation = nextTask(day, { kind: "bounded", until: event.at, minutes: 35, event });
     expect(recommendation.kind !== "none" && recommendation.item.task.id).toBe("__proto__");
     expect(day.items.map(item => item.task.id)).toEqual(["constructor", "__proto__", "third"]);
-    expect(nextTask(day, { kind: "unknown", reasons: ["reader unavailable"] }).kind).toBe("unverified");
-    expect(nextTask(day, { kind: "open", through: NOW + 86_400_000, asOf: NOW }).kind).toBe("normal");
-    expect(nextTask(day, { kind: "busy", until: event.end, event, overlaps: [] }).kind).toBe("none");
-    expect(nextTask(day, { kind: "bounded", until: NOW + 5 * 60_000, minutes: 5, event }).kind).toBe("none");
+    expect(nextTask(day, { kind: "unknown", reasons: [{ code: "calendar.no-coverage" }] })).toMatchObject({ kind: "unverified", reason: { code: "day.fit-unverified" } });
+    expect(nextTask(day, { kind: "open", through: NOW + 86_400_000, asOf: NOW })).toMatchObject({ kind: "normal", reason: { code: "day.first-task" } });
+    expect(nextTask(day, { kind: "busy", until: event.end, event, overlaps: [] })).toEqual({ kind: "none", reason: { code: "day.calendar-busy" } });
+    expect(nextTask(day, { kind: "bounded", until: NOW + 5 * 60_000, minutes: 5, event })).toEqual({ kind: "none", reason: { code: "day.no-task-fits" } });
+    expect(recommendation.reason).toEqual({ code: "day.task-fits" });
     const unknown = readMyDay(db, desk, NOW);
     for (const item of unknown.items) delete item.task.estimateMinutes;
     expect(nextTask(unknown, { kind: "bounded", until: event.at, minutes: 35, event }).kind).toBe("none");

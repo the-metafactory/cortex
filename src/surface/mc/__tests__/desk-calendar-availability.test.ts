@@ -35,6 +35,19 @@ describe("source-authoritative calendar availability", () => {
     expect(currentGap(calendar([reading({ capabilities: ["calendar"], calendarCoverage: coverage })]), NOW).kind).toBe("unknown");
     expect(currentGap(calendar([reading({ capabilities: ["attention"], events: [], calendarCoverage: coverage })]), NOW).kind).toBe("unknown");
   });
+  it("returns source and coverage reason codes without composing English", () => {
+    const codes = (model: ReturnType<typeof calendar>): unknown => {
+      const gap = currentGap(model, NOW);
+      expect(gap.kind).toBe("unknown");
+      return gap.kind === "unknown" ? gap.reasons : [];
+    };
+    expect(codes(calendar([]))).toEqual([{ code: "calendar.not-read", params: { source: source.id } }, { code: "calendar.no-coverage" }]);
+    expect(codes(calendar([{ ...qualified([]), error: "private diagnostic" }]))).toEqual([{ code: "calendar.read-failed", params: { source: source.id } }, { code: "calendar.no-coverage" }]);
+    expect(codes(calendar([{ ...qualified([]), readAt: NOW - 300_000 }]))).toEqual([{ code: "calendar.stale", params: { source: source.id } }, { code: "calendar.no-coverage" }]);
+    expect(codes(calendar([qualified([event("unknown")])]))).toEqual([{ code: "calendar.event-unverified" }]);
+    expect(codes(calendar([qualified([event("busy", { calendarId: "undeclared" })])]))).toEqual([{ code: "calendar.event-outside-coverage", params: { source: source.id } }, { code: "calendar.no-coverage" }]);
+    expect(codes(calendar([reading({ capabilities: ["calendar"], calendarCoverage: { ...coverage, to: "2026-11-03T10:30:00Z" }, events: [event("busy")] })]))).toEqual([{ code: "calendar.interval-uncovered", params: { source: source.id } }]);
+  });
   it("finds the next real busy interval without treating free or all-day display as busy", () => {
     const model = calendar([qualified([event("free", { allDay: true, start: coverage.from, end: coverage.to }), event("busy")])]);
     expect(currentGap(model, NOW)).toMatchObject({ kind: "bounded", minutes: 35, until: Date.parse("2026-11-03T11:00:00Z") });

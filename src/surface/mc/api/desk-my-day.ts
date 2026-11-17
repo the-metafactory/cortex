@@ -5,8 +5,12 @@ import { readObservedMyDay, withSyncedBalance } from "../desk/studio-my-day";
 import { MyDayRequestSchema } from "../desk/my-day-schema";
 import { findListedMail } from "../desk/mail-actions";
 import { logMailTodo } from "../desk/mail-log";
+import { calendarAvailability, currentGap } from "../desk/calendar-availability";
+import { listCalendars } from "../desk/calendars";
+import { nextTask } from "../desk/time-first";
+import type { MyDayResponse } from "../../../desk-api/wire/my-day";
 
-export async function handleDeskMyDay(req: Request, db: Database, runtime: DeskRuntime | undefined, vigil?: DeskVigilSource, now = Date.now()): Promise<Response> {
+export async function handleDeskMyDay(req: Request, db: Database, runtime: DeskRuntime | undefined, vigil?: DeskVigilSource, now = runtime?.now?.() ?? Date.now()): Promise<Response> {
   const desk = runtime?.options;
   if (!desk?.enabled || !runtime) return Response.json({ error: "The Desk is turned off." }, { status: 409 });
   if (req.method === "GET") {
@@ -14,7 +18,12 @@ export async function handleDeskMyDay(req: Request, db: Database, runtime: DeskR
     const day = runtime.adapterDay;
     const observe = day ? () => day()?.projection(refresh) ?? Promise.resolve(null) : undefined;
     const view = await readObservedMyDay(db, desk, now, observe);
-    return Response.json(view, { headers: { "Cache-Control": "no-store" } });
+    const configuredSources = new Set(desk.sources.map(source => source.id));
+    const readings = (runtime.sourceCache?.cached() ?? []).filter(reading => configuredSources.has(reading.id));
+    const availability = calendarAvailability({ sources: desk.sources, readings, calendars: listCalendars(db), now });
+    const gap = currentGap(availability, now);
+    const response: MyDayResponse = { ...view, now: { at: now, gap, next: nextTask(view, gap) } };
+    return Response.json(response, { headers: { "Cache-Control": "no-store" } });
   }
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });
   const parsed = MyDayRequestSchema.safeParse(await req.json().catch(() => null));
