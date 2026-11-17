@@ -1,5 +1,5 @@
 {
-  "version": "1.9.0",
+  "version": "1.10.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -48,6 +48,7 @@
     "GET /api/desk/routine-occurrences",
     "GET /api/desk/routine-removal",
     "GET /api/desk/routine-schedule",
+    "GET /api/desk/search",
     "GET /api/desk/studio",
     "GET /api/desk/studio/relations",
     "GET /api/desk/unimportant",
@@ -302,6 +303,13 @@
     "DESK_OUTCOMES: \"ask\"",
     "DESK_OUTCOMES: \"attach\"",
     "DESK_OUTCOMES: \"draft\"",
+    "DESK_SEARCH_OPEN_ROUTES: balance-project",
+    "DESK_SEARCH_OPEN_ROUTES: balance-task",
+    "DESK_SEARCH_OPEN_ROUTES: desk-item",
+    "DESK_SEARCH_OPEN_ROUTES: desk-note",
+    "DESK_SEARCH_OPEN_ROUTES: desk-reminder",
+    "DESK_SEARCH_OPEN_ROUTES: studio-capture",
+    "DESK_SEARCH_OPEN_ROUTES: studio-thread",
     "FIELD_SCHEMAS: calendar",
     "FIELD_SCHEMAS: capture",
     "FIELD_SCHEMAS: conversation",

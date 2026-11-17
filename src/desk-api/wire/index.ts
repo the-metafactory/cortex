@@ -3,3 +3,4 @@ export type { DeskPhrase } from "./phrases";
 export type { MyDayView } from "./my-day";
 export type { MailRoundView } from "./mail-round";
 export type { RulingExplanation } from "./ruling";
+export type { DeskSearchKind, DeskSearchOpenRoute, DeskSearchHit, DeskSearchResponse } from "./search";

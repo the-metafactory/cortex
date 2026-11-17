@@ -20,10 +20,11 @@ export interface WorkReaderDeps {
 
 const NOT_AUTHORIZED: WorkRead = { state: "unavailable", reason: "unauthorized" };
 const GONE: WorkRead = { state: "unavailable", reason: "gone" };
-const matches = (query: string, object: WorkObject): boolean => {
-  const haystack = `${object.title}\n${object.summary}`.toLowerCase();
+export const matchesQuery = (query: string, text: string): boolean => {
+  const haystack = text.toLowerCase();
   return query.toLowerCase().split(/\s+/).filter(Boolean).every(term => haystack.includes(term));
 };
+const matches = (query: string, object: WorkObject): boolean => matchesQuery(query, `${object.title}\n${object.summary}`);
 const page = (all: WorkObject[], query: string, limit: number, offset: number) => {
   const hits = all.filter(object => matches(query, object));
   return { items: hits.slice(offset, offset + limit), more: hits.length > offset + limit };

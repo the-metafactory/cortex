@@ -14,6 +14,7 @@ import { DESK_PHRASE_CODES } from "../surface/mc/desk/phrases";
 import { DESK_ITEM_KINDS, DESK_OUTCOMES } from "../surface/mc/desk/types";
 import { MAIL_ROUND_ACTIONS, MAIL_ROUND_GROUP_KINDS, MAIL_ROUND_UNDO_OUTCOMES } from "../surface/mc/desk/mail-round";
 import { OUTLINE_REPEAT_FIELDS, OUTLINE_REPEAT_MODES, OUTLINE_REPEAT_UNITS, OUTLINE_TIME_FIELDS } from "../surface/mc/desk/balance-command";
+import { DESK_SEARCH_OPEN_ROUTES } from "./wire/search";
 import { DEFAULT_MAIL_ROUND_SLOTS } from "../common/types/desk-mail-rounds";
 
 import { DESK_API_VERSION } from "./api-version";
@@ -56,6 +57,7 @@ export function deskContract() {
       BRIEF_SYNTHESIS_STATES,
       BRIEF_SYNTHESIS_UNAVAILABLE_REASONS,
       BRIEF_SYNTHESIS_FAILED_REASONS,
+      DESK_SEARCH_OPEN_ROUTES,
     },
   };
 }
