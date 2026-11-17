@@ -1,3 +1,5 @@
+import { SNOOZE_TIMES, type SnoozeTime, type SnoozeTimes } from "../../../desk-api/wire/mail";
+
 export const SNOOZE_SQL = [
   `CREATE TABLE IF NOT EXISTS desk_mail_snoozes (
     message_id TEXT PRIMARY KEY,
@@ -22,8 +24,7 @@ export const SNOOZE_SQL = [
   "CREATE TABLE IF NOT EXISTS desk_own_addresses (address TEXT PRIMARY KEY)",
 ];
 
-export const SNOOZE_TIMES = ["later", "tomorrow", "next-week"] as const;
-export type SnoozeTime = (typeof SNOOZE_TIMES)[number];
+export { SNOOZE_TIMES, type SnoozeTime };
 
 export type SnoozeChoice =
   | { kind: SnoozeTime }
@@ -74,3 +75,9 @@ export function snoozeWhen(at: number, now: number): string {
   if (days > 1 && days < 7) return `${d.toLocaleDateString("en-GB", { weekday: "long" })} at ${hhmm(at)}`;
   return `${d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} at ${hhmm(at)}`;
 }
+
+export const snoozeTimesAt = (now: number): SnoozeTimes => ({
+  later: snoozeAt({ kind: "later" }, now) ?? now,
+  tomorrow: snoozeAt({ kind: "tomorrow" }, now) ?? now,
+  "next-week": snoozeAt({ kind: "next-week" }, now) ?? now,
+});

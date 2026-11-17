@@ -40,9 +40,14 @@ export const DESK_TIME_FIRST_PHRASE_CODES = [
   "calendar.interval-uncovered", "calendar.no-coverage", "calendar.event-unverified",
 ] as const satisfies readonly DeskPhrase["code"][];
 
+export const DESK_ASK_PHRASE_CODES = [
+  "ask.answered", "ask.no-provider", "ask.invalid-output", "ask.timeout", "ask.quota-reached", "ask.connection-unavailable", "ask.failed",
+] as const satisfies readonly DeskPhrase["code"][];
+
 export const DESK_PHRASE_CODES = [
   ...DESK_TIME_FIRST_PHRASE_CODES,
   ...DESK_ITEM_PHRASE_CODES,
   ...DESK_ACT_PHRASE_CODES,
   ...DESK_BRIEF_PHRASE_CODES,
+  ...DESK_ASK_PHRASE_CODES,
 ] as const satisfies readonly DeskPhrase["code"][];

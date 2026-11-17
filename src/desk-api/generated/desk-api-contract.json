@@ -1,5 +1,5 @@
 {
-  "version": "1.11.0",
+  "version": "1.12.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -133,6 +133,13 @@
     "act.refused",
     "act.unavailable",
     "act.unknown-target",
+    "ask.answered",
+    "ask.connection-unavailable",
+    "ask.failed",
+    "ask.invalid-output",
+    "ask.no-provider",
+    "ask.quota-reached",
+    "ask.timeout",
     "assistant.retry",
     "autonomy.set",
     "brief.gap-access-denied",

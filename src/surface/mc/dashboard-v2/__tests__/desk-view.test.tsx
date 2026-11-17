@@ -33,6 +33,7 @@ const item = (n: number, over: Partial<DeskItem> = {}): DeskItem => ({
 
 const view: DeskViewModel = {
   timeZone: "UTC",
+  snoozeTimes: { later: 1, tomorrow: 2, "next-week": 3 },
   generatedAt: NOW,
   displayName: "Ada",
   assistantName: "Assistant",
