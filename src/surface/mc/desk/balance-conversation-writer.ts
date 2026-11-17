@@ -38,7 +38,7 @@ export function balanceDestination(state: AppState, desk: DeskOptions, fields: R
   if (!project) return { parent };
   const open = areaProjects(balanceDestinations(state.outline, desk.areas), area.id);
   const chosen = resolveBalanceProject(open, project);
-  return chosen ? { parent: chosen.id } : { refused: `That project is not open in ${area.label}.` };
+  return "project" in chosen ? { parent: chosen.project.id } : { refused: `That project is not open in ${area.label}.` };
 }
 
 export type BalanceKind = "task" | "project";

@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.11.0";
+export declare const DESK_API_VERSION = "1.12.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -498,6 +498,29 @@ export interface BalanceDayProjection {
 	readonly status: BalanceDayHealth;
 	readonly observedAt: string | null;
 	readonly tasks: readonly BalanceProjectedTask[];
+}
+export interface BalanceDestination {
+	id: string;
+	label: string;
+	title: string;
+	area: string;
+	project: boolean;
+}
+declare const BALANCE_PROJECT_MISSES: readonly [
+	"none",
+	"ambiguous",
+	"id-shaped"
+];
+export type BalanceProjectMiss = (typeof BALANCE_PROJECT_MISSES)[number];
+export type BalanceProjectResolved = {
+	id: string;
+} | {
+	none: true;
+	reason: BalanceProjectMiss;
+};
+export interface BalanceDestinationsResponse {
+	destinations: BalanceDestination[];
+	resolved?: BalanceProjectResolved;
 }
 declare const THREAD_TYPES: readonly [
 	"question",
