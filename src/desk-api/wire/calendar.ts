@@ -2,9 +2,10 @@ export type CalendarGapReason =
   | { code: "calendar.not-read" | "calendar.read-failed" | "calendar.stale" | "calendar.capability-unknown" | "calendar.output-incomplete" | "calendar.coverage-missing" | "calendar.reading-incomplete" | "calendar.event-outside-coverage" | "calendar.source-unavailable" | "calendar.interval-uncovered"; params: { source: string } }
   | { code: "calendar.no-coverage" | "calendar.event-unverified" };
 
+/** Unknown sources use reasonPhrase as their canonical reason; the English reason field is deprecated. */
 export type CalendarSourceState =
   | { id: string; kind: "attention" }
-  | { id: string; kind: "unknown"; reason: string; reasonPhrase?: CalendarGapReason }
+  | { id: string; kind: "unknown"; reason: string; reasonPhrase: CalendarGapReason }
   | { id: string; kind: "calendar"; from: number; to: number; readAt: number; calendars: string[]; provenance: string };
 
 export interface CalendarInterval {

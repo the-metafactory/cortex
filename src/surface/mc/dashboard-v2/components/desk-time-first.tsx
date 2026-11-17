@@ -3,6 +3,7 @@ import type { TodayItem } from "../../../../balance";
 import type { MyDayView } from "../../desk/my-day";
 import type { CalendarGapReason, TaskRecommendationReason } from "../../../../desk-api";
 import { currentGap, type CalendarAvailability, type CalendarGap, type CalendarInterval } from "../../desk/calendar-availability";
+import { calendarReasons } from "../../desk/calendar-reasons";
 import { nextTask, projectContext, reorderVisible } from "../../desk/time-first";
 import { balanceDestinations } from "../../desk/balance-destinations";
 import type { DeskArea } from "../../desk/types";
@@ -44,20 +45,6 @@ const recommendationReasons: Record<TaskRecommendationReason["code"], string> = 
   "day.first-task": "The first task in your day order.",
   "day.task-fits": "The first eligible task in your saved order that fits the gap.",
   "day.no-task-fits": "No task with a known estimate fits this gap. Your overall priorities stay unchanged.",
-};
-const calendarReasons: Record<CalendarGapReason["code"], string> = {
-  "calendar.not-read": "Calendar coverage has not been read.",
-  "calendar.read-failed": "The source could not be read.",
-  "calendar.stale": "The source reading is stale; a refresh is pending.",
-  "calendar.capability-unknown": "This source does not declare its calendar capability.",
-  "calendar.output-incomplete": "The source output could not be read completely.",
-  "calendar.coverage-missing": "This calendar reader does not report a coverage window.",
-  "calendar.reading-incomplete": "The calendar reading is incomplete.",
-  "calendar.event-outside-coverage": "An event is outside the declared calendar coverage.",
-  "calendar.source-unavailable": "The calendar source is unavailable.",
-  "calendar.interval-uncovered": "The reading does not cover the requested interval.",
-  "calendar.no-coverage": "No qualified calendar coverage is available.",
-  "calendar.event-unverified": "A visible event has unknown availability or an incomplete interval.",
 };
 const calendarReason = (reason: CalendarGapReason): string => `${"params" in reason ? `${reason.params.source}: ` : ""}${calendarReasons[reason.code]}`;
 

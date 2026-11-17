@@ -1,4 +1,5 @@
 import type { DeskCalendar } from "./calendars";
+import { calendarReasons } from "./calendar-reasons";
 import { calendarKey, calendarSetting } from "./calendars";
 import type { SourceReading, DeskSourceConfig } from "./sources/command";
 import type { CalendarSourceState, CalendarInterval, CalendarAvailability, CalendarGap, CalendarGapReason } from "../../../desk-api/wire/calendar";
@@ -8,17 +9,17 @@ export function calendarAvailability(args: { sources: DeskSourceConfig[]; readin
   const settings = new Map(args.calendars.map(calendar => [calendarKey(calendar.source, calendar.name, calendar.calendarId), calendar]));
   const sources = args.sources.map((source): CalendarSourceState => {
     const reading = args.readings.find(value => value.id === source.id);
-    const unknown = (reason: string, code: Extract<CalendarGapReason, { params: { source: string } }>["code"]): CalendarSourceState => ({ id: source.id, kind: "unknown", reason, reasonPhrase: { code, params: { source: source.id } } });
-    if (!reading) return unknown("Calendar coverage has not been read.", "calendar.not-read");
-    if (reading.error) return unknown("The source could not be read.", "calendar.read-failed");
-    if (args.now - reading.readAt >= source.everySeconds * 1000) return unknown("The source reading is stale; a refresh is pending.", "calendar.stale");
-    if (!reading.capabilities) return unknown("This source does not declare its calendar capability.", "calendar.capability-unknown");
-    if (reading.problems.length > 0) return unknown("The source output could not be read completely.", "calendar.output-incomplete");
+    const unknown = (code: Extract<CalendarGapReason, { params: { source: string } }>["code"]): CalendarSourceState => ({ id: source.id, kind: "unknown", reason: calendarReasons[code], reasonPhrase: { code, params: { source: source.id } } });
+    if (!reading) return unknown("calendar.not-read");
+    if (reading.error) return unknown("calendar.read-failed");
+    if (args.now - reading.readAt >= source.everySeconds * 1000) return unknown("calendar.stale");
+    if (!reading.capabilities) return unknown("calendar.capability-unknown");
+    if (reading.problems.length > 0) return unknown("calendar.output-incomplete");
     if (!reading.capabilities.includes("calendar")) return { id: source.id, kind: "attention" };
     const coverage = reading.calendarCoverage;
-    if (!coverage) return unknown("This calendar reader does not report a coverage window.", "calendar.coverage-missing");
-    if (coverage.status !== "complete" || reading.dropped > 0 || reading.problems.length > 0) return unknown("The calendar reading is incomplete.", "calendar.reading-incomplete");
-    if (reading.events.some(event => !event.calendarId || !coverage.calendars.some(calendar => calendar.id === event.calendarId && calendar.name === event.calendar))) return unknown("An event is outside the declared calendar coverage.", "calendar.event-outside-coverage");
+    if (!coverage) return unknown("calendar.coverage-missing");
+    if (coverage.status !== "complete" || reading.dropped > 0 || reading.problems.length > 0) return unknown("calendar.reading-incomplete");
+    if (reading.events.some(event => !event.calendarId || !coverage.calendars.some(calendar => calendar.id === event.calendarId && calendar.name === event.calendar))) return unknown("calendar.event-outside-coverage");
     return { id: source.id, kind: "calendar", from: Date.parse(coverage.from), to: Date.parse(coverage.to), readAt: reading.readAt, calendars: coverage.calendars.filter(calendar => calendarSetting(settings, { sourceId: source.id, calendar: calendar.name, calendarId: calendar.id })?.enabled !== false).map(calendar => calendar.id), provenance: coverage.provenance };
   });
   const events = args.readings.flatMap(reading => reading.events.flatMap((event): CalendarInterval[] => {
@@ -43,7 +44,7 @@ export function currentGap(calendar: CalendarAvailability, now: number): Calenda
   const until = next?.at;
   const reasons = calendar.sources.flatMap((source): CalendarGapReason[] => {
     if (source.kind === "attention") return [];
-    if (source.kind === "unknown") return [source.reasonPhrase ?? { code: "calendar.source-unavailable", params: { source: source.id } }];
+    if (source.kind === "unknown") return [source.reasonPhrase];
     return source.from > now || source.to <= now || (until !== undefined && source.to < until) ? [{ code: "calendar.interval-uncovered", params: { source: source.id } }] : [];
   });
   if (!calendar.sources.some(source => source.kind === "calendar")) reasons.push({ code: "calendar.no-coverage" });

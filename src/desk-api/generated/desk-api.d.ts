@@ -301,6 +301,7 @@ export type CalendarGapReason = {
 } | {
 	code: "calendar.no-coverage" | "calendar.event-unverified";
 };
+/** Unknown sources use reasonPhrase as their canonical reason; the English reason field is deprecated. */
 export type CalendarSourceState = {
 	id: string;
 	kind: "attention";
@@ -308,7 +309,7 @@ export type CalendarSourceState = {
 	id: string;
 	kind: "unknown";
 	reason: string;
-	reasonPhrase?: CalendarGapReason;
+	reasonPhrase: CalendarGapReason;
 } | {
 	id: string;
 	kind: "calendar";
