@@ -8,6 +8,8 @@ import { operationUuid } from "../../conversation-ids";
 import type { LookupRequest, TrustedConnector } from "../../authority";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../types";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
+import type { DeskItem } from "../../../surface/mc/desk/types";
+import type { ListedMail } from "../../../surface/mc/desk/mail-actions";
 import { BALANCE_ADAPTER_ID } from "./schema";
 import type { DispatchOutcome } from "../operations/dispatch";
 import type { OperationJournalStore, StoredOperation } from "../operations/journal";
@@ -21,22 +23,23 @@ export function balanceCreateSupport(capabilityId: string, connectionId: string,
 }
 
 export type BalanceCreateFields = Record<string, string>;
-export interface BalanceCreateInput { area: ObjectReference; title: string; note?: string }
+export interface BalanceCreateInput { title: string }
 export type BalanceCreateReview<I> = { kind: "resolved"; input: I; requiresFreshApproval: boolean; fields: BalanceCreateFields } | { kind: "refused"; reason: string; fields: BalanceCreateFields } | { kind: "choice"; reason: string; fields: BalanceCreateFields };
 export interface BalanceCreateContract<I extends BalanceCreateInput, R extends BalanceCreateReview<I>> {
   kind: "task" | "project";
-  owner: "balance-task" | "balance-project";
+  owner: "balance-task" | "balance-project" | "balance-inbox-task";
   capabilityId: string;
   declaration(): AdapterDeclaration;
   support(connectionId: string, declarationId?: string): OwnerSupport;
   parse(raw: unknown, connectionId: string): I;
-  destinations(input: I): ObjectReference[];
+  destinations(input: I, connectionId: string): ObjectReference[];
   legacyFields(input: I): BalanceCreateFields;
   review: (fields: BalanceCreateFields, state: AppState, areas: readonly DestinationArea[], connectionId: string) => R;
   refusedReview(reason: string, fields: BalanceCreateFields): R;
   snapshot: (options: { connectionId: string; provenance: Provenance; input: I; policy?: "local" | "cloud" }) => ApprovedSnapshot;
+  ownerWriter?: (options: BalanceCreateBindingOptions) => Pick<OwnerWriter, "create" | "readback">;
 }
-export const balanceReference = (connectionId: string, objectType: "area" | "project" | "task", canonicalId: string): ObjectReference => ({ adapterId: BALANCE_ADAPTER_ID, connectionId, objectType, canonicalId });
+export const balanceReference = (connectionId: string, objectType: "area" | "project" | "task" | "inbox", canonicalId: string): ObjectReference => ({ adapterId: BALANCE_ADAPTER_ID, connectionId, objectType, canonicalId });
 export const balanceCreateBindings = (): AdapterBindings => ({ handlers: {}, observations: {} });
 
 export function balanceCreateReceiptId(operationId: string): string {
@@ -56,6 +59,8 @@ export interface BalanceCreateBindingOptions {
   journal: OperationJournalStore;
   now?: () => number;
   owner?: Pick<OwnerWriter, "create" | "readback">;
+  deskItems?: () => Promise<DeskItem[]>;
+  listedMail?: (key: string) => ListedMail | null;
   supportDeclarationId?: string;
 }
 
@@ -142,7 +147,7 @@ export function createBalanceFacade<I extends BalanceCreateInput, R extends Bala
 export function createBalanceBinding<I extends BalanceCreateInput, R extends BalanceCreateReview<I>>(options: BalanceCreateBindingOptions, contract: BalanceCreateContract<I, R>): BalanceCreateBinding {
   const at = (): string => new Date((options.now ?? Date.now)()).toISOString();
   const support = contract.support(options.connectionId, options.supportDeclarationId);
-  const writer: Pick<OwnerWriter, "create" | "readback"> = options.owner ?? balanceWriter(contract.kind, { db: options.db, desk: options.desk, now: options.now });
+  const writer: Pick<OwnerWriter, "create" | "readback"> = options.owner ?? contract.ownerWriter?.(options) ?? balanceWriter(contract.kind, { db: options.db, desk: options.desk, now: options.now });
 
   const receipt = (operationId: string): BalanceCreateReceipt | undefined => {
     try {
