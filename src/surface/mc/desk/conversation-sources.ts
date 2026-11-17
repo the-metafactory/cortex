@@ -119,7 +119,8 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
   const routedBalance = (owner: keyof typeof balanceWriters, getCutover?: () => BalanceCreateCutover | undefined): OwnerWriter => {
-    const legacy = balanceWriters[owner as "balance-task"];
+    const legacy: OwnerWriter | undefined = balanceWriters[owner];
+    if (!legacy) throw new Error(`balance.writer_missing:${owner}`);
     const cutover = getCutover?.();
     return cutover ? routedBalanceCreateWriter({ legacy, cutover }) : legacy;
   };
