@@ -61,6 +61,11 @@ describe("GET /api/desk/balance/destinations", () => {
     expect((await call("?match=area:other")).body!.resolved).toEqual({ none: true, reason: "id-shaped" });
   });
 
+  it("matches projects only, even when tasks=1 and a task shares the title", async () => {
+    saveBalanceState(db, { ...state, outline: node("desk:outline", "Outline", [node("area:work", "Work", [node("p-alpha", "Alpha", [task("t-same", "Alpha")])])]) });
+    expect((await call("?tasks=1&match=alpha")).body!.resolved).toEqual({ id: "p-alpha" });
+  });
+
   it("answers the disabled response when the Desk is off", async () => {
     expect((await call("", false)).status).toBe(409);
   });

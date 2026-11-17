@@ -17,14 +17,16 @@ export function handleDeskBalanceDestinations(req: Request, db: Database, runtim
   const params = new URL(req.url).searchParams;
   const state = loadBalanceState(db);
   const tasks = params.get("tasks") === "1";
-  const all = state ? balanceDestinations(state.outline, desk.areas, tasks) : [];
   const area = params.get("area");
-  const destinations = area === null ? all : tasks ? all.filter(destination => destination.area === area) : areaProjects(all, area);
+  const projectsOnly = state ? balanceDestinations(state.outline, desk.areas, false) : [];
+  const projects = area === null ? projectsOnly : areaProjects(projectsOnly, area);
+  const withTasks = state && tasks ? balanceDestinations(state.outline, desk.areas, true) : [];
+  const destinations = !tasks ? projects : area === null ? withTasks : withTasks.filter(destination => destination.area === area);
 
   const match = params.get("match");
   const body: BalanceDestinationsResponse = { destinations };
   if (match !== null) {
-    const resolution = resolveBalanceProject(destinations.filter(destination => destination.project), match);
+    const resolution = resolveBalanceProject(projects, match);
     body.resolved = "project" in resolution ? { id: resolution.project.id } : resolution;
   }
   return Response.json(body, { headers: noStore });
