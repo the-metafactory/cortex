@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostStatus } from "../src/conversations/host";
-import { openProbeHost } from "./desk-balance-cutover/host";
+import { openProbeRuntime } from "./desk-balance-cutover/host";
 import { BALANCE_INBOX_TASK_CONTRACT } from "../src/conversations/domain-adapters/balance/inbox-binding";
 import { DomainAdapterRegistry } from "../src/conversations/domain-adapters/registry";
 import { balanceTaskState } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-task-fixtures";
@@ -38,7 +38,7 @@ await withTempHome(async () => {
   saveBalanceState(db, balanceTaskState());
   const desk: DeskOptions = { enabled: true, displayName: "Inbox cutover probe", topN: 5, rangerUrl: "", areas: [{ id: "area-example", label: "Lab", color: "", repos: [], goals: [], policy: "local" }], sources: [] };
   const runtime: DeskRuntime = { ledger: new HandledLedger(), options: desk };
-  const status = await openProbeHost(root, LABEL);
+  const status = await openProbeRuntime(root, LABEL);
   const host = status.host;
   try {
     const registry = new DomainAdapterRegistry();

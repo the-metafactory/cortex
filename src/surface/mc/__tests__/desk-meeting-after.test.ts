@@ -119,4 +119,10 @@ describe("Desk after-meeting card", () => {
     expect(dismissalCount()).toBe(1);
     expect(afterMeeting(await rig.get())).toEqual([]);
   });
+
+  it("surfaces a meeting added after the first read once the Desk refreshes", async () => {
+    rig.setNow(roundAt(17, 17, 10));
+    rig.setState({ mail: [], events: [roundEvent("later", START.later, roundAt(17, 17, 5))] });
+    expect(afterMeeting(await rig.refresh()).map((item) => item.key)).toEqual([key("later")]);
+  });
 });

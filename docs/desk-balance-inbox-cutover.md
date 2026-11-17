@@ -6,11 +6,11 @@ The binding calls the existing `balanceInboxWriter`, which reads the Day item th
 
 `createBalanceInboxLifecycleWriter` takes the same options as the task and project writers plus `deskItems` and `listedMail`. `conversationSources.balanceInboxCutover` installs its compatibility route separately from the other two. The read declaration includes the new capability. Registration grants no mutation authority.
 
-Only the principal starts the cutover on a real stack. Run the hosted-route probe, the timing baseline and the canary check first, then apply the approved sequence through `WriterAuthority` for the writer key `balance-inbox-task` and capability `balance.inbox-task.create`: dual readers with lifecycle mutation disabled, legacy admission off, workers stopped, in-flight calls drained or imported uncertain, idempotent source-hashed sidecar import, next epoch, then the approved executable and facade. A failed or unknown step leaves creation disabled. A hard trigger fences the binding and does not reopen the legacy writer.
+Only the principal starts the cutover on a real stack. First, perform the hosted-route probe, the timing baseline and the canary check first, then apply the approved sequence through `WriterAuthority` for the writer key `balance-inbox-task` and capability `balance.inbox-task.create`: dual readers with lifecycle mutation disabled, legacy admission off, workers stopped, in-flight calls drained or imported uncertain, idempotent source-hashed sidecar import, next epoch, then the approved executable and facade. A failed or unknown step leaves creation disabled. A hard trigger fences the binding and does not reopen the legacy writer.
 
 Existing drafts keep their edits and identities but need fresh approval, because the review digest includes the cutover binding and epoch. A legacy standing `balance-inbox-task` grant shows a renewal notice, and its replacement binds the connection and the Inbox.
 
-Run the permitted live probe on a disposable temporary stack:
+Execute the permitted live probe on a disposable temporary stack:
 
 ```sh
 bun scripts/probe-desk-balance-inbox-cutover.ts

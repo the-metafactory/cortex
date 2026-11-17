@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 import { findNode } from "../../src/balance";
 import type { HostStatus } from "../../src/conversations/host";
-import { openProbeHost } from "./host";
+import { openProbeRuntime } from "./host";
 import { BALANCE_TASK_CONTRACT } from "../../src/conversations/domain-adapters/balance/task-binding";
 import { BALANCE_PROJECT_CONTRACT } from "../../src/conversations/domain-adapters/balance/project-binding";
 import { ProposalSchema } from "../../src/conversations/creation";
@@ -52,7 +52,7 @@ export async function runBalanceCutoverProbe(kind: "task" | "project"): Promise<
     saveBalanceState(db, balanceTaskState());
     const desk = deskOptions();
     const runtime: DeskRuntime = { ledger: new HandledLedger(), options: desk };
-    const status = await openProbeHost(root, LABEL);
+    const status = await openProbeRuntime(root, LABEL);
     const host = status.host;
     const registry = new DomainAdapterRegistry();
     const registered = registry.register(contract.declaration(), { handlers: {}, observations: {} });
