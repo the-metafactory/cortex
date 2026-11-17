@@ -3,7 +3,7 @@ import type { AssistantNote, MaterialLink } from "./format";
 import type { StudioThreadView, StudioView } from "./view";
 import type { StudioThreadDerived, StudioThreadOutcome } from "../../../../desk-api/wire/studio";
 
-const time = (iso: string): number => {
+export const time = (iso: string): number => {
   const t = Date.parse(iso);
   return Number.isNaN(t) ? 0 : t;
 };
@@ -54,7 +54,40 @@ function outcomeOf(thread: StudioThreadView): StudioThreadOutcome {
 
 export const allThreads = (studio: StudioView): StudioThreadView[] => [...studio.active, ...studio.parked, ...studio.closed];
 
-export function buildThreadFacts(studio: StudioView, thread: StudioThreadView) {
+const sourceKeys = (link: MaterialLink): string[] => {
+  const href = link.href?.trim();
+  const label = normaliseLabel(link.label);
+  return [...(href ? [`href:${href}`] : []), ...(label ? [`label:${label}`] : [])];
+};
+
+export function buildMaterialSourceIndex(studio: StudioView) {
+  const threads = allThreads(studio);
+  const keys = new Map<MaterialLink, string[]>();
+  const sources = new Map<string, Set<number>>();
+  threads.forEach((thread, position) => {
+    for (const link of thread.material) {
+      const linkKeys = keys.get(link) ?? sourceKeys(link);
+      keys.set(link, linkKeys);
+      for (const key of linkKeys) {
+        const positions = sources.get(key) ?? new Set<number>();
+        positions.add(position);
+        sources.set(key, positions);
+      }
+    }
+  });
+  return (link: MaterialLink, slug: string): { slug: string; question: string }[] => {
+    const positions = new Set<number>();
+    for (const key of keys.get(link) ?? sourceKeys(link)) {
+      for (const position of sources.get(key) ?? []) positions.add(position);
+    }
+    return [...positions].sort((a, b) => a - b).flatMap(position => {
+      const other = threads[position];
+      return other && other.slug !== slug ? [{ slug: other.slug, question: other.question }] : [];
+    });
+  };
+}
+
+export function buildThreadFacts(studio: StudioView, thread: StudioThreadView, alsoFor = buildMaterialSourceIndex(studio)) {
   const sorted = [...thread.notes].sort(newestFirst);
   const notes = sorted.filter(note => !isGhost(note) && note.kind !== "relation");
   const derived: StudioThreadDerived = {
@@ -66,10 +99,9 @@ export function buildThreadFacts(studio: StudioView, thread: StudioThreadView) {
     outcome: outcomeOf(thread),
     where: { state: thread.state, place: thread.place ?? null, maxActive: studio.maxActive, opened: thread.opened },
   };
-  const others = allThreads(studio).filter(other => other.slug !== thread.slug);
   const material = thread.material.map(link => ({
     ...link,
-    also: others.filter(other => other.material.some(source => sameSource(link, source))).map(other => ({ slug: other.slug, question: other.question })),
+    also: alsoFor(link, thread.slug),
   }));
   return { derived, material, notes, latest: latestNote(thread.notes) };
 }

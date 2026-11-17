@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { startServer } from "../server";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
@@ -9,9 +9,7 @@ import { DESK_API_VERSION } from "../../../desk-api";
 import { handleGetDeskStudio } from "../api/desk-studio";
 import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { waitsOnYou } from "../desk/studio/board";
-import { needsResponse } from "../desk/studio/response";
-import { buildThreadFacts } from "../desk/studio/thread-facts";
+import { allThreads, buildMaterialSourceIndex, buildThreadFacts } from "../desk/studio/thread-facts";
 import { buildThreadPage } from "../desk/studio/page";
 import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView, type StudioView } from "../desk/studio/view";
@@ -42,11 +40,13 @@ describe("pure Studio thread facts", () => {
     for (const state of ["active", "parked", "closed"] as const) {
       for (const status of NOTE_STATUSES) {
         for (const sample of [true, false]) {
-          for (const text of ["", "Answered."]) {
-            const thread = studioThread("one", { state, outcome: "decided", notes: [note(10, { status, sample })], responses: [{ at: at(11), text }] });
-            const derived = buildThreadFacts(studio([thread]), thread).derived;
-            expect(derived.waitsOnYou).toBe(waitsOnYou(thread));
-            expect(derived.needsResponse).toBe(needsResponse(thread));
+          for (const text of ["", "   ", "Answered."]) {
+            for (const day of [9, 11]) {
+              const thread = studioThread("one", { state, outcome: "decided", notes: [note(10, { status, sample })], responses: [{ at: at(day), text }] });
+              const derived = buildThreadFacts(studio([thread]), thread).derived;
+              expect(derived.waitsOnYou).toBe(status === "open" && day === 9);
+              expect(derived.needsResponse).toBe(state !== "closed" && !sample && (day === 9 || !text.trim()));
+            }
           }
         }
       }
@@ -76,10 +76,9 @@ describe("pure Studio thread facts", () => {
     expect(derived.notes.open.map(n => n.at)).toEqual([at(12), at(8)]);
     expect(derived.notes.kept.map(n => n.at)).toEqual([at(14)]);
     const page = buildThreadPage(view, thread.slug)!;
-    expect(page.standProposal).toEqual(derived.standProposal);
-    expect(page.ideas).toEqual(derived.ideas);
-    expect(page.notes.filter(n => n.status === "open")).toEqual(derived.notes.open);
-    expect(page.notes.filter(n => n.status === "kept")).toEqual(derived.notes.kept);
+    expect(page.standProposal?.at).toBe(at(11));
+    expect(page.ideas.map(n => n.at)).toEqual([at(13), at(7)]);
+    expect(page.notes.map(n => [n.status, n.at])).toEqual([["kept", at(14)], ["open", at(12)], ["open", at(8)]]);
     expect(buildThreadFacts(studio(), studioThread("empty")).derived).toMatchObject({ standProposal: null, ideas: [], notes: { open: [], kept: [] } });
   });
 
@@ -93,6 +92,36 @@ describe("pure Studio thread facts", () => {
     expect(buildThreadFacts(view, b).material.every(m => m.also.some(other => other.slug === a.slug))).toBe(true);
     expect(buildThreadFacts(view, c).material[0]?.also).toEqual([{ slug: a.slug, question: a.question }, { slug: b.slug, question: b.question }]);
     expect(a.material[0]?.also).toBeUndefined();
+  });
+
+  it("normalises each material once and unions href and label matches in Studio order", () => {
+    const a = studioThread("one", { material: [
+      { kind: "link", label: "Café brief!", href: " https://example.org/brief " },
+      { kind: "file", label: "https://example.org/brief" },
+      { kind: "file", label: "—", href: " " },
+    ] });
+    const b = studioThread("two", { material: [{ kind: "file", label: "CAFÉ brief" }] });
+    const c = studioThread("three", { state: "parked", material: [{ kind: "link", label: "Other", href: "https://example.org/brief" }] });
+    const d = studioThread("four", { state: "closed", outcome: "decided", material: [
+      { kind: "link", label: "Café brief!", href: "https://example.org/brief" },
+      { kind: "link", label: "Café brief!", href: "https://example.org/brief" },
+      { kind: "file", label: "…" },
+    ] });
+    const view = studio([a, b], [c], [d]);
+    const normalise = spyOn(String.prototype, "normalize");
+    try {
+      const alsoFor = buildMaterialSourceIndex(view);
+      const links = allThreads(view).flatMap(t => t.material).length;
+      expect(normalise).toHaveBeenCalledTimes(links);
+      const facts = allThreads(view).map(t => buildThreadFacts(view, t, alsoFor));
+      expect(normalise).toHaveBeenCalledTimes(links);
+      expect(facts[0]?.material.map(m => m.also.map(t => t.slug))).toEqual([["two", "three", "four"], [], []]);
+      expect(facts[1]?.material[0]?.also.map(t => t.slug)).toEqual(["one", "four"]);
+      expect(facts[2]?.material[0]?.also.map(t => t.slug)).toEqual(["one", "four"]);
+      expect(facts[3]?.material.map(m => m.also.map(t => t.slug))).toEqual([["one", "two", "three"], ["one", "two", "three"], []]);
+    } finally {
+      normalise.mockRestore();
+    }
   });
 
   it("serves outcome codes and ISO dates with no generated label", () => {
@@ -206,6 +235,19 @@ describe("GET /api/desk/studio thread facts", () => {
       ctx.stop(true);
       db.close();
     }
+  });
+
+  it("reports closed files without an outcome as problems and still serves valid threads and pages", async () => {
+    writeFileSync(join(dir, "threads/broken.md"), THREAD_FILE.replace("state: active", "state: closed"));
+    const response = await handleGetDeskStudio(runtime());
+    expect(response.status).toBe(200);
+    const body: DeskStudioResponse = await response.json();
+    if (!body.studio) throw new Error("Fixture Studio must be enabled.");
+    expect(body.studio.active.map(t => t.slug)).toEqual(["one", "two"]);
+    expect(body.studio.closed.map(t => t.slug)).toEqual(["closed"]);
+    expect(body.studio.problems).toContainEqual({ path: "threads/broken.md", reason: expect.stringContaining("a closed thread needs an outcome") });
+    expect(buildThreadPage(body.studio, "closed")?.outcome).toMatchObject({ open: false, label: "Decided" });
+    expect(buildThreadPage(body.studio, "broken")).toBeNull();
   });
 
   it("keeps the null response when runtime, Desk or Studio is disabled", async () => {

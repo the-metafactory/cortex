@@ -25,6 +25,8 @@ const TargetSchema = z
   })
   .refine((t) => (t.thread === undefined) !== (t.place === undefined), "names either a thread or place: new");
 
+void (true satisfies ((<T>(value: T) => T extends z.infer<typeof TargetSchema> ? 1 : 2) extends (<T>(value: T) => T extends StudioTarget ? 1 : 2) ? true : false));
+
 const ThreadFrontSchema = z
   .object({
     studioId: z.uuid().optional(),

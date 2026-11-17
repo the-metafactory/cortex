@@ -1,5 +1,5 @@
 import type { StudioThreadDerived } from "../../../../desk-api/wire/studio";
-import { allThreads, buildThreadFacts } from "./thread-facts";
+import { allThreads, buildThreadFacts, time } from "./thread-facts";
 import { threadThinking, type ThreadThinking } from "./thinking-view";
 import type { AreaPolicy } from "../types";
 import { areaLookup, type BoardArea } from "./board";
@@ -38,7 +38,13 @@ export interface ThreadPage {
   relations: Relations;
 }
 
-const newestFirst = (a: AssistantNote, b: AssistantNote): number => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0);
+const newestFirst = (a: AssistantNote, b: AssistantNote): number => time(b.at) - time(a.at);
+
+function pageOutcome(outcome: StudioThreadDerived["outcome"], thread: StudioThreadView): PageOutcome {
+  if (outcome.open) return outcome;
+  const { outcome: _code, ...rest } = outcome;
+  return { ...rest, label: outcomeLabel(thread) };
+}
 
 function whereLine(t: StudioThreadDerived["where"], closed: string | null): string {
   const opened = `opened ${dayMonth(t.opened)}`;
@@ -77,7 +83,7 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
     waitsOnYou: derived.waitsOnYou,
     needsResponse: derived.needsResponse,
     log: thread.log,
-    outcome: derived.outcome.open ? derived.outcome : { open: false, label: outcomeLabel(thread), closed: derived.outcome.closed, expect: derived.outcome.expect, reviewOn: derived.outcome.reviewOn, text: derived.outcome.text },
+    outcome: pageOutcome(derived.outcome, thread),
     relations: relatesTo(thread, studio, ctx),
   };
 }

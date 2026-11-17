@@ -1,4 +1,4 @@
-import { latestNote, sameSource, waitsOnYou } from "./thread-facts";
+import { latestNote, sameSource, time, waitsOnYou } from "./thread-facts";
 export { latestNote, normaliseLabel, sameSource, waitsOnYou } from "./thread-facts";
 import type { AreaPolicy } from "../types";
 import type { AssistantNote, StudioCapture, StudioTarget } from "./format";
@@ -194,7 +194,10 @@ export function buildBoard(studio: StudioView, clock: BoardClock, name: string):
   });
 
   const { since, lead } = lookWindow(clock);
-  const thought = [...studio.active, ...studio.parked].filter((t) => t.notes.some((n) => (Date.parse(n.at) || 0) > since && (Date.parse(n.at) || 0) <= clock.now));
+  const thought = [...studio.active, ...studio.parked].filter((t) => t.notes.some((n) => {
+    const at = time(n.at);
+    return at > since && at <= clock.now;
+  }));
   const thoughtAbout = thought.map((t) => `“${clip(plainQuestion(t.question), 48)}”`);
   const waiting = places.filter((p) => p.kind === "thread" && p.waitsOnYou).length;
   const thoughtSentence = thought.length === 0 ? "" : `${lead} I thought about ${thought.length === 1 ? "1 thread" : `${thought.length} threads`}: ${joinAnd(thoughtAbout)}. `;
