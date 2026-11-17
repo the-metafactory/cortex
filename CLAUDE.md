@@ -149,7 +149,7 @@ This repo follows ecosystem SOPs defined in [compass](https://github.com/the-met
 ## Blueprint, versions and worktrees
 
 - Features are tracked in `blueprint.yaml`: `blueprint ready` shows what is unblocked; set `in-progress` when you start and `done` after the PR merges. Commands: [`compass/standards/agent-conventions.md`](https://github.com/the-metafactory/compass/blob/main/standards/agent-conventions.md).
-- Versioning follows `compass/sops/versioning.md`. The version source of truth is `arc-manifest.yaml`; if `package.json` also carries a version, the two must match (CI's `check-version-consistency`). Release title: `"Cortex vX.Y.Z -- Short Description"`. Deploy: `arc upgrade Cortex`.
+- Versioning follows `compass/sops/versioning.md`. The version source of truth is `arc-manifest.yaml`; if `package.json` also carries a version, the two must match (CI's `check-version-consistency`). Release title: `"Cortex vX.Y.Z -- Short Description"`. Deploy: `arc upgrade cortex`.
 - Feature work happens in a worktree (`compass/sops/worktree-discipline.md`): `git worktree add ../Cortex-{slug} -b feat/{branch-name} main`.
 - Use Bun, not Node: `bun`, `bun test`, `bun build`, `bun install`, `bun run`, `bunx`. Bun loads `.env` itself.
 
