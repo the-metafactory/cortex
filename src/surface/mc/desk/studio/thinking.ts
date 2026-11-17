@@ -1,5 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { z } from "zod";
+import type { StudioThinking } from "../../../../desk-api/wire/studio";
 import type { RangerCli, RangerRunner } from "../actions";
 import { runCommand } from "../../common/spawn";
 import type { StudioAct } from "./acts";
@@ -20,7 +21,8 @@ const RunSchema = z.object({
   policy: z.enum(["local", "cloud"]).nullable(),
 });
 const StatusSchema = z.object({ directory: z.string(), dailyRuns: z.object({ local: z.number().int().nonnegative(), cloud: z.number().int().nonnegative() }), runs: z.array(RunSchema) });
-export type StudioThinking = { kind: "ready"; dailyRuns: z.infer<typeof StatusSchema>["dailyRuns"]; runs: z.infer<typeof RunSchema>[] } | { kind: "unavailable"; reason: string };
+type WireRun = Extract<StudioThinking, { kind: "ready" }>["runs"][number];
+void (true satisfies ((<T>(value: T) => T extends z.infer<typeof RunSchema> ? 1 : 2) extends (<T>(value: T) => T extends WireRun ? 1 : 2) ? true : false));
 
 const nativeRun: RangerRunner = (argv) => runCommand(argv, 10_000, undefined, Object.fromEntries(["PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "SHELL"].map(key => [key, process.env[key]])));
 const command = (cli: RangerCli, args: string[]): string[] => [cli.bin, "job", ...args, ...(cli.config ? ["--config", cli.config] : [])];

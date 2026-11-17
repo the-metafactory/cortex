@@ -1,6 +1,7 @@
-import { responseCoverage } from "./response";
+import { latestNote, sameSource, time, waitsOnYou } from "./thread-facts";
+export { latestNote, normaliseLabel, sameSource, waitsOnYou } from "./thread-facts";
 import type { AreaPolicy } from "../types";
-import type { AssistantNote, MaterialLink, StudioCapture, StudioTarget } from "./format";
+import type { AssistantNote, StudioCapture, StudioTarget } from "./format";
 import type { StudioProblem, StudioProposalView, StudioThreadView, StudioView } from "./view";
 
 const DAY_MS = 86_400_000;
@@ -87,39 +88,6 @@ export function clip(text: string, max: number): string {
 export const plainQuestion = (q: string): string => q.trim().replace(/[?.!]+$/, "");
 
 const joinAnd = (parts: string[]): string => (parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`);
-
-const time = (iso: string): number => {
-  const t = Date.parse(iso);
-  return Number.isNaN(t) ? 0 : t;
-};
-
-export function latestNote(notes: readonly AssistantNote[]): AssistantNote | null {
-  let best: AssistantNote | null = null;
-  for (const n of notes) if (best === null || time(n.at) >= time(best.at)) best = n;
-  return best;
-}
-
-export function waitsOnYou(thread: Pick<StudioThreadView, "notes" | "responses">): boolean {
-  const latest = latestNote(thread.notes);
-  if (latest?.status !== "open") return false;
-  const at = time(latest.at);
-  return !thread.responses.some((r) => responseCoverage(thread, r) >= at);
-}
-
-export function normaliseLabel(label: string): string {
-  return label
-    .normalize("NFKD")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
-}
-
-export function sameSource(a: MaterialLink, b: MaterialLink): boolean {
-  const href = a.href?.trim();
-  if (href && href === b.href?.trim()) return true;
-  const la = normaliseLabel(a.label);
-  return la.length > 0 && la === normaliseLabel(b.label);
-}
 
 export function sharedPairs(threads: readonly StudioThreadView[]): SharedPair[] {
   const pairs: SharedPair[] = [];
@@ -226,7 +194,10 @@ export function buildBoard(studio: StudioView, clock: BoardClock, name: string):
   });
 
   const { since, lead } = lookWindow(clock);
-  const thought = [...studio.active, ...studio.parked].filter((t) => t.notes.some((n) => time(n.at) > since && time(n.at) <= clock.now));
+  const thought = [...studio.active, ...studio.parked].filter((t) => t.notes.some((n) => {
+    const at = time(n.at);
+    return at > since && at <= clock.now;
+  }));
   const thoughtAbout = thought.map((t) => `“${clip(plainQuestion(t.question), 48)}”`);
   const waiting = places.filter((p) => p.kind === "thread" && p.waitsOnYou).length;
   const thoughtSentence = thought.length === 0 ? "" : `${lead} I thought about ${thought.length === 1 ? "1 thread" : `${thought.length} threads`}: ${joinAnd(thoughtAbout)}. `;

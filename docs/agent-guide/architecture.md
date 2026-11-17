@@ -34,7 +34,7 @@ Internal componentisation (per `docs/architecture.md` §8):
 - `src/settings/` — `cortex-hooks.json` (CC hook registration).
 - Config: `~/.config/metafactory/cortex/cortex.yaml` (post-MIG-7.9 — migrated from grove-v2 `~/.config/grove/bot.yaml` via `migrate-config`).
 
-Read `docs/architecture.md` for the full layered model + agent + presence/renderer model + event architecture + agent task routing pattern. Read `docs/plan-cortex-migration.md` for the per-phase migration plan (MIG-0..MIG-8) that drives all current work.
+Read `docs/architecture.md` for the full layered model + agent + presence/renderer model + event architecture + agent task routing pattern. Read `docs/plan-cortex-migration.md` for the per-phase migration plan (MIG-0..MIG-8).
 
 ## Migration provenance
 
