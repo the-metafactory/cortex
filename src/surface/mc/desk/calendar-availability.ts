@@ -1,24 +1,24 @@
 import type { DeskCalendar } from "./calendars";
 import { calendarKey, calendarSetting } from "./calendars";
 import type { SourceReading, DeskSourceConfig } from "./sources/command";
-import type { CalendarSourceState, CalendarInterval, CalendarAvailability } from "../../../desk-api/wire/calendar";
-export type { CalendarInterval, CalendarAvailability };
+import type { CalendarSourceState, CalendarInterval, CalendarAvailability, CalendarGap, CalendarGapReason } from "../../../desk-api/wire/calendar";
+export type { CalendarInterval, CalendarAvailability, CalendarGap };
 
 export function calendarAvailability(args: { sources: DeskSourceConfig[]; readings: SourceReading[]; calendars: DeskCalendar[]; now: number }): CalendarAvailability {
   const settings = new Map(args.calendars.map(calendar => [calendarKey(calendar.source, calendar.name, calendar.calendarId), calendar]));
   const sources = args.sources.map((source): CalendarSourceState => {
     const reading = args.readings.find(value => value.id === source.id);
-    const unknown = (reason: string): CalendarSourceState => ({ id: source.id, kind: "unknown", reason });
-    if (!reading) return unknown("Calendar coverage has not been read.");
-    if (reading.error) return unknown("The source could not be read.");
-    if (args.now - reading.readAt >= source.everySeconds * 1000) return unknown("The source reading is stale; a refresh is pending.");
-    if (!reading.capabilities) return unknown("This source does not declare its calendar capability.");
-    if (reading.problems.length > 0) return unknown("The source output could not be read completely.");
+    const unknown = (reason: string, code: Extract<CalendarGapReason, { params: { source: string } }>["code"]): CalendarSourceState => ({ id: source.id, kind: "unknown", reason, reasonPhrase: { code, params: { source: source.id } } });
+    if (!reading) return unknown("Calendar coverage has not been read.", "calendar.not-read");
+    if (reading.error) return unknown("The source could not be read.", "calendar.read-failed");
+    if (args.now - reading.readAt >= source.everySeconds * 1000) return unknown("The source reading is stale; a refresh is pending.", "calendar.stale");
+    if (!reading.capabilities) return unknown("This source does not declare its calendar capability.", "calendar.capability-unknown");
+    if (reading.problems.length > 0) return unknown("The source output could not be read completely.", "calendar.output-incomplete");
     if (!reading.capabilities.includes("calendar")) return { id: source.id, kind: "attention" };
     const coverage = reading.calendarCoverage;
-    if (!coverage) return unknown("This calendar reader does not report a coverage window.");
-    if (coverage.status !== "complete" || reading.dropped > 0 || reading.problems.length > 0) return unknown("The calendar reading is incomplete.");
-    if (reading.events.some(event => !event.calendarId || !coverage.calendars.some(calendar => calendar.id === event.calendarId && calendar.name === event.calendar))) return unknown("An event is outside the declared calendar coverage.");
+    if (!coverage) return unknown("This calendar reader does not report a coverage window.", "calendar.coverage-missing");
+    if (coverage.status !== "complete" || reading.dropped > 0 || reading.problems.length > 0) return unknown("The calendar reading is incomplete.", "calendar.reading-incomplete");
+    if (reading.events.some(event => !event.calendarId || !coverage.calendars.some(calendar => calendar.id === event.calendarId && calendar.name === event.calendar))) return unknown("An event is outside the declared calendar coverage.", "calendar.event-outside-coverage");
     return { id: source.id, kind: "calendar", from: Date.parse(coverage.from), to: Date.parse(coverage.to), readAt: reading.readAt, calendars: coverage.calendars.filter(calendar => calendarSetting(settings, { sourceId: source.id, calendar: calendar.name, calendarId: calendar.id })?.enabled !== false).map(calendar => calendar.id), provenance: coverage.provenance };
   });
   const events = args.readings.flatMap(reading => reading.events.flatMap((event): CalendarInterval[] => {
@@ -28,12 +28,6 @@ export function calendarAvailability(args: { sources: DeskSourceConfig[]; readin
   }));
   return { sources, events };
 }
-
-export type CalendarGap =
-  | { kind: "busy"; until: number; event: CalendarInterval; overlaps: CalendarInterval[] }
-  | { kind: "unknown"; reasons: string[] }
-  | { kind: "bounded"; until: number; minutes: number; event: CalendarInterval }
-  | { kind: "open"; through: number; asOf: number };
 
 export function currentGap(calendar: CalendarAvailability, now: number): CalendarGap {
   const qualified = new Map(calendar.sources.flatMap(source => source.kind === "calendar" && source.from <= now && source.to > now ? [[source.id, source]] : []));
@@ -47,18 +41,18 @@ export function currentGap(calendar: CalendarAvailability, now: number): Calenda
   }
   const next = busy.filter(event => event.at > now).sort((a, b) => a.at - b.at)[0];
   const until = next?.at;
-  const reasons = calendar.sources.flatMap(source => {
+  const reasons = calendar.sources.flatMap((source): CalendarGapReason[] => {
     if (source.kind === "attention") return [];
-    if (source.kind === "unknown") return [`${source.id}: ${source.reason}`];
-    return source.from > now || source.to <= now || (until !== undefined && source.to < until) ? [`${source.id}: the reading does not cover the requested interval.`] : [];
+    if (source.kind === "unknown") return [source.reasonPhrase ?? { code: "calendar.source-unavailable", params: { source: source.id } }];
+    return source.from > now || source.to <= now || (until !== undefined && source.to < until) ? [{ code: "calendar.interval-uncovered", params: { source: source.id } }] : [];
   });
-  if (!calendar.sources.some(source => source.kind === "calendar")) reasons.push("No qualified calendar coverage is available.");
+  if (!calendar.sources.some(source => source.kind === "calendar")) reasons.push({ code: "calendar.no-coverage" });
   const uncertain = calendar.events.some(event => {
     if (event.availability.status === "free" || (event.end !== undefined && event.end <= now)) return false;
     if (until !== undefined && event.at >= until) return false;
     return event.availability.status === "unknown" || event.end === undefined || event.end <= event.at;
   });
-  if (uncertain) reasons.push("A visible event has unknown availability or an incomplete interval.");
+  if (uncertain) reasons.push({ code: "calendar.event-unverified" });
   if (reasons.length) return { kind: "unknown", reasons };
   const through = Math.min(...calendar.sources.flatMap(source => source.kind === "calendar" ? [source.to] : []));
   const asOf = Math.min(...calendar.sources.flatMap(source => source.kind === "calendar" ? [source.readAt] : []));

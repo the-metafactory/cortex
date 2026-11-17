@@ -1,6 +1,7 @@
 import { useRef, useState, type MouseEventHandler, type ReactNode } from "react";
 import type { TodayItem } from "../../../../balance";
 import type { MyDayView } from "../../desk/my-day";
+import type { CalendarGapReason, TaskRecommendationReason } from "../../../../desk-api";
 import { currentGap, type CalendarAvailability, type CalendarGap, type CalendarInterval } from "../../desk/calendar-availability";
 import { nextTask, projectContext, reorderVisible } from "../../desk/time-first";
 import { balanceDestinations } from "../../desk/balance-destinations";
@@ -34,6 +35,31 @@ const time = (at: number): string => new Date(at).toLocaleTimeString("en-GB", { 
 const dayTime = (at: number): string => new Date(at).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" });
 const eventTitle = (event: CalendarInterval): string => event.title.trim() || "Untitled or private event";
 const eventRange = (event: CalendarInterval): string => `${time(event.at)}–${event.end === undefined ? "End time unavailable" : time(event.end)}`;
+
+const recommendationReasons: Record<TaskRecommendationReason["code"], string> = {
+  "day.closed": "Your day is closed. Your wins are below.",
+  "day.no-task": "No incomplete task is available in this day.",
+  "day.calendar-busy": "A calendar block is in progress. Your priorities stay available to choose.",
+  "day.fit-unverified": "This is the first task in your day order. Calendar coverage cannot prove that it fits now.",
+  "day.first-task": "The first task in your day order.",
+  "day.task-fits": "The first eligible task in your saved order that fits the gap.",
+  "day.no-task-fits": "No task with a known estimate fits this gap. Your overall priorities stay unchanged.",
+};
+const calendarReasons: Record<CalendarGapReason["code"], string> = {
+  "calendar.not-read": "Calendar coverage has not been read.",
+  "calendar.read-failed": "The source could not be read.",
+  "calendar.stale": "The source reading is stale; a refresh is pending.",
+  "calendar.capability-unknown": "This source does not declare its calendar capability.",
+  "calendar.output-incomplete": "The source output could not be read completely.",
+  "calendar.coverage-missing": "This calendar reader does not report a coverage window.",
+  "calendar.reading-incomplete": "The calendar reading is incomplete.",
+  "calendar.event-outside-coverage": "An event is outside the declared calendar coverage.",
+  "calendar.source-unavailable": "The calendar source is unavailable.",
+  "calendar.interval-uncovered": "The reading does not cover the requested interval.",
+  "calendar.no-coverage": "No qualified calendar coverage is available.",
+  "calendar.event-unverified": "A visible event has unknown availability or an incomplete interval.",
+};
+const calendarReason = (reason: CalendarGapReason): string => `${"params" in reason ? `${reason.params.source}: ` : ""}${calendarReasons[reason.code]}`;
 
 function gapHeading(gap: CalendarGap): string {
   switch (gap.kind) {
@@ -97,7 +123,7 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
           <p>Calendar busy until {time(gap.until)}{gap.until !== gap.event.end ? " across overlapping events." : "."}</p>
         </>}
         {gap.kind === "open" && <p>Read at {time(gap.asOf)} through {dayTime(gap.through)}. Showing your usual priority order.</p>}
-        {gap.kind === "unknown" && <details><summary>Why the fit is unverified</summary><ul>{gap.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></details>}
+        {gap.kind === "unknown" && <details><summary>Why the fit is unverified</summary><ul>{gap.reasons.map((reason, index) => <li key={index}>{calendarReason(reason)}</li>)}</ul></details>}
       </section>
       <div className="tf-now"><time>{time(now)}</time><span>Now</span></div>
       {proposal}
@@ -114,7 +140,7 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
           {entry && <TaskDetails compact titled={false} locked={locked} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); editor.setMessage(null); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
             {adding?.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || locked} heading="Add subtask" message={editor.message} onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
           </TaskDetails>}
-        </> : <><h2>Choose what works for you</h2><p>{recommendation.kind === "none" ? recommendation.reason : "Your priorities are available alongside the timeline."}</p><a className="desk-btn" href="#today-priorities" onClick={showPriorities}>See today's priorities</a></>}
+        </> : <><h2>Choose what works for you</h2><p>{recommendation.kind === "none" ? recommendationReasons[recommendation.reason.code] : "Your priorities are available alongside the timeline."}</p><a className="desk-btn" href="#today-priorities" onClick={showPriorities}>See today's priorities</a></>}
       </section>}
       <DayContract changes={changes} />
       {after}

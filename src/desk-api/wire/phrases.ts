@@ -1,5 +1,7 @@
 import type { PredictedAction, SimilarityBasis, InviteReply, InviteStatus } from "./mail";
 import type { DeskItemKind } from "./types";
+import type { CalendarGapReason } from "./calendar";
+import type { TaskRecommendationReason } from "./my-day";
 
 export interface MailPhraseModifiers {
   vip?: string;
@@ -134,4 +136,6 @@ export type DeskPhrase =
   | { code: "brief.previous-target-unavailable" }
   | { code: "brief.previous-invalid" }
   | { code: "brief.meeting-gone" }
-  | { code: "brief.synthesis-not-configured" };
+  | { code: "brief.synthesis-not-configured" }
+  | CalendarGapReason
+  | TaskRecommendationReason;
