@@ -5,6 +5,7 @@ export type { CalendarGap, CalendarGapReason } from "./calendar";
 export type { MailRoundView } from "./mail-round";
 export type { RulingExplanation } from "./ruling";
 export type { DeskSearchKind, DeskSearchOpenRoute, DeskSearchHit, DeskSearchResponse } from "./search";
+export type { BalanceDestination, BalanceProjectMiss, BalanceProjectResolved, BalanceDestinationsResponse } from "./balance";
 export type { SnoozeResult, SnoozeTime, SnoozeTimes } from "./mail";
 export type { RoutineDisplayMode, RoutineDisplayChoice, RoutineDisplaySource, RoutineDisplayEntry, RoutineDisplayResult } from "./routines";
 export type { DeskAskRouting } from "./ask";
