@@ -139,7 +139,7 @@ export function createBalanceLifecycleWriter<I extends BalanceCreateInput, R ext
       if (route.kind !== "active") return null;
       const review = build(route).facade.review(fields);
       if (review.kind !== "resolved") return null;
-      const refs = contract.destinations(review.input);
+      const refs = contract.destinations(review.input, route.connectionId);
       return { connectionId: route.connectionId, destinations: refs.map(ref => ({ objectType: ref.objectType, canonicalId: ref.canonicalId })) };
     },
   };

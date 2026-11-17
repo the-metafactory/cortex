@@ -8,6 +8,7 @@ import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { canonicalGraphRef } from "../work-graph/read";
 import { flowName } from "../flow/schema";
 import { BALANCE_CREATE_CONTRACTS } from "../balance/create-contracts";
+import { BALANCE_INBOX_TASK_CONTRACT } from "../balance/inbox-binding";
 import { MAIL_REPLY_DRAFT_CAPABILITY } from "../mail/reply-draft-policy";
 import { OperationJournalStore, StoredSchema, type StoredOperation } from "./journal";
 import { parseWire, type Json, type OperationJournal } from "./types";
@@ -87,6 +88,14 @@ function flowLegacyIssues(source: LegacySource, context: LegacyContext): string[
   return issues;
 }
 
+function inboxLegacyIssues(source: LegacySource, context: LegacyContext): string[] {
+  const issues: string[] = [];
+  const expected = BALANCE_INBOX_TASK_CONTRACT.destinations({ item: "", title: "" }, context.connectionId);
+  if (!source.proposal.fields.item || canonicalWire(context.destinations.map(canonicalWire).sort()) !== canonicalWire(expected.map(canonicalWire).sort())) issues.push("legacy_destination_ambiguous");
+  if (context.canonicalReference && (context.canonicalReference.objectType !== "task" || context.canonicalReference.canonicalId !== source.record.canonicalId)) issues.push("legacy_canonical_mapping_unsupported");
+  return issues;
+}
+
 function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
   if (source.record.owner === "mail-draft" && context.owner === "mail-draft" && context.capabilityId === MAIL_REPLY_DRAFT_CAPABILITY) {
     const issues: string[] = [];
@@ -100,6 +109,7 @@ function conversionIssues(source: LegacySource, context: LegacyContext): string[
   const objectType = balanceObjectType(context);
   if (!objectType || source.record.owner !== context.owner) return ["legacy_capability_mapping_unsupported"];
   const fields = source.proposal.fields;
+  if (context.owner === BALANCE_INBOX_TASK_CONTRACT.owner) return inboxLegacyIssues(source, context);
   const project = objectType === "task" ? canonicalProject(fields.project) : undefined;
   const destinations = ["area", "project"].flatMap(objectType => {
     const canonicalId = objectType === "project" ? project : fields[objectType];

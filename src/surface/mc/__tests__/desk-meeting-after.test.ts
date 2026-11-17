@@ -13,6 +13,7 @@ const START = {
   b: roundAt(16, 16, 2),
   yesterday: roundAt(15, 20),
   later: roundAt(17, 17, 0),
+  added: roundAt(17, 17, 2),
 } as const;
 const key = (id: keyof typeof START): string => `meeting-after:cal:${SOURCE}:${id}@${START[id]}`;
 
@@ -34,6 +35,7 @@ beforeEach(async () => {
       roundEvent("a", START.a, roundAt(16, 16, 5)),
       roundEvent("b", START.b, roundAt(16, 16, 9)),
       roundEvent("yesterday", START.yesterday, roundAt(15, 21)),
+      roundEvent("later", START.later, roundAt(17, 17, 5)),
     ],
   });
   await rig.get();
@@ -112,12 +114,16 @@ describe("Desk after-meeting card", () => {
     expect(afterMeeting(await rig.get())).toEqual([]);
     expect(dismissalCount()).toBe(1);
     rig.setNow(roundAt(17, 17, 10));
-    expect(afterMeeting(await rig.get())).toEqual([]);
+    expect(afterMeeting(await rig.get()).map((item) => item.key)).toEqual([key("later")]);
     expect(dismissalCount()).toBe(1);
-    rig.setState({ mail: [], events: [roundEvent("later", START.later, roundAt(17, 17, 5))] });
-    expect(afterMeeting(await rig.refresh()).map((item) => item.key)).toEqual([key("later")]);
     expect((await dismiss({ action: "meeting.dismiss", key: key("later") })).status).toBe(200);
     expect(dismissalCount()).toBe(1);
     expect(afterMeeting(await rig.get())).toEqual([]);
+  });
+
+  it("surfaces a meeting added after the first read once the Desk refreshes", async () => {
+    rig.setNow(roundAt(17, 17, 10));
+    rig.setState({ mail: [], events: [roundEvent("added", START.added, roundAt(17, 17, 6))] });
+    expect(afterMeeting(await rig.refresh()).map((item) => item.key)).toEqual([key("added")]);
   });
 });

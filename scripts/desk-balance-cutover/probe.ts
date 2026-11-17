@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { findNode } from "../../src/balance";
-import { openConversationHost, type HostStatus } from "../../src/conversations/host";
-import type { TurnCall } from "../../src/conversations/model";
+import type { HostStatus } from "../../src/conversations/host";
+import { openProbeRuntime } from "./host";
 import { BALANCE_TASK_CONTRACT } from "../../src/conversations/domain-adapters/balance/task-binding";
 import { BALANCE_PROJECT_CONTRACT } from "../../src/conversations/domain-adapters/balance/project-binding";
 import { ProposalSchema } from "../../src/conversations/creation";
@@ -39,8 +39,6 @@ const EDITED_NOTE = "Edited before the cutover";
 interface Reply { ok: boolean; error?: string; conversation?: { id: string }; proposal?: ProposalView; grants?: Grant[] }
 interface Call { status: number; body: Reply }
 
-const answering = (): TurnCall => async request => ({ text: "ok", session: request.session, resumed: false });
-
 function deskOptions(): DeskOptions {
   return { enabled: true, displayName: "Cutover probe", topN: 5, rangerUrl: "", areas: [{ id: AREA, label: "Lab", color: "", repos: [], goals: [], policy: "local" }, { id: "area-home", label: "Home", color: "", repos: [], goals: [] }], sources: [] };
 }
@@ -54,8 +52,7 @@ export async function runBalanceCutoverProbe(kind: "task" | "project"): Promise<
     saveBalanceState(db, balanceTaskState());
     const desk = deskOptions();
     const runtime: DeskRuntime = { ledger: new HandledLedger(), options: desk };
-    const status = await openConversationHost({ dir: join(root, "conversations"), stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: { provider: "test", model: "test-model" }, cloud: { provider: "test", model: "test-model" } }, turns: answering() });
-    assert.equal(status.state, "ready", status.state === "unavailable" ? status.reason : "the conversation host did not open");
+    const status = await openProbeRuntime(root, LABEL);
     const host = status.host;
     const registry = new DomainAdapterRegistry();
     const registered = registry.register(contract.declaration(), { handlers: {}, observations: {} });
