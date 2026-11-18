@@ -15,6 +15,8 @@ const PrepareSchema = z.object({ event: EVENT_KEY, refresh: z.boolean().optional
 const GONE = "The Desk no longer sees that meeting.";
 const NOT_PREPARED = "No brief is prepared for that meeting. Prepare it first.";
 const STALE = "The meeting or its linked material changed since this brief was prepared. Refresh it.";
+const UNREADABLE_BODY_FAILS_THE_SCHEMA = null;
+const FAILURE_REACHES_THE_CALLER_THROUGH_TURN = undefined;
 
 const refreshRequired = (): Response => {
   const body: BriefRefreshRequired = { ok: false, error: STALE, code: REFRESH_REQUIRED };
@@ -22,7 +24,7 @@ const refreshRequired = (): Response => {
 };
 
 async function prepare(req: Request, db: Database, runtime: DeskRuntime, deps: BriefDeps): Promise<Response> {
-  const parsed = PrepareSchema.safeParse(await req.json().catch(() => null));
+  const parsed = PrepareSchema.safeParse(await req.json().catch(() => UNREADABLE_BODY_FAILS_THE_SCHEMA));
   if (!parsed.success) return fail(400, "A brief needs the event key of a meeting, and refresh may only be true or false.");
   const { event, refresh } = parsed.data;
   const current = await currentEvidence(db, runtime, event, deps);
@@ -53,7 +55,7 @@ const gathering = new WeakMap<Database, Promise<unknown>>();
 async function currentEvidence(db: Database, runtime: DeskRuntime, event: string, deps: BriefDeps) {
   await runtime.sourceCache?.read(runtime.options?.sources ?? [], (deps.now ?? Date.now)(), true);
   const turn = (gathering.get(db) ?? Promise.resolve()).then(() => gatherCurrent(db, runtime, event, deps));
-  gathering.set(db, turn.catch(() => undefined));
+  gathering.set(db, turn.catch(() => FAILURE_REACHES_THE_CALLER_THROUGH_TURN));
   return turn;
 }
 

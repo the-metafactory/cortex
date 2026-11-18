@@ -5213,11 +5213,6 @@
       "count": 1
     }
   },
-  "src/surface/mc/api/desk-meeting-brief.ts": {
-    "cortex/no-ignored-error": {
-      "count": 1
-    }
-  },
   "src/surface/mc/api/desk-meeting-previous.ts": {
     "cortex/no-ignored-error": {
       "count": 1
