@@ -65,4 +65,4 @@ export async function runCommand(argv: string[], timeoutMs: number, stdin?: stri
   }
 }
 
-export const runModelCommand = (argv: string[], timeoutMs: number, stdin?: string, env?: Record<string, string | undefined>) => runCommand(argv, timeoutMs, stdin, env, true);
+export const runModelCommand = (argv: string[], timeoutMs: number, stdin?: string, env?: Record<string, string | undefined>, ownGroup = true, options: { signal?: AbortSignal } = {}) => runCommand(argv, timeoutMs, stdin, env, ownGroup, options);

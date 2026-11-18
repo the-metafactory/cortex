@@ -50,14 +50,14 @@ async function read(url: URL, db: Database, runtime: DeskRuntime, deps: BriefDep
 
 const gathering = new WeakMap<Database, Promise<unknown>>();
 
-function currentEvidence(db: Database, runtime: DeskRuntime, event: string, deps: BriefDeps) {
+async function currentEvidence(db: Database, runtime: DeskRuntime, event: string, deps: BriefDeps) {
+  await runtime.sourceCache?.read(runtime.options?.sources ?? [], (deps.now ?? Date.now)(), true);
   const turn = (gathering.get(db) ?? Promise.resolve()).then(() => gatherCurrent(db, runtime, event, deps));
   gathering.set(db, turn.catch(() => undefined));
   return turn;
 }
 
 async function gatherCurrent(db: Database, runtime: DeskRuntime, event: string, deps: BriefDeps) {
-  await runtime.sourceCache?.read(runtime.options?.sources ?? [], (deps.now ?? Date.now)(), true);
   const meeting = resolveMeeting(runtime, event);
   if (!meeting) {
     dropPrepared(db, event);

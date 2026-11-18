@@ -110,7 +110,7 @@ const UNAVAILABLE_WORDING: Record<BriefSynthesisUnavailableReason, { phrase: Des
   "not-prepared": { phrase: { code: "brief.synthesis-not-prepared" }, message: "No summary is prepared for the current material and model settings. Prepare the brief to start one." },
 };
 
-export const synthesisUnavailable = (reason: BriefSynthesisUnavailableReason): BriefSynthesis => ({ state: "unavailable", reason, ...UNAVAILABLE_WORDING[reason] });
+export const synthesisUnavailable = (reason: BriefSynthesisUnavailableReason): Extract<BriefSynthesis, { state: "unavailable" }> => ({ state: "unavailable", reason, ...UNAVAILABLE_WORDING[reason] });
 
 export const SYNTHESIS_NOT_CONFIGURED: BriefSynthesis = synthesisUnavailable("not-configured");
 
@@ -120,13 +120,13 @@ const FAILED_WORDING: Record<BriefSynthesisFailedReason, { phrase: DeskPhrase; m
   interrupted: { phrase: { code: "brief.synthesis-interrupted" }, message: "The summary was interrupted before it finished. The evidence is shown as it is; prepare the brief again to retry." },
 };
 
-export const synthesisFailed = (reason: BriefSynthesisFailedReason, generation: string, failedAt: number): BriefSynthesis => ({ state: "failed", reason, generation, failedAt: new Date(failedAt).toISOString(), ...FAILED_WORDING[reason] });
+export const synthesisFailed = (reason: BriefSynthesisFailedReason, generation: string, failedAt: number): Extract<BriefSynthesis, { state: "failed" }> => ({ state: "failed", reason, generation, failedAt: new Date(failedAt).toISOString(), ...FAILED_WORDING[reason] });
 
-export const synthesisPreparing = (generation: string, startedAt: number): BriefSynthesis => ({
+export const synthesisPreparing = (generation: string, startedAt: number): Extract<BriefSynthesis, { state: "preparing" }> => ({
   state: "preparing", generation, startedAt: new Date(startedAt).toISOString(), phrase: { code: "brief.synthesis-preparing" }, message: "A summary is being prepared. The evidence is ready now.",
 });
 
-export const synthesisReady = (generation: string, completedAt: number, claims: BriefClaim[]): BriefSynthesis => ({
+export const synthesisReady = (generation: string, completedAt: number, claims: BriefClaim[]): Extract<BriefSynthesis, { state: "ready" }> => ({
   state: "ready", generation, completedAt: new Date(completedAt).toISOString(), claims, phrase: { code: "brief.synthesis-ready" }, message: "The summary cites the evidence below.",
 });
 

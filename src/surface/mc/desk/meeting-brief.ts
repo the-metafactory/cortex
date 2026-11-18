@@ -179,8 +179,7 @@ const emptyMeetingGap = (eventKey: string, meeting: MeetingFacts): BriefGap =>
   gapOf("no-linked-material", { kind: "meeting", adapter: null, owner: "desk-source-command", ...(meeting.connection ? { connection: meeting.connection } : {}), item: eventKey });
 
 interface Gathered {
-  facts: BriefFact[];
-  locals: [string, boolean][];
+  evidence: EvidenceFact[];
   gaps: BriefGap[];
   fingerprints: [string, string][];
 }
@@ -189,10 +188,9 @@ type LazyReaders = () => Promise<BriefReaders>;
 
 async function gatherLinked(db: Database, eventKey: string, meeting: MeetingFacts, readers: LazyReaders): Promise<Gathered> {
   const rows = linksToMeeting(db, eventKey);
-  const facts = new Map<string, BriefFact>();
+  const evidence = new Map<string, EvidenceFact>();
   const gaps = new Map<string, BriefGap>();
   const fingerprints = new Map<string, string>();
-  const locals = new Map<string, boolean>();
   if (rows.length === 0) {
     const gap = emptyMeetingGap(eventKey, meeting);
     gaps.set(gap.id, gap);
@@ -205,13 +203,12 @@ async function gatherLinked(db: Database, eventKey: string, meeting: MeetingFact
         gaps.set(gap.id, gap);
       } else {
         const fact = factOf(result);
-        facts.set(fact.id, fact);
+        evidence.set(fact.id, { fact, local: result.local !== false });
         fingerprints.set(fact.id, result.fingerprint);
-        locals.set(fact.id, result.local !== false);
       }
     }
   }
-  return { facts: [...facts.values()], gaps: [...gaps.values()], locals: [...locals.entries()].sort(), fingerprints: [...fingerprints.entries()].sort() };
+  return { evidence: [...evidence.values()], gaps: [...gaps.values()], fingerprints: [...fingerprints.entries()].sort() };
 }
 
 type PreviousFault = "self" | "not-earlier";
@@ -228,7 +225,7 @@ async function gatherPrevious(db: Database, runtime: DeskRuntime, eventKey: stri
   const gathered = await gatherLinked(db, relation.previousEvent, previous, readers);
   return {
     gathered,
-    previousMeeting: previousIdentified(relation.previousEvent, gathered.facts, gathered.gaps),
+    previousMeeting: previousIdentified(relation.previousEvent, gathered.evidence.map(entry => entry.fact), gathered.gaps),
     fingerprint: [relation.previousEvent, previous.fingerprint, previous.at, previous.end, gathered.fingerprints, gathered.gaps.map((g) => [g.id, g.reason]).sort()],
   };
 }
@@ -236,15 +233,15 @@ async function gatherPrevious(db: Database, runtime: DeskRuntime, eventKey: stri
 const snapshotOf = (...sources: (Gathered | null)[]): EvidenceFact[] => {
   const byId = new Map<string, EvidenceFact>();
   for (const gathered of sources) {
-    const locals = new Map(gathered?.locals ?? []);
-    for (const fact of gathered?.facts ?? []) {
-      const local = locals.get(fact.id) !== false;
+    for (const { fact, local } of gathered?.evidence ?? []) {
       const seen = byId.get(fact.id);
       byId.set(fact.id, { fact: seen?.fact ?? fact, local: local || seen?.local === true });
     }
   }
   return [...byId.values()];
 };
+
+const localRevisions = (gathered: Gathered): [string, boolean][] => gathered.evidence.map(({ fact, local }): [string, boolean] => [fact.id, local]).sort();
 
 export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKey: string, meeting: MeetingFacts, deps: BriefDeps = {}): Promise<BriefEvidence> {
   let loaded: Promise<BriefReaders> | undefined;
@@ -259,12 +256,12 @@ export async function gatherEvidence(db: Database, runtime: DeskRuntime, eventKe
     runtime.options?.sources,
     currentReadings(runtime).map(reading => [reading.id, reading.error !== null, reading.dropped, reading.problems, reading.capabilities, reading.calendarCoverage]),
     current.fingerprints,
-    current.locals,
+    localRevisions(current),
     current.gaps.map((g) => [g.id, g.reason]).sort(),
     previous.fingerprint,
-    previous.gathered?.locals ?? null,
+    previous.gathered ? localRevisions(previous.gathered) : null,
   ]);
-  return { facts: current.facts, snapshot: snapshotOf(current, previous.gathered), gaps: current.gaps, previousMeeting: previous.previousMeeting, revision };
+  return { facts: current.evidence.map(entry => entry.fact), snapshot: snapshotOf(current, previous.gathered), gaps: current.gaps, previousMeeting: previous.previousMeeting, revision };
 }
 
 const readRow = async (readers: BriefReaders, row: LinkRow): Promise<BriefRead> => {

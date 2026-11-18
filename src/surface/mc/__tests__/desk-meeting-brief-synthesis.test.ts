@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleDeskMeetingBrief } from "../api/desk-meeting-brief";
@@ -11,10 +11,11 @@ import type { ClassifierConfig } from "../desk/classify";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { linkToMeeting, type LinkSubject } from "../desk/links";
 import type { MeetingBrief } from "../desk/meeting-brief-contract";
-import type { SynthesisModel, SynthesisPrompt } from "../desk/meeting-brief-synthesis";
+import { synthesisModel, type SynthesisModel, type SynthesisPrompt } from "../desk/meeting-brief-synthesis";
 import { setPreviousRelation } from "../desk/meeting-previous";
 import { addNote } from "../desk/notes";
 import { SourceCache } from "../desk/sources/command";
+import { LOCAL_CONTENT } from "../desk/source-boundary";
 import { startServer } from "../server";
 import { briefOptions, briefPost, briefRuntime, EVENT, fixture, NOW, PRINCIPAL, seed } from "./fixtures/meeting-brief";
 
@@ -394,6 +395,42 @@ describe("meeting brief synthesis over the real Mission Control routes", () => {
       dbHttp.close();
       local.stop(true);
       cloud.stop(true);
+    }
+  });
+});
+
+describe("meeting brief model cancellation", () => {
+  it("aborts an in-flight HTTP request before its model answers", async () => {
+    const started = deferred<null>();
+    const answer = deferred<null>();
+    const endpoint = Bun.serve({ port: 0, async fetch() { started.resolve(null); await answer.promise; return Response.json({}); } });
+    const controller = new AbortController();
+    const pending = synthesisModel({ ...LOCAL, baseUrl: `http://127.0.0.1:${endpoint.port}/v1` }, { facts: [] }, LOCAL_CONTENT, "Assistant", controller.signal);
+    try {
+      await started.promise;
+      controller.abort();
+      await expect(pending).rejects.toThrow();
+    } finally {
+      controller.abort();
+      answer.resolve(null);
+      endpoint.stop(true);
+    }
+  });
+
+  it("terminates a command model when its generation is aborted", async () => {
+    const pidPath = join(dir, "model.pid");
+    const script = 'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000);';
+    const controller = new AbortController();
+    const pending = synthesisModel({ command: [process.execPath, "-e", script, pidPath], timeoutSeconds: 5, maxPerPass: 1, sourcePolicy: "local" }, { facts: [] }, LOCAL_CONTENT, "Assistant", controller.signal);
+    try {
+      for (let attempt = 0; attempt < 100 && !existsSync(pidPath); attempt += 1) await settle();
+      expect(existsSync(pidPath)).toBe(true);
+      const pid = Number(readFileSync(pidPath, "utf8"));
+      controller.abort();
+      await expect(pending).rejects.toThrow();
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      controller.abort();
     }
   });
 });
