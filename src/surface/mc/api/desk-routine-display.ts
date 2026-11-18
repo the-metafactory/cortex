@@ -3,6 +3,7 @@ import type { DeskRuntime } from "../desk/compose";
 import { reflexCommand, type RoutineRunner } from "../desk/routine-command";
 import { RoutineInventorySchema } from "../desk/routine-editor-contract";
 import { buildDisplayEntry, readRoutineDisplay, ROUTINE_BACKGROUND_THRESHOLD, RoutineDisplayChangeSchema, writeRoutineDisplay, type RoutineDisplayPage } from "../desk/routine-display";
+import type { RoutineDisplayResult } from "../../../desk-api/wire/routines";
 import { readRoutineFrequency } from "../desk/routine-frequency";
 import { routineReadHeaders as headers } from "./desk-routine-context";
 
@@ -28,5 +29,9 @@ export async function handleDeskRoutineDisplay(req: Request, db: Database, runti
   try { inventory = await reflexCommand(options, ["routine", "list"], RoutineInventorySchema, run); }
   catch { return fail(502, "The routine owner could not confirm this routine. The previous display is unchanged."); }
   if (!inventory.some((routine) => routine.id === change.routineId)) return fail(404, "This routine is no longer installed. The previous display is unchanged.");
-  return Response.json(writeRoutineDisplay(db, change), { headers });
+  const written = writeRoutineDisplay(db, change);
+  const { frequency, maxDailyStarts } = await readRoutineFrequency(options, scope, now(), run);
+  const entry = buildDisplayEntry(change.routineId, readRoutineDisplay(db, scope).get(change.routineId) ?? null, frequency.status === "known" ? maxDailyStarts.get(change.routineId) ?? 0 : null);
+  const result: RoutineDisplayResult = { ...written, entry };
+  return Response.json(result, { headers });
 }

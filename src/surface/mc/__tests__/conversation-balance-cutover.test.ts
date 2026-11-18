@@ -17,6 +17,7 @@ import { conversationSources, operationUuid } from "../desk/conversation-sources
 import { BALANCE_CUTOVER_INBOX_ITEM, balanceCutoverFixture, balanceTasks, legacyInFlightCutover } from "../desk/fixtures/balance-cutover";
 import { loadMeta } from "../desk/my-day";
 import { conversationWriterRig } from "./conversation-writer-rig";
+import { cutoverRunner, openBalanceCutoverBase } from "./balance-cutover-rig";
 
 const writerRig = conversationWriterRig("conversation-balance-cutover-", "ai.meta-factory.cortex.balance-cutover-test");
 
@@ -31,16 +32,8 @@ function deskOptions(): DeskOptions {
 async function openRigFor(kind: "task" | "project") {
   const contract = kind === "task" ? BALANCE_TASK_CONTRACT : BALANCE_PROJECT_CONTRACT;
   const owner = contract.owner;
-  const db = writerRig.database();
-  saveBalanceState(db, balanceTaskState());
   const desk = deskOptions();
-  const runtime: DeskRuntime = { ledger: new HandledLedger(), options: desk };
-  const opened = await writerRig.open<Reply>(db, runtime);
-  const registry = new DomainAdapterRegistry();
-  const registered = registry.register(contract.declaration(), { handlers: {}, observations: {} });
-  if (!registered.ok) throw new Error(registered.error.code);
-  const journal = opened.host.lifecycleJournal(registry);
-  const writers = opened.host.lifecycleWriters();
+  const { db, opened, journal, writers } = await openBalanceCutoverBase<Reply>(writerRig, desk, contract.declaration());
   const fixture = balanceCutoverFixture({ db, desk: () => desk, journal, writers, contract, fences: opened.host.lifecycleFences() });
   await opened.host.attachSources(conversationSources({ db, desk: () => desk, [kind === "task" ? "balanceTaskCutover" : "balanceProjectCutover"]: () => fixture.cutover, deskItems: () => Promise.resolve([BALANCE_CUTOVER_INBOX_ITEM]) }));
   const tasks = (title: string): OutlineNode[] => balanceTasks(db, title);
@@ -54,10 +47,7 @@ async function openRigFor(kind: "task" | "project") {
     const check = async (view: ProposalView): Promise<ProposalView> => (await opened.call("POST", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}/check`)).body.proposal;
     return { conversationId, propose, revise, confirm, check, list, unwrap };
   };
-  const runCutover = async (steps: WriterCutoverSteps, plan: WriterPlan): Promise<WriterRecord> => {
-    const begun = await writers.begin(plan, 0);
-    return writers.resume(begun.bindingKey, steps);
-  };
+  const runCutover = cutoverRunner(writers);
   const start = async (title: string) => talk(await opened.start(title));
   return { fixture, kind, owner, contract, inFlight: () => legacyInFlightCutover(journal, { kind }), db, desk, host: opened.host, journal, writers, tasks, receipts, runCutover, start, ...(await start("Cutover conversation")) };
 }

@@ -34,7 +34,7 @@ cortex uses one feature numbering scheme during MIG-0..MIG-8 and adds a second o
 **Sync rule:** Iteration plans exist in two places — `docs/iteration-*.md` (repo artifact, agents read it) and a GitHub Issue (trackable, commentable). When a checkbox is completed, update both.
 
 **Migration artefacts:**
-- `docs/plan-cortex-migration.md` — Per-phase migration plan (MIG-0..MIG-8). Drives all current work; retires at MIG-8.
+- `docs/plan-cortex-migration.md` — Per-phase migration plan (MIG-0..MIG-8). Governs migration work; retires at MIG-8.
 - `docs/architecture.md` — Canonical M1–M7 stack + cortex internal componentisation. Static reference.
 
 **Design + iteration docs** (lifted from grove-v2 at MIG-7.11):

@@ -2,9 +2,9 @@ import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { stripControlCharacters } from "../../../../common/untrusted-fence";
 import { THREAD_TYPES, THREAD_STATES, THREAD_OUTCOMES, NOTE_KINDS, NOTE_STATUSES } from "../../../../desk-api/wire/studio";
-import type { ThreadType, ThreadOutcome, NoteKind, NoteStatus, AssistantNote, StudioResponse, MaterialLink, LogEntry, StudioThread } from "../../../../desk-api/wire/studio";
+import type { ThreadType, ThreadOutcome, NoteKind, NoteStatus, AssistantNote, StudioResponse, MaterialLink, LogEntry, StudioThread, StudioTarget, StudioCapture, StudioProposal } from "../../../../desk-api/wire/studio";
 export { THREAD_OUTCOMES };
-export type { ThreadType, ThreadOutcome, AssistantNote, StudioResponse, MaterialLink, LogEntry, StudioThread };
+export type { ThreadType, ThreadOutcome, AssistantNote, StudioResponse, MaterialLink, LogEntry, StudioThread, StudioTarget, StudioCapture };
 
 export const STUDIO_SLUG = /^[a-z0-9][a-z0-9-]{0,79}$/;
 export const AREA_ID = /^[\w.-]{1,64}$/;
@@ -25,7 +25,7 @@ const TargetSchema = z
   })
   .refine((t) => (t.thread === undefined) !== (t.place === undefined), "names either a thread or place: new");
 
-export type StudioTarget = z.infer<typeof TargetSchema>;
+void (true satisfies ((<T>(value: T) => T extends z.infer<typeof TargetSchema> ? 1 : 2) extends (<T>(value: T) => T extends StudioTarget ? 1 : 2) ? true : false));
 
 const ThreadFrontSchema = z
   .object({
@@ -54,26 +54,6 @@ const ProposalFrontSchema = z.object({
   proposed: isoTime,
   target: TargetSchema,
 });
-
-export interface StudioCapture {
-  id: string;
-  path: string;
-  at: string;
-  via: string;
-  text: string;
-  target?: StudioTarget;
-}
-
-export interface StudioProposal {
-  id: string;
-  path: string;
-  type: ThreadType;
-  areas: string[];
-  proposed: string;
-  question: string;
-  why: string;
-  target: StudioTarget;
-}
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; reason: string };
 

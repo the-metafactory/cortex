@@ -67,3 +67,29 @@ export interface RoutineView {
   capabilityInstalls?: CapabilityInstallView[];
   error?: string;
 }
+
+export type RoutineDisplayMode = "scheduled" | "background";
+
+export type RoutineDisplayChoice = "automatic" | RoutineDisplayMode;
+
+export type RoutineDisplaySource = "stored" | "frequency" | "unknown";
+
+/** How one routine shows on the calendar: the stored choice, the mode its frequency suggests, and the effective mode with where it came from. */
+export interface RoutineDisplayEntry {
+  routineId: string;
+  stored: RoutineDisplayMode | null;
+  automatic: RoutineDisplayMode | null;
+  maxDailyStarts: number | null;
+  mode: RoutineDisplayMode;
+  source: RoutineDisplaySource;
+}
+
+/** The body of a routine display change that succeeded. `entry` is the effective display afterwards. */
+export interface RoutineDisplayResult {
+  owner: "reflex";
+  principal: string;
+  stack: string;
+  routineId: string;
+  mode: RoutineDisplayChoice;
+  entry: RoutineDisplayEntry;
+}

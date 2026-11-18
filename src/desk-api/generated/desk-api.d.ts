@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.10.0";
+export declare const DESK_API_VERSION = "1.13.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -292,6 +292,651 @@ export interface MailYesFilter {
 	questions: string[];
 	commitments: Commitment[];
 	problems: string[];
+}
+declare const SNOOZE_TIMES: readonly [
+	"later",
+	"tomorrow",
+	"next-week"
+];
+export type SnoozeTime = (typeof SNOOZE_TIMES)[number];
+export type SnoozeTimes = Record<SnoozeTime, number>;
+/** The body of a snooze or defer that succeeded. `until` is the English label, `untilIso` the end as an instant (null when the end is a person or a meeting not yet known), `labelPhrase` the same wording as a code. */
+export interface SnoozeResult {
+	ok: true;
+	message: string;
+	until: string;
+	untilIso: string | null;
+	labelPhrase?: DeskPhrase;
+}
+export type ParserProvider = "codex" | "pi";
+export type CandidateProvider = "claude" | ParserProvider;
+export type CandidateReason = "not-configured" | "not-permitted" | "already-attempted" | "parser-incapable" | "missing-reading" | "stale-reading" | "capped" | "quota-ineligible" | "eligible";
+export interface ParserRoutingEvidence {
+	version: 1;
+	attempted: ParserProvider[];
+	candidates: {
+		substrate: CandidateProvider;
+		reason: CandidateReason;
+	}[];
+	fallbackReasons: {
+		provider: ParserProvider;
+		reason: "quota-exhausted";
+	}[];
+	capabilityExclusions: {
+		provider: CandidateProvider;
+		reason: string;
+	}[];
+}
+export interface ParserRoutingSelected extends ParserRoutingEvidence {
+	kind: "selected";
+	provider: ParserProvider;
+	reason: "most-headroom" | "pi-fallback";
+}
+export interface ParserRoutingUnavailable extends ParserRoutingEvidence {
+	kind: "unavailable";
+	reason: string;
+}
+export type ParserRouting = ParserRoutingSelected | ParserRoutingUnavailable;
+export type ParserUnavailableCause = CandidateReason | "quota-exhausted";
+export type CalendarGapReason = {
+	code: "calendar.not-read" | "calendar.read-failed" | "calendar.stale" | "calendar.capability-unknown" | "calendar.output-incomplete" | "calendar.coverage-missing" | "calendar.reading-incomplete" | "calendar.event-outside-coverage" | "calendar.source-unavailable" | "calendar.interval-uncovered";
+	params: {
+		source: string;
+	};
+} | {
+	code: "calendar.no-coverage" | "calendar.event-unverified";
+};
+/** Unknown sources use reasonPhrase as their canonical reason; the English reason field is deprecated. */
+export type CalendarSourceState = {
+	id: string;
+	kind: "attention";
+} | {
+	id: string;
+	kind: "unknown";
+	reason: string;
+	reasonPhrase: CalendarGapReason;
+} | {
+	id: string;
+	kind: "calendar";
+	from: number;
+	to: number;
+	readAt: number;
+	calendars: string[];
+	provenance: string;
+};
+export interface CalendarInterval {
+	key: string;
+	source: string;
+	calendar: string;
+	calendarId: string;
+	title: string;
+	at: number;
+	end?: number;
+	availability: EventAvailability;
+}
+export interface CalendarAvailability {
+	sources: CalendarSourceState[];
+	events: CalendarInterval[];
+}
+export type CalendarGap = {
+	kind: "busy";
+	until: number;
+	event: CalendarInterval;
+	overlaps: CalendarInterval[];
+} | {
+	kind: "unknown";
+	reasons: CalendarGapReason[];
+} | {
+	kind: "bounded";
+	until: number;
+	minutes: number;
+	event: CalendarInterval;
+} | {
+	kind: "open";
+	through: number;
+	asOf: number;
+};
+export interface EventAvailability {
+	status: "busy" | "free" | "unknown";
+	provenance: string;
+}
+export interface DeskCalendar {
+	source: string;
+	name: string;
+	calendarId?: string;
+	enabled: boolean;
+	color: string;
+}
+export type NodeId = string;
+export type Effort = 1 | 2 | 4;
+export interface Recurrence {
+	unit: "day" | "week" | "month";
+	interval: number;
+	weekdays?: number[];
+	count?: number;
+	until?: string;
+	timesDone?: number;
+	mode?: RecurrenceMode;
+	anchor?: string;
+	occurrence?: string;
+}
+export type RecurrenceMode = "calendar" | "completion";
+export interface OutlineNode {
+	id: NodeId;
+	title: string;
+	weight: number;
+	ordering: "parallel" | "sequential";
+	children: OutlineNode[];
+	note?: string;
+	done?: boolean;
+	completedAt?: string;
+	createdAt?: string;
+	touchedAt?: string;
+	effort?: Effort;
+	estimateMinutes?: number;
+	dueDate?: string;
+	leadDays?: number;
+	startDate?: string;
+	deferredUntil?: string;
+	focusMonth?: string;
+	repeat?: Recurrence;
+	context?: string;
+	external?: {
+		source: string;
+		url?: string;
+		syncedAt: string;
+	};
+}
+export interface TodayItem {
+	task: OutlineNode;
+	areaId: NodeId;
+	areaTitle: string;
+	path: string[];
+	context?: string;
+	score: number;
+	urgency: number;
+	reason: "due" | "balance" | "focus";
+	trace: string;
+}
+export interface AreaReview {
+	areaId: string;
+	areaTitle: string;
+	targetShare: number;
+	actualShare: number;
+	completions: number;
+}
+export interface CompletionReview {
+	wins: {
+		title: string;
+		date: string;
+		areaTitle: string;
+	}[];
+	areas: AreaReview[];
+	focus: {
+		title: string;
+		done: number;
+		total: number;
+	}[];
+	totalCompletions: number;
+}
+/** When a repeating leaf comes back. `returnsOn` is its next occurrence and `reappearsOn` that date minus its lead days, the day `applyRecurrence` reopens it; both are null while the row is open or once the repeat is finished. */
+export interface RecurrenceProjection {
+	returnsOn: string | null;
+	finished: boolean;
+	reappearsOn: string | null;
+}
+export type BalanceDayHealth = "fresh" | "stale" | "unavailable" | "conflicted";
+export interface BalanceProjectedTask {
+	readonly id: string;
+	readonly title: string;
+	readonly done: boolean;
+	readonly dueDate: string | null;
+	readonly note?: string;
+	readonly effort?: 1 | 2 | 4;
+}
+export interface BalanceDayProjection {
+	readonly status: BalanceDayHealth;
+	readonly observedAt: string | null;
+	readonly tasks: readonly BalanceProjectedTask[];
+}
+export interface BalanceDestination {
+	id: string;
+	label: string;
+	title: string;
+	area: string;
+	project: boolean;
+}
+declare const BALANCE_PROJECT_MISSES: readonly [
+	"none",
+	"ambiguous",
+	"id-shaped"
+];
+export type BalanceProjectMiss = (typeof BALANCE_PROJECT_MISSES)[number];
+export type BalanceProjectResolved = {
+	id: string;
+} | {
+	none: true;
+	reason: BalanceProjectMiss;
+};
+export interface BalanceDestinationsResponse {
+	destinations: BalanceDestination[];
+	resolved?: BalanceProjectResolved;
+}
+declare const THREAD_TYPES: readonly [
+	"question",
+	"topic",
+	"making"
+];
+declare const THREAD_STATES: readonly [
+	"active",
+	"parked",
+	"closed"
+];
+declare const THREAD_OUTCOMES: readonly [
+	"decided",
+	"shipped",
+	"dropped"
+];
+declare const NOTE_KINDS: readonly [
+	"note",
+	"stand",
+	"idea",
+	"relation"
+];
+declare const NOTE_STATUSES: readonly [
+	"open",
+	"kept",
+	"dismissed"
+];
+export type ThreadType = (typeof THREAD_TYPES)[number];
+export type ThreadState = (typeof THREAD_STATES)[number];
+export type ThreadOutcome = (typeof THREAD_OUTCOMES)[number];
+export type NoteKind = (typeof NOTE_KINDS)[number];
+export type NoteStatus = (typeof NOTE_STATUSES)[number];
+export interface AssistantNote {
+	at: string;
+	trigger: string;
+	model: string;
+	mode?: string;
+	run?: string;
+	kind: NoteKind;
+	status: NoteStatus;
+	sample: boolean;
+	because?: string;
+	relates?: MaterialLink;
+	text: string;
+}
+export interface StudioResponse {
+	at: string;
+	re?: string;
+	text: string;
+}
+export interface MaterialLink {
+	kind: string;
+	label: string;
+	href?: string;
+	text?: string;
+	textTruncated?: true;
+	also?: {
+		slug: string;
+		question: string;
+	}[];
+}
+export interface LogEntry {
+	at?: string;
+	text: string;
+}
+export interface StudioThread {
+	id?: string;
+	slug: string;
+	path: string;
+	type: ThreadType;
+	areas: string[];
+	state: ThreadState;
+	opened: string;
+	closed?: string;
+	thinkTonight: boolean;
+	outcome?: ThreadOutcome;
+	expect?: string;
+	reviewOn?: string;
+	question: string;
+	stand: string;
+	notes: AssistantNote[];
+	responses: StudioResponse[];
+	material: MaterialLink[];
+	log: LogEntry[];
+	outcomeText: string;
+}
+export interface SparPersona {
+	name: string;
+	from: "config" | "thread";
+}
+export type ThinkingBudget = "open" | "spent" | "off";
+export type ThreadThinking = {
+	kind: "unavailable";
+	reason: string;
+} | {
+	kind: "ready";
+	budget: ThinkingBudget;
+	reason: string | null;
+	runs: {
+		id: string;
+		mode: string;
+		status: "pending" | "failed";
+		reason: string;
+	}[];
+};
+export interface StudioThreadView extends StudioThread {
+	policy: AreaPolicy;
+	place?: number;
+	overCap: boolean;
+	personas: SparPersona[];
+	thinking?: ThreadThinking;
+}
+/** A Studio thread's outline row with its thread's state; `state` and `openNotes` are null when the Studio is off or this request could not read it. */
+export interface StudioProjectLink {
+	id: string;
+	slug: string;
+	state: ThreadState | null;
+	openNotes: number | null;
+}
+export type StudioThreadOutcome = {
+	open: true;
+	text: string;
+} | {
+	open: false;
+	outcome: ThreadOutcome;
+	closed: string | null;
+	expect: string | null;
+	reviewOn: string | null;
+	text: string;
+};
+export interface StudioThreadDerived {
+	waitsOnYou: boolean;
+	needsResponse: boolean;
+	notes: {
+		open: AssistantNote[];
+		kept: AssistantNote[];
+	};
+	standProposal: AssistantNote | null;
+	ideas: AssistantNote[];
+	outcome: StudioThreadOutcome;
+	where: {
+		state: ThreadState;
+		place: number | null;
+		maxActive: number;
+		opened: string;
+	};
+}
+export interface DeskStudioThread extends StudioThreadView {
+	derived: StudioThreadDerived;
+}
+export interface StudioTarget {
+	thread?: string;
+	place?: "new";
+	area?: string;
+	reason: string;
+}
+export interface StudioCapture {
+	id: string;
+	path: string;
+	at: string;
+	via: string;
+	text: string;
+	target?: StudioTarget;
+}
+export interface StudioProposal {
+	id: string;
+	path: string;
+	type: ThreadType;
+	areas: string[];
+	proposed: string;
+	question: string;
+	why: string;
+	target: StudioTarget;
+}
+export interface StudioProposalView extends StudioProposal {
+	policy: AreaPolicy;
+}
+export interface StudioProblem {
+	path: string;
+	reason: string;
+}
+export interface YesFilter {
+	questions: string[];
+	fromConfig: boolean;
+}
+export type StudioThinking = {
+	kind: "unavailable";
+	reason: string;
+} | {
+	kind: "ready";
+	dailyRuns: {
+		local: number;
+		cloud: number;
+	};
+	runs: {
+		runUuid: string;
+		id?: number;
+		queuedAt?: string;
+		finishedAt?: string | null;
+		substrate?: string | null;
+		result?: string | null;
+		params: {
+			thread: string;
+			mode?: string;
+			requestId?: string;
+		};
+		status: "queued" | "running" | "succeeded" | "failed";
+		reason: string | null;
+		startedAt: string | null;
+		policy: AreaPolicy | null;
+	}[];
+};
+export interface StudioView {
+	personas?: string[];
+	thinking?: StudioThinking;
+	maxActive: number;
+	yesFilter: YesFilter;
+	areas: (DeskArea & {
+		policy: AreaPolicy;
+	})[];
+	active: StudioThreadView[];
+	parked: StudioThreadView[];
+	closed: StudioThreadView[];
+	inbox: StudioCapture[];
+	proposals: StudioProposalView[];
+	problems: StudioProblem[];
+}
+export interface DeskStudioView extends StudioView {
+	active: DeskStudioThread[];
+	parked: DeskStudioThread[];
+	closed: DeskStudioThread[];
+}
+export type DeskStudioResponse = {
+	studio: null;
+} | {
+	directory: string;
+	studio: DeskStudioView;
+	materialText: "untrusted";
+};
+declare const HANDOFF_STATES: readonly [
+	"working",
+	"ready",
+	"failed",
+	"approved",
+	"discarded"
+];
+export type HandoffState = (typeof HANDOFF_STATES)[number];
+/** What a Desk card carries about its hand-off: the state, the status line and, once finished, what came back. */
+export interface HandoffView {
+	id: string;
+	state: HandoffState;
+	line: string;
+	since: number;
+	findings?: string[];
+	draft?: string;
+	result?: string;
+	brief?: string;
+}
+export type TaskHandoffLines = Record<string, {
+	state: HandoffState;
+	line: string;
+}>;
+declare const LINK_FROM_KINDS: readonly [
+	"mail",
+	"task",
+	"thread",
+	"note"
+];
+export type LinkFromKind = (typeof LINK_FROM_KINDS)[number];
+declare const LINK_TO_KINDS: readonly [
+	"task",
+	"meeting",
+	"thread"
+];
+export type LinkToKind = (typeof LINK_TO_KINDS)[number];
+/** Who made a link: the principal on the Desk, an approved rule, or the Desk on its own under the `mail.link-meeting` grant. */
+export type LinkOrigin = "desk" | "rule" | "auto";
+/** What a mail link keeps of the mail, so the link still reads after the mail leaves the inbox. */
+export interface MailSnapshot {
+	sourceId?: string;
+	sender: string;
+	senderName: string | null;
+	receivedAt: string;
+	url: string | null;
+	account: string | null;
+}
+/** The link as a response returns it. */
+export interface LinkReceipt {
+	id: string;
+	from: {
+		kind: LinkFromKind;
+		key: string;
+		title: string;
+	};
+	to: {
+		kind: LinkToKind;
+		key: string;
+		title: string;
+		at?: number;
+		end?: number;
+	};
+	origin: LinkOrigin;
+	at: number;
+}
+/** A link as My day lists it with its task, with the mail snapshot for a mail link. */
+export interface DeskLinkView extends LinkReceipt {
+	mail: MailSnapshot | null;
+}
+export interface EventLink {
+	id: string;
+	kind: LinkFromKind;
+	key: string;
+	title: string;
+	origin: LinkOrigin;
+}
+export type TaskRecommendation = {
+	kind: "fit";
+	item: TodayItem;
+	minutes: number;
+	reason: {
+		code: "day.task-fits";
+	};
+} | {
+	kind: "normal";
+	item: TodayItem;
+	reason: {
+		code: "day.first-task";
+	};
+} | {
+	kind: "unverified";
+	item: TodayItem;
+	reason: {
+		code: "day.fit-unverified";
+	};
+} | {
+	kind: "none";
+	reason: {
+		code: "day.closed" | "day.no-task" | "day.calendar-busy" | "day.no-task-fits";
+	};
+};
+export type TaskRecommendationReason = TaskRecommendation["reason"];
+export interface MyDayResponse extends MyDayView {
+	now: {
+		at: number;
+		gap: CalendarGap;
+		next: TaskRecommendation;
+	};
+}
+export interface MyDaySource {
+	taskId: string;
+	key: string;
+	fingerprint: string;
+	kind: string;
+	url?: string;
+}
+/** An outline row as My day serves it: a row with a `repeat` rule also carries `recurrence`, computed by the Balance engine's recurrence rule. */
+export type MyDayOutlineNode = Omit<OutlineNode, "children"> & {
+	children: MyDayOutlineNode[];
+	recurrence?: RecurrenceProjection;
+};
+export interface MyDayView {
+	work: {
+		confirmedIds: string[];
+		selection: {
+			kind: "automatic";
+		} | {
+			kind: "manual";
+			id: string;
+		} | {
+			kind: "unavailable";
+			id: string;
+			reason: string;
+		};
+	};
+	studioStatus: "synced" | "unavailable" | "disabled";
+	studioTasks: {
+		id: string;
+		slug: string;
+	}[];
+	studioProjects: StudioProjectLink[];
+	revision: number;
+	configuredCaps: {
+		cap: number;
+		topN: number;
+	};
+	capsOverridden: boolean;
+	inbox: OutlineNode[];
+	date: string;
+	phase: "proposed" | "started" | "closed";
+	cap: number;
+	topN: number;
+	items: TodayItem[];
+	alternates: TodayItem[];
+	wins: {
+		taskId: string;
+		title: string;
+	}[];
+	outline: MyDayOutlineNode;
+	observation: Pick<BalanceDayProjection, "status" | "observedAt"> | null;
+	sources: MyDaySource[];
+	touchTrackingSince: string | null;
+	yesFilter: string[];
+	undos: {
+		receipt: string;
+		title: string;
+	}[];
+	dayUndo: {
+		receipt: string;
+		text: string;
+	} | null;
+	handoffs?: TaskHandoffLines;
+	links: DeskLinkView[];
+}
+export interface UnavailableParser {
+	provider: "claude" | "codex" | "pi";
+	cause: ParserUnavailableCause;
 }
 export interface MailPhraseModifiers {
 	vip?: string;
@@ -783,6 +1428,27 @@ export type DeskPhrase = {
 		category: string;
 	};
 } | {
+	code: "ask.answered";
+	params: {
+		provider: "claude" | "codex" | "pi";
+		unavailable: UnavailableParser[];
+	};
+} | {
+	code: "ask.no-provider";
+	params: {
+		unavailable: UnavailableParser[];
+	};
+} | {
+	code: "ask.invalid-output";
+} | {
+	code: "ask.timeout";
+} | {
+	code: "ask.quota-reached";
+} | {
+	code: "ask.connection-unavailable";
+} | {
+	code: "ask.failed";
+} | {
 	code: "brief.gap-no-adapter";
 	params: {
 		kind: string;
@@ -844,395 +1510,7 @@ export type DeskPhrase = {
 	code: "brief.synthesis-invalid-output";
 } | {
 	code: "brief.synthesis-interrupted";
-};
-export type NodeId = string;
-export type Effort = 1 | 2 | 4;
-export interface Recurrence {
-	unit: "day" | "week" | "month";
-	interval: number;
-	weekdays?: number[];
-	count?: number;
-	until?: string;
-	timesDone?: number;
-	mode?: RecurrenceMode;
-	anchor?: string;
-	occurrence?: string;
-}
-export type RecurrenceMode = "calendar" | "completion";
-export interface OutlineNode {
-	id: NodeId;
-	title: string;
-	weight: number;
-	ordering: "parallel" | "sequential";
-	children: OutlineNode[];
-	note?: string;
-	done?: boolean;
-	completedAt?: string;
-	createdAt?: string;
-	touchedAt?: string;
-	effort?: Effort;
-	estimateMinutes?: number;
-	dueDate?: string;
-	leadDays?: number;
-	startDate?: string;
-	deferredUntil?: string;
-	focusMonth?: string;
-	repeat?: Recurrence;
-	context?: string;
-	external?: {
-		source: string;
-		url?: string;
-		syncedAt: string;
-	};
-}
-export interface TodayItem {
-	task: OutlineNode;
-	areaId: NodeId;
-	areaTitle: string;
-	path: string[];
-	context?: string;
-	score: number;
-	urgency: number;
-	reason: "due" | "balance" | "focus";
-	trace: string;
-}
-export interface AreaReview {
-	areaId: string;
-	areaTitle: string;
-	targetShare: number;
-	actualShare: number;
-	completions: number;
-}
-export interface CompletionReview {
-	wins: {
-		title: string;
-		date: string;
-		areaTitle: string;
-	}[];
-	areas: AreaReview[];
-	focus: {
-		title: string;
-		done: number;
-		total: number;
-	}[];
-	totalCompletions: number;
-}
-/** When a repeating leaf comes back. `returnsOn` is its next occurrence and `reappearsOn` that date minus its lead days, the day `applyRecurrence` reopens it; both are null while the row is open or once the repeat is finished. */
-export interface RecurrenceProjection {
-	returnsOn: string | null;
-	finished: boolean;
-	reappearsOn: string | null;
-}
-export type BalanceDayHealth = "fresh" | "stale" | "unavailable" | "conflicted";
-export interface BalanceProjectedTask {
-	readonly id: string;
-	readonly title: string;
-	readonly done: boolean;
-	readonly dueDate: string | null;
-	readonly note?: string;
-	readonly effort?: 1 | 2 | 4;
-}
-export interface BalanceDayProjection {
-	readonly status: BalanceDayHealth;
-	readonly observedAt: string | null;
-	readonly tasks: readonly BalanceProjectedTask[];
-}
-declare const THREAD_TYPES: readonly [
-	"question",
-	"topic",
-	"making"
-];
-declare const THREAD_STATES: readonly [
-	"active",
-	"parked",
-	"closed"
-];
-declare const THREAD_OUTCOMES: readonly [
-	"decided",
-	"shipped",
-	"dropped"
-];
-declare const NOTE_KINDS: readonly [
-	"note",
-	"stand",
-	"idea",
-	"relation"
-];
-declare const NOTE_STATUSES: readonly [
-	"open",
-	"kept",
-	"dismissed"
-];
-export type ThreadType = (typeof THREAD_TYPES)[number];
-export type ThreadState = (typeof THREAD_STATES)[number];
-export type ThreadOutcome = (typeof THREAD_OUTCOMES)[number];
-export type NoteKind = (typeof NOTE_KINDS)[number];
-export type NoteStatus = (typeof NOTE_STATUSES)[number];
-export interface AssistantNote {
-	at: string;
-	trigger: string;
-	model: string;
-	mode?: string;
-	run?: string;
-	kind: NoteKind;
-	status: NoteStatus;
-	sample: boolean;
-	because?: string;
-	relates?: MaterialLink;
-	text: string;
-}
-export interface StudioResponse {
-	at: string;
-	re?: string;
-	text: string;
-}
-export interface MaterialLink {
-	kind: string;
-	label: string;
-	href?: string;
-	text?: string;
-	textTruncated?: true;
-}
-export interface LogEntry {
-	at?: string;
-	text: string;
-}
-export interface StudioThread {
-	id?: string;
-	slug: string;
-	path: string;
-	type: ThreadType;
-	areas: string[];
-	state: ThreadState;
-	opened: string;
-	closed?: string;
-	thinkTonight: boolean;
-	outcome?: ThreadOutcome;
-	expect?: string;
-	reviewOn?: string;
-	question: string;
-	stand: string;
-	notes: AssistantNote[];
-	responses: StudioResponse[];
-	material: MaterialLink[];
-	log: LogEntry[];
-	outcomeText: string;
-}
-export interface SparPersona {
-	name: string;
-	from: "config" | "thread";
-}
-export type ThinkingBudget = "open" | "spent" | "off";
-export type ThreadThinking = {
-	kind: "unavailable";
-	reason: string;
-} | {
-	kind: "ready";
-	budget: ThinkingBudget;
-	reason: string | null;
-	runs: {
-		id: string;
-		mode: string;
-		status: "pending" | "failed";
-		reason: string;
-	}[];
-};
-export interface StudioThreadView extends StudioThread {
-	policy: AreaPolicy;
-	place?: number;
-	overCap: boolean;
-	personas: SparPersona[];
-	thinking?: ThreadThinking;
-}
-/** A Studio thread's outline row with its thread's state; `state` and `openNotes` are null when the Studio is off or this request could not read it. */
-export interface StudioProjectLink {
-	id: string;
-	slug: string;
-	state: ThreadState | null;
-	openNotes: number | null;
-}
-declare const HANDOFF_STATES: readonly [
-	"working",
-	"ready",
-	"failed",
-	"approved",
-	"discarded"
-];
-export type HandoffState = (typeof HANDOFF_STATES)[number];
-/** What a Desk card carries about its hand-off: the state, the status line and, once finished, what came back. */
-export interface HandoffView {
-	id: string;
-	state: HandoffState;
-	line: string;
-	since: number;
-	findings?: string[];
-	draft?: string;
-	result?: string;
-	brief?: string;
-}
-export type TaskHandoffLines = Record<string, {
-	state: HandoffState;
-	line: string;
-}>;
-declare const LINK_FROM_KINDS: readonly [
-	"mail",
-	"task",
-	"thread",
-	"note"
-];
-export type LinkFromKind = (typeof LINK_FROM_KINDS)[number];
-declare const LINK_TO_KINDS: readonly [
-	"task",
-	"meeting",
-	"thread"
-];
-export type LinkToKind = (typeof LINK_TO_KINDS)[number];
-/** Who made a link: the principal on the Desk, an approved rule, or the Desk on its own under the `mail.link-meeting` grant. */
-export type LinkOrigin = "desk" | "rule" | "auto";
-/** What a mail link keeps of the mail, so the link still reads after the mail leaves the inbox. */
-export interface MailSnapshot {
-	sourceId?: string;
-	sender: string;
-	senderName: string | null;
-	receivedAt: string;
-	url: string | null;
-	account: string | null;
-}
-/** The link as a response returns it. */
-export interface LinkReceipt {
-	id: string;
-	from: {
-		kind: LinkFromKind;
-		key: string;
-		title: string;
-	};
-	to: {
-		kind: LinkToKind;
-		key: string;
-		title: string;
-		at?: number;
-		end?: number;
-	};
-	origin: LinkOrigin;
-	at: number;
-}
-/** A link as My day lists it with its task, with the mail snapshot for a mail link. */
-export interface DeskLinkView extends LinkReceipt {
-	mail: MailSnapshot | null;
-}
-export interface EventLink {
-	id: string;
-	kind: LinkFromKind;
-	key: string;
-	title: string;
-	origin: LinkOrigin;
-}
-export interface MyDaySource {
-	taskId: string;
-	key: string;
-	fingerprint: string;
-	kind: string;
-	url?: string;
-}
-/** An outline row as My day serves it: a row with a `repeat` rule also carries `recurrence`, computed by the Balance engine's recurrence rule. */
-export type MyDayOutlineNode = Omit<OutlineNode, "children"> & {
-	children: MyDayOutlineNode[];
-	recurrence?: RecurrenceProjection;
-};
-export interface MyDayView {
-	work: {
-		confirmedIds: string[];
-		selection: {
-			kind: "automatic";
-		} | {
-			kind: "manual";
-			id: string;
-		} | {
-			kind: "unavailable";
-			id: string;
-			reason: string;
-		};
-	};
-	studioStatus: "synced" | "unavailable" | "disabled";
-	studioTasks: {
-		id: string;
-		slug: string;
-	}[];
-	studioProjects: StudioProjectLink[];
-	revision: number;
-	configuredCaps: {
-		cap: number;
-		topN: number;
-	};
-	capsOverridden: boolean;
-	inbox: OutlineNode[];
-	date: string;
-	phase: "proposed" | "started" | "closed";
-	cap: number;
-	topN: number;
-	items: TodayItem[];
-	alternates: TodayItem[];
-	wins: {
-		taskId: string;
-		title: string;
-	}[];
-	outline: MyDayOutlineNode;
-	observation: Pick<BalanceDayProjection, "status" | "observedAt"> | null;
-	sources: MyDaySource[];
-	touchTrackingSince: string | null;
-	yesFilter: string[];
-	undos: {
-		receipt: string;
-		title: string;
-	}[];
-	dayUndo: {
-		receipt: string;
-		text: string;
-	} | null;
-	handoffs?: TaskHandoffLines;
-	links: DeskLinkView[];
-}
-export type CalendarSourceState = {
-	id: string;
-	kind: "attention";
-} | {
-	id: string;
-	kind: "unknown";
-	reason: string;
-} | {
-	id: string;
-	kind: "calendar";
-	from: number;
-	to: number;
-	readAt: number;
-	calendars: string[];
-	provenance: string;
-};
-export interface CalendarInterval {
-	key: string;
-	source: string;
-	calendar: string;
-	calendarId: string;
-	title: string;
-	at: number;
-	end?: number;
-	availability: EventAvailability;
-}
-export interface CalendarAvailability {
-	sources: CalendarSourceState[];
-	events: CalendarInterval[];
-}
-export interface EventAvailability {
-	status: "busy" | "free" | "unknown";
-	provenance: string;
-}
-export interface DeskCalendar {
-	source: string;
-	name: string;
-	calendarId?: string;
-	enabled: boolean;
-	color: string;
-}
+} | CalendarGapReason | TaskRecommendationReason;
 export interface RulingChoice {
 	label: string;
 	consequence: string;
@@ -1264,35 +1542,6 @@ export interface DeskVoice {
 	output: VoiceProviderId;
 	wake?: DeskWakeOptions;
 }
-export type ParserProvider = "codex" | "pi";
-export type CandidateProvider = "claude" | ParserProvider;
-export type CandidateReason = "not-configured" | "not-permitted" | "already-attempted" | "parser-incapable" | "missing-reading" | "stale-reading" | "capped" | "quota-ineligible" | "eligible";
-export interface ParserRoutingEvidence {
-	version: 1;
-	attempted: ParserProvider[];
-	candidates: {
-		substrate: CandidateProvider;
-		reason: CandidateReason;
-	}[];
-	fallbackReasons: {
-		provider: ParserProvider;
-		reason: "quota-exhausted";
-	}[];
-	capabilityExclusions: {
-		provider: CandidateProvider;
-		reason: string;
-	}[];
-}
-export interface ParserRoutingSelected extends ParserRoutingEvidence {
-	kind: "selected";
-	provider: ParserProvider;
-	reason: "most-headroom" | "pi-fallback";
-}
-export interface ParserRoutingUnavailable extends ParserRoutingEvidence {
-	kind: "unavailable";
-	reason: string;
-}
-export type ParserRouting = ParserRoutingSelected | ParserRoutingUnavailable;
 declare const ASK_KINDS: readonly [
 	"reminder",
 	"note",
@@ -1328,6 +1577,10 @@ export interface ConversationOffer {
 		text: string;
 		area?: string;
 	};
+}
+/** Added to the body of an ask that answered or failed through a routed parser. The English `error` of a failure stays through 1.x. */
+export interface DeskAskRouting {
+	routingPhrase?: DeskPhrase;
 }
 export interface RoutineRequest<A> {
 	requestId: string;
@@ -1448,6 +1701,27 @@ export interface RoutineView {
 	drafts?: RoutineDraftView[];
 	capabilityInstalls?: CapabilityInstallView[];
 	error?: string;
+}
+export type RoutineDisplayMode = "scheduled" | "background";
+export type RoutineDisplayChoice = "automatic" | RoutineDisplayMode;
+export type RoutineDisplaySource = "stored" | "frequency" | "unknown";
+/** How one routine shows on the calendar: the stored choice, the mode its frequency suggests, and the effective mode with where it came from. */
+export interface RoutineDisplayEntry {
+	routineId: string;
+	stored: RoutineDisplayMode | null;
+	automatic: RoutineDisplayMode | null;
+	maxDailyStarts: number | null;
+	mode: RoutineDisplayMode;
+	source: RoutineDisplaySource;
+}
+/** The body of a routine display change that succeeded. `entry` is the effective display afterwards. */
+export interface RoutineDisplayResult {
+	owner: "reflex";
+	principal: string;
+	stack: string;
+	routineId: string;
+	mode: RoutineDisplayChoice;
+	entry: RoutineDisplayEntry;
 }
 export interface ObjectReference {
 	adapterId: string;
@@ -1865,6 +2139,7 @@ export interface DeferredItem {
 }
 export interface DeskView {
 	timeZone: string;
+	snoozeTimes: SnoozeTimes;
 	calendarAvailability?: CalendarAvailability;
 	routines?: RoutineView;
 	mailRules?: MailRuleView[];
@@ -2011,6 +2286,12 @@ export interface DeskErrorBody {
 export interface DeskApiRouteTypes {
 	"GET /api/desk": {
 		response: DeskView | DeskDisabled;
+	};
+	"GET /api/desk/studio": {
+		response: DeskStudioResponse;
+	};
+	"GET /api/desk/my-day": {
+		response: MyDayResponse;
 	};
 }
 export type DeskApiRouteKey = keyof DeskApiRouteTypes;

@@ -6,6 +6,7 @@ import type { ObjectRef, OwnerWriter, OwnerWriters, SourceState } from "../../..
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { routedBalanceCreateWriter, type BalanceCreateCutover } from "./balance-create-cutover";
 import type { BalanceProjectCutover } from "./balance-project-cutover";
+import type { BalanceInboxCutover } from "./balance-inbox-cutover";
 import type { BalanceTaskCutover } from "./balance-task-cutover";
 import { calendarWriter } from "./calendar-conversation-writer";
 import { DESK_NOTE_WITHHELD, deskNoteWriter } from "./desk-note-conversation-writer";
@@ -69,6 +70,7 @@ export interface SourceDeps {
   captureModel?: CaptureModel;
   runWorker?: WriterRunner;
   balanceProjectCutover?: () => BalanceProjectCutover | undefined;
+  balanceInboxCutover?: () => BalanceInboxCutover | undefined;
   balanceTaskCutover?: () => BalanceTaskCutover | undefined;
 }
 
@@ -116,9 +118,11 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const studioCapture = studioCaptureWriter({ ...studioWriterDeps, ...(deps.captureModel ? { model: deps.captureModel } : {}) });
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
-  const routedBalance = (owner: "balance-task" | "balance-project", getCutover?: () => BalanceCreateCutover | undefined): OwnerWriter => {
+  const routedBalance = (owner: keyof typeof balanceWriters, getCutover?: () => BalanceCreateCutover | undefined): OwnerWriter => {
+    const legacy: OwnerWriter | undefined = balanceWriters[owner];
+    if (!legacy) throw new Error(`balance.writer_missing:${owner}`);
     const cutover = getCutover?.();
-    return cutover ? routedBalanceCreateWriter({ legacy: balanceWriters[owner], cutover }) : balanceWriters[owner];
+    return cutover ? routedBalanceCreateWriter({ legacy, cutover }) : legacy;
   };
   const balanceCutoverView = async (getCutover?: () => BalanceCreateCutover | undefined): Promise<{ connectionId: string; reviewRevision: string } | null> => {
     const route = await getCutover?.()?.route();
@@ -152,7 +156,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
       return {
-        ...(hasBalanceState(deps.db) ? { ...balanceWriters, "balance-task": routedBalance("balance-task", deps.balanceTaskCutover), "balance-project": routedBalance("balance-project", deps.balanceProjectCutover) } : {}),
+        ...(hasBalanceState(deps.db) ? { ...balanceWriters, "balance-task": routedBalance("balance-task", deps.balanceTaskCutover), "balance-project": routedBalance("balance-project", deps.balanceProjectCutover), ...("balance-inbox-task" in balanceWriters ? { "balance-inbox-task": routedBalance("balance-inbox-task", deps.balanceInboxCutover) } : {}) } : {}),
         ...(desk.studio ? { "studio-response": studioResponse, "studio-thread": studioThread, "studio-note": studioNote, "studio-close": studioClose, "studio-capture": studioCapture } : {}),
         ...(desk.routines ? { routine } : {}),
         ...(desk.flows ? { flow } : {}),
@@ -197,6 +201,6 @@ export function conversationSources(deps: SourceDeps): HostSources {
       "balance-project": ref => Promise.resolve(balance(ref)),
     },
     readbacks: { "studio-note": studioCommit, "studio-thread": studioCommit },
-    cutovers: { "balance-task": () => balanceCutoverView(deps.balanceTaskCutover), "balance-project": () => balanceCutoverView(deps.balanceProjectCutover) },
+    cutovers: { "balance-task": () => balanceCutoverView(deps.balanceTaskCutover), "balance-project": () => balanceCutoverView(deps.balanceProjectCutover), "balance-inbox-task": () => balanceCutoverView(deps.balanceInboxCutover) },
   };
 }

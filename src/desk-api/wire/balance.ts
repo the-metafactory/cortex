@@ -101,3 +101,21 @@ export interface BalanceDayProjection {
   readonly observedAt: string | null;
   readonly tasks: readonly BalanceProjectedTask[];
 }
+
+export interface BalanceDestination {
+  id: string;
+  label: string;
+  title: string;
+  area: string;
+  project: boolean;
+}
+
+export const BALANCE_PROJECT_MISSES = ["none", "ambiguous", "id-shaped"] as const;
+export type BalanceProjectMiss = (typeof BALANCE_PROJECT_MISSES)[number];
+
+export type BalanceProjectResolved = { id: string } | { none: true; reason: BalanceProjectMiss };
+
+export interface BalanceDestinationsResponse {
+  destinations: BalanceDestination[];
+  resolved?: BalanceProjectResolved;
+}

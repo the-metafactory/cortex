@@ -34,15 +34,15 @@ test("immutable historical selections retain neutral unavailable feedback", () =
 test("unique legacy project titles resolve to IDs while duplicate titles need an explicit selection", () => {
   const choices = balanceDestinations(outline, areas);
   const projects = areaProjects(choices, "work");
-  expect(resolveBalanceProject(projects, " same NAME ")?.id).toBeUndefined();
-  expect(resolveBalanceProject(projects, "one")?.id).toBe("one");
-  expect(resolveBalanceProject(areaProjects(choices, "home"), " same NAME ")?.id).toBe("two");
-  expect(resolveBalanceProject(projects, "deleted")).toBeUndefined();
+  expect(resolveBalanceProject(projects, " same NAME ")).toEqual({ none: true, reason: "ambiguous" });
+  expect(resolveBalanceProject(projects, "one")).toMatchObject({ project: { id: "one" } });
+  expect(resolveBalanceProject(areaProjects(choices, "home"), " same NAME ")).toMatchObject({ project: { id: "two" } });
+  expect(resolveBalanceProject(projects, "deleted")).toEqual({ none: true, reason: "none" });
 });
 
 test("stale generated project IDs cannot be reinterpreted as another project's title", () => {
   const stale = "d5bd709e-9b83-4000-8000-4e91f1ba4d11";
   const choices = [{ id: "other", title: stale, label: `Work / ${stale}`, area: "work", project: true }];
-  expect(resolveBalanceProject(choices, stale)).toBeUndefined();
-  expect(resolveBalanceProject(choices, "other")?.id).toBe("other");
+  expect(resolveBalanceProject(choices, stale)).toEqual({ none: true, reason: "id-shaped" });
+  expect(resolveBalanceProject(choices, "other")).toMatchObject({ project: { id: "other" } });
 });

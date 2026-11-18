@@ -35,8 +35,21 @@ export const DESK_BRIEF_PHRASE_CODES = [
   "brief.synthesis-ready", "brief.synthesis-model-failed", "brief.synthesis-invalid-output", "brief.synthesis-interrupted",
 ] as const satisfies readonly DeskPhrase["code"][];
 
+export const DESK_TIME_FIRST_PHRASE_CODES = [
+  "day.closed", "day.no-task", "day.calendar-busy", "day.fit-unverified", "day.first-task", "day.task-fits", "day.no-task-fits",
+  "calendar.not-read", "calendar.read-failed", "calendar.stale", "calendar.capability-unknown", "calendar.output-incomplete",
+  "calendar.coverage-missing", "calendar.reading-incomplete", "calendar.event-outside-coverage", "calendar.source-unavailable",
+  "calendar.interval-uncovered", "calendar.no-coverage", "calendar.event-unverified",
+] as const satisfies readonly DeskPhrase["code"][];
+
+export const DESK_ASK_PHRASE_CODES = [
+  "ask.answered", "ask.no-provider", "ask.invalid-output", "ask.timeout", "ask.quota-reached", "ask.connection-unavailable", "ask.failed",
+] as const satisfies readonly DeskPhrase["code"][];
+
 export const DESK_PHRASE_CODES = [
+  ...DESK_TIME_FIRST_PHRASE_CODES,
   ...DESK_ITEM_PHRASE_CODES,
   ...DESK_ACT_PHRASE_CODES,
   ...DESK_BRIEF_PHRASE_CODES,
+  ...DESK_ASK_PHRASE_CODES,
 ] as const satisfies readonly DeskPhrase["code"][];

@@ -19,7 +19,7 @@ CORTEX_CHANNEL=<name> CORTEX_AGENT_NAME=<display> CORTEX_AGENT_ID=<id> claude
 
 During the MIG-7 cutover window the legacy `GROVE_*` env vars remain accepted by the EventLogger for backward compatibility; new sessions should prefer the `CORTEX_*` names. The deprecation shim retires at MIG-8.
 
-`CORTEX_PRINCIPAL` is the vocabulary-migration (R9) rename of the operator-the-human env var. During the transition release the EventLogger still accepts the legacy `CORTEX_OPERATOR` (emits a deprecation warning) and `GROVE_OPERATOR` names; both fallbacks are removed in the breaking v3.0.0.
+`CORTEX_PRINCIPAL` names the principal (the human running the stack). `CORTEX_OPERATOR` is not read. `GROVE_OPERATOR` is still accepted as a last-resort fallback until MIG-8.
 
 **Event pipeline:** CC hooks → `~/.claude/events/raw/` → cortex-relay (policy filter) → `~/.local/share/metafactory/cortex/events/published/` → cortex daemon (`ai.meta-factory.cortex.meta-factory` and/or `.work` plist) → bus → dashboard API → `cortex.meta-factory.ai`
 

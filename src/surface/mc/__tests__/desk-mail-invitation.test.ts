@@ -62,20 +62,20 @@ describe("conflicts", () => {
     expect(invitationConflicts(INVITATION, calendar([event("Later", at(3, 15), at(3, 16))])).kind).toBe("clear");
     const short = invitationConflicts(INVITATION, calendar([], startOfDay(NOW) + DAY));
     expect(short.kind).toBe("unknown");
-    expect(invitationConflicts(INVITATION, { sources: [{ id: "work-calendar", kind: "unknown", reason: "stale" }], events: [] })).toEqual({ kind: "unknown", reasons: ["work-calendar: stale"] });
+    expect(invitationConflicts(INVITATION, { sources: [{ id: "work-calendar", kind: "unknown", reason: "stale", reasonPhrase: { code: "calendar.stale", params: { source: "work-calendar" } } }], events: [] })).toEqual({ kind: "unknown", reasons: ["work-calendar: stale"] });
   });
 });
 
 describe("mail sources", () => {
   test("a stale or failed mail source does not make the calendars unknown; a stale calendar source still does", () => {
-    const stale: CalendarAvailability = { ...calendar([]), sources: [...calendar([]).sources.filter((s) => s.kind === "calendar"), { id: "work-mail", kind: "unknown", reason: "The source reading is stale; a refresh is pending." }, { id: "personal-mail", kind: "unknown", reason: "The source could not be read." }] };
+    const stale: CalendarAvailability = { ...calendar([]), sources: [...calendar([]).sources.filter((s) => s.kind === "calendar"), { id: "work-mail", kind: "unknown", reason: "The source reading is stale; a refresh is pending.", reasonPhrase: { code: "calendar.stale", params: { source: "work-mail" } } }, { id: "personal-mail", kind: "unknown", reason: "The source could not be read.", reasonPhrase: { code: "calendar.read-failed", params: { source: "personal-mail" } } }] };
     const reading = (id: string, over: Partial<SourceReading>): SourceReading => ({ id, area: null, events: [], mail: [], readAt: NOW, error: null, dropped: 0, problems: [], ...over });
     const readings = [reading("work-mail", { capabilities: ["attention"], mail: [mail()] }), reading("personal-mail", { error: "boom", capabilities: ["attention"] }), reading("work-calendar", { capabilities: ["calendar"] })];
     expect(invitationConflicts(INVITATION, stale).kind).toBe("unknown");
     expect(invitationConflicts(INVITATION, calendarsOnly(stale, readings)).kind).toBe("clear");
     const undeclared = calendarsOnly(stale, [reading("work-mail", { mail: [mail()] }), reading("personal-mail", { error: "boom" })]);
     expect(invitationConflicts(INVITATION, undeclared).kind).toBe("unknown");
-    const calendarStale: CalendarAvailability = { sources: [{ id: "work-calendar", kind: "unknown", reason: "stale" }], events: [] };
+    const calendarStale: CalendarAvailability = { sources: [{ id: "work-calendar", kind: "unknown", reason: "stale", reasonPhrase: { code: "calendar.stale", params: { source: "work-calendar" } } }], events: [] };
     expect(invitationConflicts(INVITATION, calendarsOnly(calendarStale, readings)).kind).toBe("unknown");
   });
 });
@@ -94,7 +94,7 @@ describe("free slots", () => {
   });
 
   test("an unknown calendar gives no slots and a reason", () => {
-    expect(freeSlots(INVITATION, { sources: [{ id: "x", kind: "unknown", reason: "stale" }], events: [] }, NOW)).toEqual({ slots: [], reason: "x: stale" });
+    expect(freeSlots(INVITATION, { sources: [{ id: "x", kind: "unknown", reason: "stale", reasonPhrase: { code: "calendar.stale", params: { source: "x" } } }], events: [] }, NOW)).toEqual({ slots: [], reason: "x: stale" });
   });
 
   test("the proposal draft lists the slots", () => {

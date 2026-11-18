@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { URGENT_NOW_REASON, backLine, resolveSnoozeChoice, wakeOf, type SnoozeChoice, type SnoozeEvent, type SnoozeRow, type WakeFacts } from "./mail-snooze";
 import { snoozeWhen } from "./mail-snooze-schema";
+import type { SnoozeResult as WireSnoozeResult } from "../../../desk-api/wire/mail";
 import { DAY_MS } from "./time";
 import type { DeferredItem, DeskItem, DeskItemKind } from "./types";
 
@@ -65,7 +66,7 @@ function readItemDefer(db: Database, key: string): Raw | null {
   return db.query<Raw, [string]>("SELECT * FROM desk_item_defers WHERE item_key = ?").get(key);
 }
 
-type DeferResult = { ok: true; message: string; until: string; untilIso: string | null } | { ok: false; status: number; error: string };
+type DeferResult = WireSnoozeResult | { ok: false; status: number; error: string };
 
 export function deferItem(db: Database, item: DeskItem, choice: Exclude<SnoozeChoice, { kind: "person" }>, ctx: { now: number; events: ReadonlyMap<string, SnoozeEvent> }): DeferResult {
   const resolved = resolveSnoozeChoice(choice, { now: ctx.now, events: ctx.events, names: new Map() });
