@@ -25,12 +25,14 @@ export function total(baseline: Baseline): number {
   return Object.values(baseline).reduce((sum, n) => sum + n, 0);
 }
 
-/** Baseline entries raised above base: a file base already lists may not go up, and the total may not either. */
+/** Baseline entries raised above base: a file base already lists may not go up, and the total may not either. A file type base never lists is a newly widened scan, so it counts toward neither total. */
 export function inflatedAgainst(base: Baseline, head: Baseline): string[] {
   const raised = Object.entries(head)
     .filter(([file, n]) => base[file] !== undefined && n > base[file])
     .map(([file, n]) => `${file}: ${String(base[file])} -> ${n}`);
-  if (total(head) > total(base)) raised.push(`total: ${total(base)} -> ${total(head)}`);
+  const scanned = new Set(Object.keys(base).map(extensionOf));
+  const headInScope = Object.fromEntries(Object.entries(head).filter(([file]) => scanned.has(extensionOf(file))));
+  if (total(headInScope) > total(base)) raised.push(`total: ${total(base)} -> ${total(headInScope)}`);
   return raised;
 }
 
@@ -81,4 +83,8 @@ export function runRatchet(gate: RatchetGate, current: Baseline, argv: readonly 
     console.error(`${gate.baseline} records more ${gate.unit} than ${baseRef} does. ${gate.inflatedHint}\n${inflated.map((line) => `  ${line}`).join("\n")}`);
   }
   return grown.length > 0 || shrunk.length > 0 || inflated.length > 0 ? 1 : 0;
+}
+
+function extensionOf(file: string): string {
+  return file.slice(file.lastIndexOf("."));
 }

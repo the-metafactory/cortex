@@ -44,3 +44,13 @@ describe("inflatedAgainst", () => {
     expect(inflatedAgainst({ "a.ts": 2 }, { "a.ts": 2, "c.ts": 1 })).toEqual(["total: 2 -> 3"]);
   });
 });
+
+describe("inflatedAgainst on a widened scan", () => {
+  test("a file type base never scanned does not count toward the total", () => {
+    expect(inflatedAgainst({ "a.ts": 2 }, { "a.ts": 2, "view.tsx": 4 })).toEqual([]);
+  });
+
+  test("once base scans a file type, new copies in it raise the total", () => {
+    expect(inflatedAgainst({ "a.ts": 2, "view.tsx": 4 }, { "a.ts": 2, "view.tsx": 4, "other.tsx": 2 })).toEqual(["total: 6 -> 8"]);
+  });
+});
