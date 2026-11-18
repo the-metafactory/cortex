@@ -151,5 +151,13 @@ export type DeskPhrase =
   | { code: "brief.previous-invalid" }
   | { code: "brief.meeting-gone" }
   | { code: "brief.synthesis-not-configured" }
+  | { code: "brief.synthesis-no-local-model" }
+  | { code: "brief.synthesis-no-evidence" }
+  | { code: "brief.synthesis-not-prepared" }
+  | { code: "brief.synthesis-preparing" }
+  | { code: "brief.synthesis-ready" }
+  | { code: "brief.synthesis-model-failed" }
+  | { code: "brief.synthesis-invalid-output" }
+  | { code: "brief.synthesis-interrupted" }
   | CalendarGapReason
   | TaskRecommendationReason;

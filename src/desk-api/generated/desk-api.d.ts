@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.12.0";
+export declare const DESK_API_VERSION = "1.13.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -1494,6 +1494,22 @@ export type DeskPhrase = {
 	code: "brief.meeting-gone";
 } | {
 	code: "brief.synthesis-not-configured";
+} | {
+	code: "brief.synthesis-no-local-model";
+} | {
+	code: "brief.synthesis-no-evidence";
+} | {
+	code: "brief.synthesis-not-prepared";
+} | {
+	code: "brief.synthesis-preparing";
+} | {
+	code: "brief.synthesis-ready";
+} | {
+	code: "brief.synthesis-model-failed";
+} | {
+	code: "brief.synthesis-invalid-output";
+} | {
+	code: "brief.synthesis-interrupted";
 } | CalendarGapReason | TaskRecommendationReason;
 export interface RulingChoice {
 	label: string;

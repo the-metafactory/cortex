@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { DeskRuntime } from "../desk/compose";
 import { DESK_MEETING_BRIEF_PATH, REFRESH_REQUIRED, type BriefRefreshRequired } from "../desk/meeting-brief-contract";
 import { briefOf, dropPrepared, gatherEvidence, readPrepared, resolveMeeting, storePrepared, type BriefDeps } from "../desk/meeting-brief";
+import { currentSynthesis, decideSynthesis, queueSynthesis, synthesisModel } from "../desk/meeting-brief-synthesis";
 import { fail, noStore } from "./desk-mail";
 
 export { DESK_MEETING_BRIEF_PATH };
@@ -27,11 +28,12 @@ async function prepare(req: Request, db: Database, runtime: DeskRuntime, deps: B
   const current = await currentEvidence(db, runtime, event, deps);
   if (!current) return fail(404, GONE);
   const stored = readPrepared(db, event);
-  if (stored?.revision === current.evidence.revision && refresh !== true) return Response.json(stored, { headers: noStore });
   const now = (deps.now ?? Date.now)();
-  const brief = briefOf(event, current.evidence, now);
-  storePrepared(db, brief, now);
-  return Response.json(brief, { headers: noStore });
+  const reuse = stored?.revision === current.evidence.revision && refresh !== true;
+  const brief = reuse ? stored : briefOf(event, current.evidence, now);
+  if (!reuse) storePrepared(db, brief, now);
+  const synthesis = queueSynthesis(db, runtime, event, decideSynthesis(runtime, current.evidence), { refresh: refresh === true, model: deps.synthesisModel ?? synthesisModel, now: deps.now ?? Date.now });
+  return Response.json({ ...brief, synthesis }, { headers: noStore });
 }
 
 async function read(url: URL, db: Database, runtime: DeskRuntime, deps: BriefDeps): Promise<Response> {
@@ -41,11 +43,21 @@ async function read(url: URL, db: Database, runtime: DeskRuntime, deps: BriefDep
   if (!current) return fail(404, GONE);
   const stored = readPrepared(db, event.data);
   if (!stored) return fail(404, NOT_PREPARED);
-  return stored.revision === current.evidence.revision ? Response.json(stored, { headers: noStore }) : refreshRequired();
+  if (stored.revision !== current.evidence.revision) return refreshRequired();
+  const synthesis = currentSynthesis(db, event.data, decideSynthesis(runtime, current.evidence), (deps.now ?? Date.now)());
+  return Response.json({ ...stored, synthesis }, { headers: noStore });
 }
+
+const gathering = new WeakMap<Database, Promise<unknown>>();
 
 async function currentEvidence(db: Database, runtime: DeskRuntime, event: string, deps: BriefDeps) {
   await runtime.sourceCache?.read(runtime.options?.sources ?? [], (deps.now ?? Date.now)(), true);
+  const turn = (gathering.get(db) ?? Promise.resolve()).then(() => gatherCurrent(db, runtime, event, deps));
+  gathering.set(db, turn.catch(() => undefined));
+  return turn;
+}
+
+async function gatherCurrent(db: Database, runtime: DeskRuntime, event: string, deps: BriefDeps) {
   const meeting = resolveMeeting(runtime, event);
   if (!meeting) {
     dropPrepared(db, event);
