@@ -8,16 +8,14 @@ import { handleDeskMeetingBrief } from "../api/desk-meeting-brief";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
 import { saveBalanceState } from "../desk/balance-store";
-import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { linkToMeeting, mailSubject, type LinkSubject } from "../desk/links";
 import { BRIEF_GAP_REASONS, BRIEF_PREVIOUS_MEETING_STATES, BRIEF_SYNTHESIS_STATES, type MeetingBrief } from "../desk/meeting-brief-contract";
 import { type BriefRead } from "../desk/meeting-brief";
 import { addNote } from "../desk/notes";
-import { SourceCache } from "../desk/sources/command";
 import { startServer } from "../server";
 
-import { NOW, EVENT, PRINCIPAL, SECRET_TITLE, seed, fixture, briefOptions, type Fixture } from "./fixtures/meeting-brief";
+import { NOW, EVENT, PRINCIPAL, SECRET_TITLE, seed, fixture, briefOptions, briefPost, briefRuntime, type Fixture } from "./fixtures/meeting-brief";
 import { meetingBriefHttpProbe } from "./fixtures/meeting-brief-http";
 
 const BASE_URL = "http://localhost/api/desk/meeting-brief";
@@ -40,12 +38,10 @@ const writeFixture = (data: Fixture): void => writeFileSync(join(dir, "source.js
 
 const runtime = async (data: Fixture = fixture()): Promise<DeskRuntime> => {
   writeFixture(data);
-  const cache = new SourceCache(async () => JSON.stringify(data));
-  await cache.read(options.sources, NOW);
-  return { options, ledger: new HandledLedger(), sourceCache: cache };
+  return briefRuntime(options, data);
 };
 
-const post = (body: unknown): Request => new Request(BASE_URL, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+const post = (body: unknown): Request => briefPost(BASE_URL, body);
 const get = (event = EVENT): Request => new Request(`${BASE_URL}?event=${encodeURIComponent(event)}`);
 const call = async (req: Request, rt: DeskRuntime, readers?: Parameters<typeof handleDeskMeetingBrief>[3]) => {
   const res = await handleDeskMeetingBrief(req, db, rt, { now: () => NOW, ...readers });

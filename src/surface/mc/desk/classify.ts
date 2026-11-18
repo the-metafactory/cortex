@@ -100,7 +100,7 @@ export interface ModelConfigInput extends ModelAccess {
 
 export type ClassifierConfigInput = ModelConfigInput & { maxPerPass: number; sourcePolicy?: "local" | "cloud" };
 
-export type ModelCall = (messages: { role: "system" | "user"; content: string }[], timeoutMs: number, promptContent: PromptContent) => Promise<unknown>;
+export type ModelCall = (messages: { role: "system" | "user"; content: string }[], timeoutMs: number, promptContent: PromptContent, signal?: AbortSignal) => Promise<unknown>;
 
 export function toModelConfig(input: ModelConfigInput, formError: string): ModelConfig {
   const { baseUrl, model, command, caFile, ...common } = input;
@@ -340,20 +340,25 @@ async function readCa(path: string, label: string): Promise<string> {
   }
 }
 
+async function modelKey(config: ModelAccess, readKey: KeyReader, label: string): Promise<string | null> {
+  const key = await readKey(config);
+  if (needsKey(config) && !key) throw new MissingKey(`the ${label} key was not found`);
+  return key;
+}
+
 export function chatJson(config: EndpointAccess, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey, label = "classifier", maxTokens = 600): ModelCall {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-  const wantsKey = needsKey(config);
-  return async (messages, timeoutMs, promptContent) => {
+  return async (messages, timeoutMs, promptContent, signal) => {
     assertRoute(routeOf(config), promptContent, label);
-    const key = await readKey(config);
-    if (wantsKey && !key) throw new MissingKey(`the ${label} key was not found`);
+    signal?.throwIfAborted();
+    const key = await modelKey(config, readKey, label);
     const ca = config.caFile ? await readCa(config.caFile, label) : null;
     const res = await fetchImpl(url, {
       ...(ca ? { tls: { ca } } : {}),
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: JSON.stringify({ model: config.model, messages, temperature: 0, max_tokens: maxTokens }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`the ${label} answered HTTP ${res.status}`);
     const body = ChatResponseSchema.safeParse(await res.json());
@@ -366,7 +371,7 @@ export function chatJson(config: EndpointAccess, fetchImpl: typeof fetch = fetch
 export function modelJson(config: ModelConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey, label = "model", maxTokens = 600, run: CommandRunner = runModelCommand): ModelCall {
   if (!isCommand(config)) return chatJson(config, fetchImpl, readKey, label, maxTokens);
   const command = commandJson(config, run, readKey, label);
-  return (messages, timeoutMs, promptContent) => command(JSON.stringify({ sourcePolicy: routeOf(config), messages }), timeoutMs, promptContent);
+  return (messages, timeoutMs, promptContent, signal) => command(JSON.stringify({ sourcePolicy: routeOf(config), messages }), timeoutMs, promptContent, signal);
 }
 
 export function modelIdentity(config: ModelConfig): string {
@@ -382,18 +387,17 @@ export function chatClassifier(config: EndpointConfig, fetchImpl: typeof fetch =
   return (request, timeoutMs, promptContent) => run(buildMessages(request), timeoutMs, promptContent);
 }
 
-export type CommandRunner = (argv: string[], timeoutMs: number, stdin: string, env?: Record<string, string | undefined>) => Promise<CommandResult>;
+export type CommandRunner = (argv: string[], timeoutMs: number, stdin: string, env?: Record<string, string | undefined>, ownGroup?: boolean, options?: { signal?: AbortSignal }) => Promise<CommandResult>;
 
-export function commandJson(config: CommandAccess, run: CommandRunner = runModelCommand, readKey: KeyReader = readApiKey, label = "classifier"): (prompt: string, timeoutMs: number, promptContent: PromptContent) => Promise<unknown> {
-  const wantsKey = needsKey(config);
+export function commandJson(config: CommandAccess, run: CommandRunner = runModelCommand, readKey: KeyReader = readApiKey, label = "classifier"): (prompt: string, timeoutMs: number, promptContent: PromptContent, signal?: AbortSignal) => Promise<unknown> {
   const name = basename(config.command[0] ?? "");
-  return async (prompt, timeoutMs, promptContent) => {
+  return async (prompt, timeoutMs, promptContent, signal) => {
     assertRoute(routeOf(config), promptContent, label);
-    const key = await readKey(config);
-    if (wantsKey && !key) throw new MissingKey(`the ${label} key was not found`);
+    signal?.throwIfAborted();
+    const key = await modelKey(config, readKey, label);
     let result: CommandResult;
     try {
-      result = await run(config.command, timeoutMs, prompt, key ? { ...process.env, [CLASSIFIER_KEY_ENV]: key } : undefined);
+      result = await run(config.command, timeoutMs, prompt, key ? { ...process.env, [CLASSIFIER_KEY_ENV]: key } : undefined, true, { signal });
     } catch (err) {
       if (err instanceof CommandTimeout) throw new Error(`the ${label} command ${name} ${err.message}`, { cause: err });
       throw new Error(`the ${label} command ${name} did not run: ${err instanceof Error ? err.message : String(err)}`, { cause: err });

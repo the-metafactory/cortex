@@ -8,6 +8,7 @@ import { RULE_ACTIONS, RULE_MATCHES } from "../surface/mc/desk/mail-rules-schema
 import { SNOOZE_TIMES } from "../surface/mc/desk/mail-snooze-schema";
 import { SWEEP_WORDS } from "../surface/mc/desk/mail-sweep-schema";
 import { WAITING_OPS } from "../surface/mc/desk/mail-waiting-schema";
+import { BRIEF_SYNTHESIS_FAILED_REASONS, BRIEF_SYNTHESIS_STATES, BRIEF_SYNTHESIS_UNAVAILABLE_REASONS } from "../surface/mc/desk/meeting-brief-contract";
 import { DEFERRABLE_ITEM_KINDS } from "../surface/mc/desk/item-defer";
 import { DESK_PHRASE_CODES } from "../surface/mc/desk/phrases";
 import { DESK_ITEM_KINDS, DESK_OUTCOMES } from "../surface/mc/desk/types";
@@ -53,6 +54,9 @@ export function deskContract() {
       OUTLINE_REPEAT_MODES,
       OUTLINE_REPEAT_UNITS,
       OUTLINE_REPEAT_FIELDS,
+      BRIEF_SYNTHESIS_STATES,
+      BRIEF_SYNTHESIS_UNAVAILABLE_REASONS,
+      BRIEF_SYNTHESIS_FAILED_REASONS,
       DESK_SEARCH_OPEN_ROUTES,
     },
   };

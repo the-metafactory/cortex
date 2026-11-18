@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { DEFAULT_SETTINGS, type AppState } from "../../../../balance";
-import type { DeskOptions } from "../../desk/compose";
+import { HandledLedger } from "../../desk/actions";
+import type { DeskOptions, DeskRuntime } from "../../desk/compose";
+import { SourceCache } from "../../desk/sources/command";
 
 export const NOW = new Date(2026, 10, 4, 10).getTime();
 export const EVENT = "cal:cal:standup";
@@ -22,3 +24,11 @@ export const fixture = (over: Partial<Fixture> = {}): Fixture => ({
 
 
 export const briefOptions = (dir: string): DeskOptions => ({ enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [] }], sources: [{ id: "cal", command: ["cat", join(dir, "source.json")], everySeconds: 300, timeoutSeconds: 5 }] });
+
+export const briefRuntime = async (options: DeskOptions, data: Fixture): Promise<DeskRuntime> => {
+  const cache = new SourceCache(async () => JSON.stringify(data));
+  await cache.read(options.sources, NOW);
+  return { options, ledger: new HandledLedger(), sourceCache: cache };
+};
+
+export const briefPost = (url: string, body: unknown): Request => new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

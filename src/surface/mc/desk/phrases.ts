@@ -31,6 +31,8 @@ export const DESK_BRIEF_PHRASE_CODES = [
   "brief.gap-relink-required", "brief.refresh-required", "brief.previous-unidentified", "brief.synthesis-not-configured",
   "brief.previous-identified", "brief.previous-unavailable", "brief.previous-set", "brief.previous-cleared", "brief.previous-self",
   "brief.previous-not-earlier", "brief.previous-target-unavailable", "brief.previous-invalid", "brief.meeting-gone",
+  "brief.synthesis-no-local-model", "brief.synthesis-no-evidence", "brief.synthesis-not-prepared", "brief.synthesis-preparing",
+  "brief.synthesis-ready", "brief.synthesis-model-failed", "brief.synthesis-invalid-output", "brief.synthesis-interrupted",
 ] as const satisfies readonly DeskPhrase["code"][];
 
 export const DESK_TIME_FIRST_PHRASE_CODES = [

@@ -54,12 +54,22 @@ export interface PreviousMeetingRelationship {
   messagePhrase: DeskPhrase;
 }
 
-export interface BriefSynthesis {
-  state: (typeof BRIEF_SYNTHESIS_STATES)[number];
-  reason?: "not-configured";
-  phrase: DeskPhrase;
-  message: string;
+export const BRIEF_SYNTHESIS_UNAVAILABLE_REASONS = ["not-configured", "no-local-model", "no-evidence", "not-prepared"] as const;
+export const BRIEF_SYNTHESIS_FAILED_REASONS = ["model-failed", "invalid-output", "interrupted"] as const;
+export type BriefSynthesisUnavailableReason = (typeof BRIEF_SYNTHESIS_UNAVAILABLE_REASONS)[number];
+export type BriefSynthesisFailedReason = (typeof BRIEF_SYNTHESIS_FAILED_REASONS)[number];
+
+/** One statement of the summary. `references` are ids of facts in this brief, current or previous meeting, and are never empty. */
+export interface BriefClaim {
+  text: string;
+  references: string[];
 }
+
+export type BriefSynthesis =
+  | { state: "preparing"; generation: string; startedAt: string; phrase: DeskPhrase; message: string }
+  | { state: "ready"; generation: string; completedAt: string; claims: BriefClaim[]; phrase: DeskPhrase; message: string }
+  | { state: "unavailable"; reason: BriefSynthesisUnavailableReason; phrase: DeskPhrase; message: string }
+  | { state: "failed"; reason: BriefSynthesisFailedReason; generation: string; failedAt: string; phrase: DeskPhrase; message: string };
 
 export interface MeetingBrief {
   event: string;
@@ -93,12 +103,32 @@ export const previousUnavailable = (event: string): BriefPreviousMeeting => ({
   state: "unavailable", phrase: { code: "brief.previous-unavailable" }, message: "The previous meeting that was set can no longer be read.", event, relation: "explicit",
 });
 
-export const SYNTHESIS_NOT_CONFIGURED: BriefSynthesis = {
-  state: "unavailable",
-  reason: "not-configured",
-  phrase: { code: "brief.synthesis-not-configured" },
-  message: "No summary model is configured, so the evidence is shown as it is.",
+const UNAVAILABLE_WORDING: Record<BriefSynthesisUnavailableReason, { phrase: DeskPhrase; message: string }> = {
+  "not-configured": { phrase: { code: "brief.synthesis-not-configured" }, message: "No summary model is configured, so the evidence is shown as it is." },
+  "no-local-model": { phrase: { code: "brief.synthesis-no-local-model" }, message: "Some of this material must stay on this machine and no local summary model is configured, so the evidence is shown as it is." },
+  "no-evidence": { phrase: { code: "brief.synthesis-no-evidence" }, message: "There is no readable material to summarise." },
+  "not-prepared": { phrase: { code: "brief.synthesis-not-prepared" }, message: "No summary is prepared for the current material and model settings. Prepare the brief to start one." },
 };
+
+export const synthesisUnavailable = (reason: BriefSynthesisUnavailableReason): Extract<BriefSynthesis, { state: "unavailable" }> => ({ state: "unavailable", reason, ...UNAVAILABLE_WORDING[reason] });
+
+export const SYNTHESIS_NOT_CONFIGURED: BriefSynthesis = synthesisUnavailable("not-configured");
+
+const FAILED_WORDING: Record<BriefSynthesisFailedReason, { phrase: DeskPhrase; message: string }> = {
+  "model-failed": { phrase: { code: "brief.synthesis-model-failed" }, message: "The summary could not be prepared. The evidence is shown as it is; prepare the brief again to retry." },
+  "invalid-output": { phrase: { code: "brief.synthesis-invalid-output" }, message: "The summary was discarded because it did not cite the evidence. The evidence is shown as it is; prepare the brief again to retry." },
+  interrupted: { phrase: { code: "brief.synthesis-interrupted" }, message: "The summary was interrupted before it finished. The evidence is shown as it is; prepare the brief again to retry." },
+};
+
+export const synthesisFailed = (reason: BriefSynthesisFailedReason, generation: string, failedAt: number): Extract<BriefSynthesis, { state: "failed" }> => ({ state: "failed", reason, generation, failedAt: new Date(failedAt).toISOString(), ...FAILED_WORDING[reason] });
+
+export const synthesisPreparing = (generation: string, startedAt: number): Extract<BriefSynthesis, { state: "preparing" }> => ({
+  state: "preparing", generation, startedAt: new Date(startedAt).toISOString(), phrase: { code: "brief.synthesis-preparing" }, message: "A summary is being prepared. The evidence is ready now.",
+});
+
+export const synthesisReady = (generation: string, completedAt: number, claims: BriefClaim[]): Extract<BriefSynthesis, { state: "ready" }> => ({
+  state: "ready", generation, completedAt: new Date(completedAt).toISOString(), claims, phrase: { code: "brief.synthesis-ready" }, message: "The summary cites the evidence below.",
+});
 
 const KIND_LABEL: Record<BriefSourceKind, string> = { mail: "mail", task: "task", thread: "Studio thread", note: "note", meeting: "meeting" };
 
