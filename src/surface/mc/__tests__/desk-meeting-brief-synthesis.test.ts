@@ -14,6 +14,7 @@ import type { MeetingBrief } from "../desk/meeting-brief-contract";
 import type { SynthesisModel, SynthesisPrompt } from "../desk/meeting-brief-synthesis";
 import { setPreviousRelation } from "../desk/meeting-previous";
 import { addNote } from "../desk/notes";
+import { SourceCache } from "../desk/sources/command";
 import { startServer } from "../server";
 import { briefOptions, briefPost, briefRuntime, EVENT, fixture, NOW, PRINCIPAL, seed } from "./fixtures/meeting-brief";
 
@@ -30,7 +31,7 @@ const deferred = <T>(): Deferred<T> => {
   return { promise, resolve, reject };
 };
 
-interface Call { model: string; prompt: SynthesisPrompt; answer: Deferred<unknown> }
+interface Call { model: string; prompt: SynthesisPrompt; answer: Deferred<unknown>; signal?: AbortSignal }
 
 let db: Database;
 let dir: string;
@@ -38,9 +39,9 @@ let options: DeskOptions;
 let calls: Call[];
 let seq = 0;
 
-const model: SynthesisModel = (config, prompt) => {
+const model: SynthesisModel = (config, prompt, _content, _name, signal?: AbortSignal) => {
   const answer = deferred<unknown>();
-  calls.push({ model: "model" in config ? config.model : "command", prompt, answer });
+  calls.push({ model: "model" in config ? config.model : "command", prompt, answer, signal });
   return answer.promise;
 };
 
@@ -91,6 +92,21 @@ afterEach(() => {
 });
 
 describe("meeting brief synthesis", () => {
+  it("shares the source read across concurrent prepare and poll requests", async () => {
+    const rt = await runtime();
+    const sourceAnswer = deferred<null>();
+    let reads = 0;
+    rt.sourceCache = new SourceCache(async () => {
+      reads += 1;
+      await sourceAnswer.promise;
+      return JSON.stringify(fixture());
+    });
+    const requests = [send(post({ event: EVENT }), rt), send(get(), rt), send(get(), rt)];
+    sourceAnswer.resolve(null);
+    await Promise.all(requests);
+    expect(reads).toBe(1);
+  });
+
   it("returns evidence at once, coalesces duplicate requests into one model call, and polls to a cited summary", async () => {
     setPolicy("cloud");
     link(subject("mail", "mail:m1", MAIL));
@@ -213,6 +229,8 @@ describe("meeting brief synthesis", () => {
     expect(calls).toHaveLength(2);
     if (first.state !== "preparing" || refreshed.state !== "preparing") throw new Error("both generations are preparing");
     expect(refreshed.generation).not.toBe(first.generation);
+    expect(calls[0]?.signal?.aborted).toBe(true);
+    expect(calls[1]?.signal?.aborted).toBe(false);
 
     answerWith(calls[1], "Refreshed result.");
     await settle();
