@@ -27,7 +27,7 @@ export function clonesPerFile(clones: Clone[]): Baseline {
 function scan(): Clone[] {
   const out = mkdtempSync(join(tmpdir(), "cortex-jscpd-"));
   const run = Bun.spawnSync(
-    ["bunx", "jscpd", "--silent", "--format", "typescript", "--reporters", "json", "--output", out, "--ignore", IGNORE.join(","), ...SCAN_ROOTS],
+    ["bunx", "jscpd", "--silent", "--format", "typescript,tsx", "--reporters", "json", "--output", out, "--ignore", IGNORE.join(","), ...SCAN_ROOTS],
     { stdout: "pipe", stderr: "pipe" },
   );
   try {

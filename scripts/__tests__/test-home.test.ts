@@ -12,6 +12,7 @@ import {
   HOST_HOME_OPT_IN_ENV,
   RUN_TMP_ENV,
   runRootName,
+  TEST_TIME_ZONE,
   TEST_TIMEOUT_MS,
 } from "../lib/test-home";
 
@@ -27,6 +28,10 @@ describe("hermeticTestEnv", () => {
     CORTEX_TEST_HOST_HOME: "1",
   };
   const env = hermeticTestEnv({ ...host, TMPDIR: "/var/folders/x/T/" }, { home: "/tmp/home-x", tmp: "/tmp/tmp-x" });
+
+  test("pins a non-UTC time zone whatever the host uses", () => {
+    expect(hermeticTestEnv({ ...host, TZ: "UTC" }, { home: "/tmp/home-x", tmp: "/tmp/tmp-x" }).TZ).toBe(TEST_TIME_ZONE);
+  });
 
   test("points HOME and the marker at the temp home", () => {
     expect(env.HOME).toBe("/tmp/home-x");

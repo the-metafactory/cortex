@@ -17,6 +17,9 @@ const XDG_BASE_DIRS = ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XD
 
 export type RunDirs = { home: string; tmp: string };
 
+/** One zone for every run, never UTC: a test that only holds on a UTC runner fails everywhere (#3100), and CI, EU and NZ hosts see the same results. */
+export const TEST_TIME_ZONE = "Europe/Zurich";
+
 export function hermeticTestEnv(host: NodeJS.ProcessEnv, dirs: RunDirs): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(host)) {
@@ -30,6 +33,7 @@ export function hermeticTestEnv(host: NodeJS.ProcessEnv, dirs: RunDirs): Record<
   env.TMP = dirs.tmp;
   env.TEMP = dirs.tmp;
   env[RUN_TMP_ENV] = dirs.tmp;
+  env.TZ = TEST_TIME_ZONE;
   return env;
 }
 

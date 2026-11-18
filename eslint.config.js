@@ -40,6 +40,8 @@ export default tseslint.config(
     rules: {
       "cortex/no-comments": "error",
       "cortex/await-async-expect": "error",
+      "cortex/no-ignored-error": "error",
+      "cortex/schema-derived-types": "error",
       "@typescript-eslint/ban-ts-comment": "off",
 
       // ── Strict (error): type-safety bugs we genuinely want to gate on ──
