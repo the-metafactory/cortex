@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { spawnRanger, type RangerRunResult } from "../actions";
 
 export type GitResult = RangerRunResult;
@@ -42,7 +44,8 @@ export async function commitPaths(run: GitRunner, dir: string, paths: string[], 
   return head.code === 0 ? { sha: head.stdout.trim() } : { error: `git rev-parse failed: ${firstLine(head)}` };
 }
 
-export async function restorePaths(run: GitRunner, dir: string, all: string[], tracked: string[]): Promise<void> {
-  await run(["reset", "-q", "--", ...all], dir);
-  if (tracked.length) await run(["checkout", "HEAD", "--", ...tracked], dir);
+export async function restorePaths(run: GitRunner, dir: string, all: string[], originals: ReadonlyMap<string, Buffer>): Promise<void> {
+  const reset = await run(["reset", "-q", "--", ...all], dir);
+  for (const [path, bytes] of originals) await writeFile(join(dir, path), bytes);
+  if (reset.code !== 0) throw new Error(`Studio rollback could not restore the index: ${firstLine(reset)}`);
 }
