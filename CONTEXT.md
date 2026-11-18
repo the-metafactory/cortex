@@ -10,11 +10,11 @@ This is the canonical domain glossary for the **cortex** bounded context — one
 
 **Principal**:
 The human who owns and runs Cortex stacks — root of the trust and policy model, and the identity that scopes every subject the principal's stacks emit. One principal runs one or more **stacks** (e.g. `andreas` runs `andreas/meta-factory`, `andreas/work`, `andreas/halden`).
-_Avoid_: operator, user, human, org. `owner` is its own term (**Owner**, below) and never means the principal.
+_Avoid_: operator, human, org. `owner` is its own term (**Owner**, below) and never means the principal.
 
 **Stack**:
 One running cortex deployment under a **principal** — its own `cortex.yaml`, signing identity, subject sub-namespace, and JetStream consumers. A principal runs one or more stacks side by side, purpose-named. The second subject segment: `local.{principal}.{stack}.…`.
-_Avoid_: deployment, instance, node. Never use `stack` for the M1–M7 architecture — that is the **Myelin layer model**.
+_Avoid_: deployment, instance. Never use `stack` for the M1–M7 architecture — that is the **Myelin layer model**.
 
 **Stack slug**:
 The trailing segment of `stack.id` (`{principal}/{slug}` → `slug`; e.g. `andreas/community` → `community`). **`stack.id` is the single authority for the slug** — the federation subject segment (`local`/`federated.{principal}.{slug}.…`, the canonical DID `did:mf:{principal}-{slug}` per [compass `sops/federation-wire-protocol.md`](https://github.com/the-metafactory/compass/blob/main/sops/federation-wire-protocol.md) §3 + `docs/adr/0001`) and the launchd/systemd label (`ai.meta-factory.cortex.{slug}`) derive from it. The `cortex network join` **write path** targets the file the daemon composes `policy:` from — resolved from the daemon's `--config` locator, not a `stack.id`-derived path — which **converges with `stack.id` under the alignment invariant** (locator == slug) but follows the daemon's actual config on a drifted stack so the write stays effective (no split-brain; refs `docs/adr/0004` DA-5, #805/#807/#813). The config **file/dir name** is a cosmetic *locator* the lifecycle scripts use to find the config; it **MUST equal** the stack.id slug, but it is not the authority. The legacy `cortex.yaml → meta-factory` filename mapping is a single-file convenience, not an authority. When the locator and `stack.id` disagree the stack is **drifted** — it federates as one identity but is labelled another (see _Flagged ambiguities_); `arc upgrade` warns on drift (`warn_stack_identity_drift`), and reconciliation is a principal rename of the dir/file onto `stack.id`, not an automatic rewrite. Decision recorded in `docs/adr/0004-stack-slug-authority.md`.
@@ -26,7 +26,7 @@ _Avoid_: bot (ambiguous with the cortex **agent**), token, integration.
 
 **Cortex runtime**:
 The OS process that hosts a **principal**'s **stacks** — a single runtime runs one or more stacks side by side, each keeping its OWN signing identity (M4), subject sub-namespace (M3), policy (stack policy — not a myelin layer) and NatsLinks (one per **network** a stack joins, M1). The runtime is *process packaging, not a layer*: consolidating stacks into one process MUST preserve each stack's layer isolation — no cross-stack identity / subject / policy leakage (enforced by subject-segment isolation). Replaces the earlier one-process-per-stack model (cortex#117): a principal's stacks live in one runtime, cutting process sprawl, without merging their layers.
-_Avoid_: daemon (the per-assistant runtime identity is the **agent**), server, host, node.
+_Avoid_: daemon (the per-assistant runtime identity is the **agent**).
 
 **Network**:
 A federation of **principals** whose **stacks** interconnect at the NATS leaf-node layer — `metafactory` is the network this ecosystem runs on. A network is **not a subject segment**: it is deployment topology. Cross-principal reach is the `federated.` **scope** prefix, never a network name on the wire. A principal may belong to more than one network.
@@ -74,7 +74,7 @@ _Avoid_: liveness (that is the FSM, not the concept), availability; conflating p
 
 **Session**:
 One run of a **substrate** — a single `claude-code`/`codex`/… execution with its own id (`cc_session_id`), lifecycle, and **session interior**. A session belongs to one **agent** and runs on one **substrate** (an attribute, not a separate hierarchy level). It is the unit Mission Control's working view renders. A session is either **agent-rooted** (started directly by its agent — no parent session) or a **child session** initiated by another session (see **Session tree**). The substrate-neutral term — soma's framing: *"Soma's living existence inside a session of a substrate."* (Resolved 2026-06-11, MC session-tree grilling.)
-_Avoid_: agent (a session is **not** an agent — that conflation is the bug the MC session-tree refactor fixes), run, instance (bare), thread (a platform word)
+_Avoid_: agent (a session is **not** an agent — that conflation is the bug the MC session-tree refactor fixes), instance (bare)
 
 **Session tree** (parent / child session):
 The recursive structure of an **agent**'s work: a **session** may spawn **child sessions**, each of which may spawn its own — a tree rooted at the agent. The edge is **initiated-by**: a child session carries a `parent_session_id` naming the session that spawned it; an agent-rooted session has none. A child session is structurally *agent-like* — it runs its own session and can spawn further children — but is **not an agent**: no bus identity, no persistence; it is identified with its session. What **Claude Code** calls a **sub-agent** is exactly a child session on the `claude-code` substrate (a substrate-projection label — see **Sub-agent**). (Resolved 2026-06-11.)
@@ -84,7 +84,7 @@ _Avoid_: sub-agent tree (substrate term — say child session), delegation tree 
 
 **Subject**:
 The dotted NATS routing string a message is published to or subscribed on — `{scope}.{principal}.{stack}.{domain}.{entity}.{action}`. Routing lives in the subject, not in code. Subscribers match with NATS wildcards (`*`, `>`).
-_Avoid_: topic (the Kafka/MQTT word — NATS subjects have different semantics), channel, path
+_Avoid_: topic (the Kafka/MQTT word — NATS subjects have different semantics), channel
 
 **Scope**:
 How far a **subject** may travel, set by its prefix — exactly three values: `local` (never leaves the **principal** boundary), `federated` (crosses to peer principals in a **network**), `public` (unrestricted; carries no principal/stack segment).
@@ -102,11 +102,10 @@ _Avoid_: channel, category — and never use `domain` for the DDD bounded-contex
 
 **Envelope**:
 The signed wrapper that travels on a **subject** — metadata (`sovereignty`, `signed_by[]`, `correlation_id`, `source`, `type`) around a **payload**. Every bus message is an envelope.
-_Avoid_: message (too loose — say envelope for the wrapper, payload for the content), packet
+_Avoid_: packet
 
 **Payload**:
 The inner content body of an **envelope** — the domain data, distinct from the envelope's routing/trust metadata.
-_Avoid_: message, body, data
 
 **Provenance fields** (`source` vs `originator` vs `signed_by[]` — three answers to "who"):
 An **envelope** carries three distinct provenance answers, routinely confused:
