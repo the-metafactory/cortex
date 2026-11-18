@@ -937,6 +937,9 @@
   "src/bus/agent-network/__tests__/envelopes.test.ts": {
     "cortex/no-comments": {
       "count": 15
+    },
+    "cortex/schema-derived-types": {
+      "count": 1
     }
   },
   "src/bus/agent-network/__tests__/federated-membership.test.ts": {
@@ -2515,6 +2518,9 @@
     },
     "cortex/no-ignored-error": {
       "count": 1
+    },
+    "cortex/schema-derived-types": {
+      "count": 1
     }
   },
   "src/common/config/migrate-config-dir.ts": {
@@ -3350,9 +3356,17 @@
       "count": 1
     }
   },
+  "src/conversations/authority-records.ts": {
+    "cortex/schema-derived-types": {
+      "count": 4
+    }
+  },
   "src/conversations/authority.ts": {
     "cortex/no-ignored-error": {
       "count": 11
+    },
+    "cortex/schema-derived-types": {
+      "count": 2
     }
   },
   "src/conversations/creation.ts": {
@@ -3380,6 +3394,11 @@
       "count": 1
     }
   },
+  "src/conversations/domain-adapters/drafting-types.ts": {
+    "cortex/schema-derived-types": {
+      "count": 1
+    }
+  },
   "src/conversations/domain-adapters/flow/definition.ts": {
     "cortex/no-ignored-error": {
       "count": 1
@@ -3387,6 +3406,9 @@
   },
   "src/conversations/domain-adapters/flow/save-binding.ts": {
     "cortex/no-ignored-error": {
+      "count": 2
+    },
+    "cortex/schema-derived-types": {
       "count": 2
     }
   },
@@ -3400,6 +3422,11 @@
       "count": 1
     }
   },
+  "src/conversations/domain-adapters/mail/legacy-move.ts": {
+    "cortex/schema-derived-types": {
+      "count": 1
+    }
+  },
   "src/conversations/domain-adapters/mail/move-host.ts": {
     "cortex/no-ignored-error": {
       "count": 1
@@ -3410,6 +3437,11 @@
       "count": 1
     }
   },
+  "src/conversations/domain-adapters/mail/sweep-set-store.ts": {
+    "cortex/schema-derived-types": {
+      "count": 2
+    }
+  },
   "src/conversations/domain-adapters/mail/unsubscribe-host.ts": {
     "cortex/no-ignored-error": {
       "count": 1
@@ -3418,6 +3450,16 @@
   "src/conversations/domain-adapters/operations/dispatch.ts": {
     "cortex/no-ignored-error": {
       "count": 1
+    }
+  },
+  "src/conversations/domain-adapters/operations/journal.ts": {
+    "cortex/schema-derived-types": {
+      "count": 2
+    }
+  },
+  "src/conversations/domain-adapters/operations/legacy.ts": {
+    "cortex/schema-derived-types": {
+      "count": 2
     }
   },
   "src/conversations/domain-adapters/operations/reconciliation.ts": {
@@ -3453,6 +3495,9 @@
   "src/conversations/host.ts": {
     "cortex/no-ignored-error": {
       "count": 5
+    },
+    "cortex/schema-derived-types": {
+      "count": 1
     }
   },
   "src/conversations/lock.ts": {
@@ -5529,6 +5574,9 @@
   "src/surface/mc/desk/classify.ts": {
     "cortex/no-ignored-error": {
       "count": 1
+    },
+    "cortex/schema-derived-types": {
+      "count": 3
     }
   },
   "src/surface/mc/desk/conversation-sources.ts": {
@@ -5579,6 +5627,9 @@
   "src/surface/mc/desk/mail-handoff.ts": {
     "cortex/no-ignored-error": {
       "count": 1
+    },
+    "cortex/schema-derived-types": {
+      "count": 1
     }
   },
   "src/surface/mc/desk/mail-invitation-remove.ts": {
@@ -5594,6 +5645,9 @@
   "src/surface/mc/desk/mail-waiting.ts": {
     "cortex/no-ignored-error": {
       "count": 1
+    },
+    "cortex/schema-derived-types": {
+      "count": 2
     }
   },
   "src/surface/mc/desk/mail-work-reader.ts": {
@@ -5649,6 +5703,11 @@
   "src/surface/mc/desk/ruling.ts": {
     "cortex/no-ignored-error": {
       "count": 1
+    }
+  },
+  "src/surface/mc/desk/sources/command.ts": {
+    "cortex/schema-derived-types": {
+      "count": 2
     }
   },
   "src/surface/mc/desk/sources/ranger.ts": {
@@ -5709,6 +5768,9 @@
   "src/surface/mc/desk/worker-handoff-contract.ts": {
     "cortex/no-ignored-error": {
       "count": 2
+    },
+    "cortex/schema-derived-types": {
+      "count": 1
     }
   },
   "src/surface/mc/embed.ts": {
