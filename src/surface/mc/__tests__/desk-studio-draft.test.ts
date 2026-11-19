@@ -257,4 +257,26 @@ describe("Studio thread drafts over HTTP", () => {
     expect(await rig.read()).toEqual(first.saved);
     expect((await rig.read()).text).toBe("Literal $Id$ token\n");
   });
+  it("does not treat a commented draft rule as the rule", async () => {
+    await mkdir(join(rig.studioDir, "drafts"));
+    await writeFile(join(rig.studioDir, ".gitattributes"), "*.md ident\n");
+    await writeFile(join(rig.studioDir, "drafts/.gitattributes"), "# *.md -text -diff -ident -working-tree-encoding\n");
+    rig.git("add", "-A");
+    rig.git("commit", "-qm", "Commented rule");
+    const first = await save("Literal $Id$ token\n");
+    rig.git("checkout", "HEAD", "--", "drafts");
+    expect(await rig.read()).toEqual(first.saved);
+  });
+
+  it("refuses a save whose attributes file would pass its size limit", async () => {
+    await mkdir(join(rig.studioDir, "drafts"));
+    await writeFile(join(rig.studioDir, "drafts/.gitattributes"), `${"#".repeat(65_535)}\n`);
+    rig.git("add", "-A");
+    rig.git("commit", "-qm", "Large attributes");
+    const head = rig.git("rev-parse", "HEAD");
+    const previous = await rig.read();
+    const response = await rig.put({ text: "x", revision: previous.revision, requestId: randomUUID() });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(rig.git("rev-parse", "HEAD")).toBe(head);
+  });
 });

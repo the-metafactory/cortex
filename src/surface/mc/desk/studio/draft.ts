@@ -98,6 +98,7 @@ export async function saveStudioDraft(input: DraftInput & DeskStudioDraftWrite):
     if (input.revision !== current.draft.revision) return { status: 409, error: "The Studio draft changed. Read it before saving again." };
     const revision = randomUUID();
     const attributes = withDraftAttributes(await optionalFile(join(input.options.dir, DRAFT_ATTRIBUTES_FILE), DRAFT_ATTRIBUTES_MAX_BYTES));
+    if (attributes !== null && Buffer.byteLength(attributes, "utf8") > DRAFT_ATTRIBUTES_MAX_BYTES) throw new Error("The Studio drafts attributes file would exceed its size limit.");
     return {
       writes: [
         ...(attributes === null ? [] : [{ path: DRAFT_ATTRIBUTES_FILE, text: attributes }]),
