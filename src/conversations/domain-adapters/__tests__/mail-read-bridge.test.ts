@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { DeskMailListing, DeskAdapterHost } from "../../../desk-sdk";
+import { DESK_ADAPTER_SDK_VERSION, type DeskMailListing, type DeskAdapterHost } from "../../../desk-sdk";
 import { SourceCache, type DeskSourceConfig } from "../../../surface/mc/desk/sources/command";
 import { resolveListedMail } from "../../../surface/mc/desk/mail-actions";
 import type { AuthorityBindings, AuthorityMediator, HostContext, TrustedConnector } from "../../authority";
@@ -316,7 +316,7 @@ describe("the Desk adapter host's Mail read bridge", () => {
     const host = packageHost();
     expect(await withAdmittedCall({ adapterId: "other-adapter", connectionId: TWO }, () => host.mail.listed({ adapterId: "other-adapter", connectionId: TWO }))).toBeNull();
     expect(await listedIn(TWO)).toBeNull();
-    expect(host.sdkVersion).toBe("1.20.0");
+    expect(host.sdkVersion).toBe(DESK_ADAPTER_SDK_VERSION);
 
     await loader.disable(ADAPTER);
 
