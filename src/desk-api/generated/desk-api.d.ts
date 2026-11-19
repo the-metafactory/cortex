@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.13.0";
+export declare const DESK_API_VERSION = "1.14.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -749,10 +749,54 @@ export interface StudioView {
 	problems: StudioProblem[];
 }
 export interface DeskStudioView extends StudioView {
+	board: StudioBoard;
 	active: DeskStudioThread[];
 	parked: DeskStudioThread[];
 	closed: DeskStudioThread[];
 }
+export type StudioBoardTarget = {
+	kind: "thread";
+	slug: string;
+	place: number;
+	why: "named-thread";
+} | {
+	kind: "free";
+	place: number;
+	area: string | null;
+	why: "first-free";
+} | {
+	kind: null;
+	why: "thread-off-board" | "no-free" | "no-target";
+};
+export interface StudioBoardSharedPair {
+	a: string;
+	b: string;
+	label: string;
+}
+export interface StudioBoard {
+	inbox: {
+		id: string;
+		target: StudioBoardTarget;
+	}[];
+	proposals: {
+		id: string;
+		target: StudioBoardTarget;
+	}[];
+	shared: StudioBoardSharedPair[];
+	freePlaces: number[];
+	waiting: number;
+	look: {
+		since: number;
+		kind: "day" | "overnight" | "since-look";
+	};
+}
+export type StudioLookResponse = {
+	ok: true;
+	at: number;
+} | {
+	ok: false;
+	error: string;
+};
 export type DeskStudioResponse = {
 	studio: null;
 } | {
@@ -2289,6 +2333,9 @@ export interface DeskApiRouteTypes {
 	};
 	"GET /api/desk/studio": {
 		response: DeskStudioResponse;
+	};
+	"POST /api/desk/studio/look": {
+		response: StudioLookResponse;
 	};
 	"GET /api/desk/my-day": {
 		response: MyDayResponse;

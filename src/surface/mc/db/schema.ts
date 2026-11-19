@@ -9,6 +9,7 @@ import { DMARC_SQL } from "../desk/mail-dmarc-schema";
 import { MAIL_LOOP_SQL } from "../desk/mail-loop-schema";
 import { MAIL_SWEEP_ADAPTER_SQL } from "../desk/mail-sweep-adapter-schema";
 import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
+import { STUDIO_LOOK_SQL } from "../desk/studio/look";
 import { DIGEST_SQL } from "../desk/mail-digest-schema";
 import { UNSUBSCRIBE_SQL } from "../desk/mail-unsubscribe-schema";
 import { MAIL_JUDGEMENT_SQL } from "../desk/mail-judgement-schema";
@@ -151,6 +152,7 @@ export const TABLE_NAMES = [
   "desk_routine_proposals",
   "desk_routine_operations",
   "desk_routine_display",
+  "desk_studio_look",
   "desk_deliveries",
   "desk_grants",
   "desk_done",
@@ -210,6 +212,7 @@ export const SCHEMA_SQL: string[] = [
   ...MAIL_LOOP_SQL,
   ...MAIL_SWEEP_ADAPTER_SQL,
   ...ROUTINE_DISPLAY_SQL,
+  ...STUDIO_LOOK_SQL,
   ...DIGEST_SQL,
   ...UNSUBSCRIBE_SQL,
   ...WAITING_SQL,

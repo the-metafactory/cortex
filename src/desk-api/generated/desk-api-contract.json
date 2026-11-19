@@ -1,5 +1,5 @@
 {
-  "version": "1.13.0",
+  "version": "1.14.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -111,6 +111,7 @@
     "POST /api/desk/routines",
     "POST /api/desk/ruling",
     "POST /api/desk/studio/act",
+    "POST /api/desk/studio/look",
     "POST /api/desk/studio/session",
     "POST /api/desk/task-handoff",
     "POST /api/desk/unimportant",

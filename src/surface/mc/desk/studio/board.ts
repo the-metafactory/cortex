@@ -3,6 +3,7 @@ export { latestNote, normaliseLabel, sameSource, waitsOnYou } from "./thread-fac
 import type { AreaPolicy } from "../types";
 import type { AssistantNote, StudioCapture, StudioTarget } from "./format";
 import type { StudioProblem, StudioProposalView, StudioThreadView, StudioView } from "./view";
+import type { StudioBoard, StudioBoardSharedPair, StudioBoardTarget } from "../../../../desk-api/wire/studio";
 
 const DAY_MS = 86_400_000;
 const EVENING_MS = 6 * 3_600_000;
@@ -53,11 +54,7 @@ export interface BoardProposal extends BoardLoose {
   areas: BoardArea[];
 }
 
-export interface SharedPair {
-  a: string;
-  b: string;
-  label: string;
-}
+type SharedPair = StudioBoardSharedPair;
 
 export interface Board {
   summary: string;
@@ -105,10 +102,33 @@ export function areaLookup(areas: readonly BoardArea[]): (id: string) => BoardAr
   return (id) => byId.get(id) ?? { id, label: id, color: UNKNOWN_AREA_COLOR, policy: "local" satisfies AreaPolicy };
 }
 
-function lookWindow(clock: BoardClock): { since: number; lead: string } {
-  if (clock.lastLook === null) return { since: clock.now - DAY_MS, lead: "In the last day," };
+function lookWindow(clock: BoardClock): StudioBoard["look"] {
+  if (clock.lastLook === null) return { since: clock.now - DAY_MS, kind: "day" };
   const lastEvening = clock.lastLook < clock.startOfToday && clock.lastLook >= clock.startOfToday - EVENING_MS;
-  return { since: clock.lastLook, lead: lastEvening ? "Overnight" : "Since you last looked," };
+  return { since: clock.lastLook, kind: lastEvening ? "overnight" : "since-look" };
+}
+
+function resolveTarget(target: StudioTarget | undefined, bySlug: ReadonlyMap<string, StudioThreadView & { place: number }>, firstFree: number | undefined): StudioBoardTarget {
+  if (!target) return { kind: null, why: "no-target" };
+  if (target.thread !== undefined) {
+    const thread = bySlug.get(target.thread);
+    return thread ? { kind: "thread", slug: thread.slug, place: thread.place, why: "named-thread" } : { kind: null, why: "thread-off-board" };
+  }
+  return firstFree === undefined ? { kind: null, why: "no-free" } : { kind: "free", place: firstFree, area: target.area ?? null, why: "first-free" };
+}
+
+export function buildBoardFacts(studio: StudioView, clock: BoardClock): StudioBoard {
+  const placed = studio.active.filter((t): t is StudioThreadView & { place: number } => t.place !== undefined);
+  const bySlug = new Map(placed.map((t) => [t.slug, t]));
+  const freePlaces = Array.from({ length: studio.maxActive }, (_, i) => i + 1).filter((p) => !placed.some((t) => t.place === p));
+  return {
+    inbox: studio.inbox.map((capture) => ({ id: capture.id, target: resolveTarget(capture.target, bySlug, freePlaces[0]) })),
+    proposals: studio.proposals.map((proposal) => ({ id: proposal.id, target: resolveTarget(proposal.target, bySlug, freePlaces[0]) })),
+    shared: sharedPairs(placed),
+    freePlaces,
+    waiting: placed.filter(waitsOnYou).length,
+    look: lookWindow(clock),
+  };
 }
 
 function placesSentence(used: number, max: number, waiting: number): string {
@@ -122,19 +142,9 @@ const viaName = (via: string): string => (via === "voice" ? "the voice note" : v
 export function buildBoard(studio: StudioView, clock: BoardClock, name: string): Board {
   const area = areaLookup(studio.areas);
   const placed = studio.active.filter((t): t is StudioThreadView & { place: number } => t.place !== undefined);
-  const pairs = sharedPairs(placed);
+  const facts = buildBoardFacts(studio, clock);
+  const pairs = facts.shared;
   const bySlug = new Map(placed.map((t) => [t.slug, t]));
-  const freePlaces = Array.from({ length: studio.maxActive }, (_, i) => i + 1).filter((p) => !placed.some((t) => t.place === p));
-  const firstFree = freePlaces[0];
-
-  const resolve = (target: StudioTarget | undefined): BoardTarget | null => {
-    if (!target) return null;
-    if (target.thread !== undefined) {
-      const t = bySlug.get(target.thread);
-      return t ? { kind: "thread", slug: t.slug, place: t.place } : null;
-    }
-    return firstFree === undefined ? null : { kind: "free", place: firstFree };
-  };
 
   const looseSentence = (target: StudioTarget | undefined, resolved: BoardTarget | null, proposal: boolean): string => {
     if (!target) return `${name} has no place for it yet.`;
@@ -151,11 +161,11 @@ export function buildBoard(studio: StudioView, clock: BoardClock, name: string):
   };
 
   const inbox: BoardCapture[] = studio.inbox.map((capture) => {
-    const target = resolve(capture.target);
+    const target = boardTarget(resolveTarget(capture.target, bySlug, facts.freePlaces[0]));
     return { id: capture.id, capture, target, reason: capture.target?.reason ?? null, sentence: looseSentence(capture.target, target, false) };
   });
   const proposals: BoardProposal[] = studio.proposals.map((proposal) => {
-    const target = resolve(proposal.target);
+    const target = boardTarget(resolveTarget(proposal.target, bySlug, facts.freePlaces[0]));
     return {
       id: proposal.id,
       proposal,
@@ -193,13 +203,14 @@ export function buildBoard(studio: StudioView, clock: BoardClock, name: string):
     };
   });
 
-  const { since, lead } = lookWindow(clock);
+  const { since, kind } = facts.look;
+  const lead = { day: "In the last day,", overnight: "Overnight", "since-look": "Since you last looked," }[kind];
   const thought = [...studio.active, ...studio.parked].filter((t) => t.notes.some((n) => {
     const at = time(n.at);
     return at > since && at <= clock.now;
   }));
   const thoughtAbout = thought.map((t) => `“${clip(plainQuestion(t.question), 48)}”`);
-  const waiting = places.filter((p) => p.kind === "thread" && p.waitsOnYou).length;
+  const waiting = facts.waiting;
   const thoughtSentence = thought.length === 0 ? "" : `${lead} I thought about ${thought.length === 1 ? "1 thread" : `${thought.length} threads`}: ${joinAnd(thoughtAbout)}. `;
 
   return {
@@ -214,4 +225,9 @@ export function buildBoard(studio: StudioView, clock: BoardClock, name: string):
     closed: studio.closed,
     problems: studio.problems,
   };
+}
+
+function boardTarget(target: StudioBoardTarget): BoardTarget | null {
+  if (target.kind === null) return null;
+  return target.kind === "thread" ? { kind: "thread", slug: target.slug, place: target.place } : { kind: "free", place: target.place };
 }
