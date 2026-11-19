@@ -1,3 +1,5 @@
+import type { AreaRule } from "../desk/rank";
+import { trackAreaPolicies } from "../desk/studio/view";
 import { LOCAL_CONTENT, NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { classifierLabel } from "../desk/classify";
 import { draftWasRecorded } from "../desk/studio/session-draft";
@@ -31,7 +33,7 @@ function rig(kind = "idea") {
   git("init", "-q"); git("config", "user.email", "test@example.com"); git("config", "user.name", "Test"); git("add", "."); git("commit", "-qm", "fixture");
   const db = new Database(":memory:"); databases.push(db); for (const sql of SCHEMA_SQL) db.exec(sql);
   const endpoint = { baseUrl: "http://local.invalid/v1", model: "local-model", timeoutSeconds: 1, maxPerPass: 1, contextTokens: 200_000, maxOutputTokens: 1_000 };
-  const options = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "cloud" as "cloud" | "local" }], sources: [], studio: { dir, maxActive: 5, filer: { ...endpoint, model: "cloud-model", local: endpoint } } };
+  const options = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: trackAreaPolicies<AreaRule>([{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "cloud" }]), sources: [], studio: { dir, maxActive: 5, filer: { ...endpoint, model: "cloud-model", local: endpoint } } };
   const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
   const id = crypto.randomUUID();
   const post = (body: object, model: SessionModel = async () => result) => handleDeskStudioSession(new Request("http://localhost/api/desk/studio/session", { method: "POST", body: JSON.stringify({ id, ...body }) }), db, runtime, { model });
@@ -285,25 +287,34 @@ test("a local thread never reaches the cloud model with its draft", async () => 
   expect(labels).toEqual(["local-model"]);
 });
 
+const LAB = (policy: "cloud" | "local") => ({ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy });
+
+async function readWhile(r: ReturnType<typeof rig>, onSecondResolve: () => void, policy: (n: number) => string) {
+  const { readDraftForThinking } = await import("../desk/studio/session-thinking");
+  let n = 0;
+  const resolve = async () => {
+    if (++n === 2) onSecondResolve();
+    return { view: { active: [{ slug: "alpha", state: "active", policy: policy(n) }], parked: [], closed: [] } } as never;
+  };
+  return readDraftForThinking({ options: r.options.studio, areas: r.options.areas, assistantName: "Ivy", thread: "alpha" }, resolve);
+}
+
 test("a policy that moves while the draft is read refuses the turn", async () => {
   const r = rig(); await r.start();
-  const { readDraftForThinking } = await import("../desk/studio/session-thinking");
-  const policies = ["local", "cloud"]; let n = 0;
-  const resolve = async () => ({ view: { active: [{ slug: "alpha", state: "active", policy: policies[Math.min(n++, 1)] }], parked: [], closed: [] } }) as never;
-  const read = await readDraftForThinking({ options: r.options.studio, areas: r.options.areas, assistantName: "Ivy", thread: "alpha" }, resolve);
+  const read = await readWhile(r, () => {}, n => (n === 1 ? "local" : "cloud"));
   expect(read.ok).toBe(false);
   expect(read.ok ? "" : read.error).toContain("policy changed while its draft was read");
 });
 
-test("a policy that moves away and back during the draft read refuses the turn", async () => {
+test("an area policy that moves away and back during the draft read refuses the turn", async () => {
   const r = rig(); await r.start();
-  const { readDraftForThinking } = await import("../desk/studio/session-thinking");
-  let n = 0;
-  const resolve = async () => {
-    if (++n === 2) r.git("commit", "--allow-empty", "-qm", "Policy flapped during read");
-    return { view: { active: [{ slug: "alpha", state: "active", policy: "cloud" }], parked: [], closed: [] } } as never;
-  };
-  const read = await readDraftForThinking({ options: r.options.studio, areas: r.options.areas, assistantName: "Ivy", thread: "alpha" }, resolve);
+  const read = await readWhile(r, () => { r.options.areas.splice(0, 1, LAB("local")); r.options.areas.splice(0, 1, LAB("cloud")); }, () => "cloud");
   expect(read.ok).toBe(false);
   expect(read.ok ? "" : read.error).toContain("policy changed while its draft was read");
+});
+
+test("an unrelated commit during the draft read does not refuse the turn", async () => {
+  const r = rig(); await r.start();
+  const read = await readWhile(r, () => { r.git("commit", "--allow-empty", "-qm", "Unrelated commit during read"); }, () => "cloud");
+  expect(read.ok).toBe(true);
 });

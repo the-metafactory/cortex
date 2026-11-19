@@ -1,3 +1,4 @@
+import { trackAreaPolicies } from "../desk/studio/view";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -96,7 +97,7 @@ if (import.meta.main && process.argv[2] === "--serve") {
   const db = initDatabase(join(root, `${randomUUID()}.db`));
   const ctx = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: ["owner@example.org"], localPrincipal: "owner@example.org" } }, db, { desk: {
     enabled: true, displayName: "", assistantName: "Assistant", topN: 5, rangerUrl: "",
-    sources: [], areas: [{ id: "lab", label: "Lab", policy: "local", repos: [], goals: [], color: "" }], studio: { dir: studioDir, maxActive: 5, ...(filer ? { filer } : {}) },
+    sources: [], areas: trackAreaPolicies([{ id: "lab", label: "Lab", policy: "local", repos: [], goals: [], color: "" }]), studio: { dir: studioDir, maxActive: 5, ...(filer ? { filer } : {}) },
   } });
   process.stdout.write(`studio-draft-url:http://localhost:${ctx.port}\n`);
 }

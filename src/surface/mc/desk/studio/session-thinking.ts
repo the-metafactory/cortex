@@ -2,9 +2,8 @@ import type { ClassifierConfig } from "../classify";
 import type { StudioOptions } from "../types";
 import { getStudioDraft } from "./draft";
 import type { StudioWriteInput } from "./writer";
-import { spawnGit } from "./git";
 import { sessionMessages, sessionThread, type SessionDraftInput, type SessionPrompt } from "./session";
-import type { StudioThreadView } from "./view";
+import { areaPolicyRevision, type StudioThreadView } from "./view";
 import type { ActContext } from "./acts";
 
 type DraftForThinking = { ok: true; draft: Pick<SessionDraftInput, "revision" | "text">; thread: StudioThreadView } | { ok: false; error: string };
@@ -13,20 +12,14 @@ const UNREADABLE = "The thread draft could not be read, so nothing was sent to a
 
 const POLICY_MOVED = "The thread's model policy changed while its draft was read, so nothing was sent to a model. Your text is saved; retry the same turn.";
 
-async function policyEpoch(input: { options: StudioOptions; areas: StudioWriteInput["areas"] }): Promise<string | null> {
-  const head = await spawnGit(["rev-parse", "--verify", "HEAD"], input.options.dir);
-  if (head.code !== 0) return null;
-  return `${head.stdout.trim()}:${JSON.stringify(input.areas.map(a => [a.id, a.policy ?? "cloud"]))}`;
-}
-
 export async function readDraftForThinking(
   input: { options: StudioOptions; areas: StudioWriteInput["areas"]; assistantName: string; thread: string },
   resolve: () => Promise<Pick<ActContext, "view">>,
 ): Promise<DraftForThinking> {
   const before = sessionThread(await resolve(), input.thread);
   if (!before) return { ok: false, error: UNREADABLE };
-  const epochBefore = await policyEpoch(input);
-  if (epochBefore === null) return { ok: false, error: UNREADABLE };
+  const revisionBefore = areaPolicyRevision(input.areas);
+  if (revisionBefore === null) return { ok: false, error: UNREADABLE };
   let read;
   try { read = await getStudioDraft(input); }
   catch (err) {
@@ -36,7 +29,7 @@ export async function readDraftForThinking(
   if (!read.ok) return { ok: false, error: UNREADABLE };
   const after = sessionThread(await resolve(), input.thread);
   if (!after) return { ok: false, error: UNREADABLE };
-  if (after.policy !== before.policy || await policyEpoch(input) !== epochBefore) return { ok: false, error: POLICY_MOVED };
+  if (after.policy !== before.policy || areaPolicyRevision(input.areas) !== revisionBefore) return { ok: false, error: POLICY_MOVED };
   return { ok: true, draft: { revision: read.draft.revision, text: read.draft.text }, thread: after };
 }
 

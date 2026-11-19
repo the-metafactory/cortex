@@ -20,6 +20,24 @@ export { DEFAULT_YES_FILTER } from "../yes-filter";
 import type { StudioThreadView, StudioView, StudioProblem, StudioProposalView } from "../../../../desk-api/wire/studio";
 export type { StudioThreadView, StudioView, StudioProblem, StudioProposalView } from "../../../../desk-api/wire/studio";
 
+const policyRevisions = new WeakMap<object, { n: number }>();
+
+export function trackAreaPolicies<T extends StudioArea>(areas: T[]): T[] {
+  const counter = { n: 0 };
+  const watch = <O extends object>(target: O): O => new Proxy(target, {
+    get: (t, k, r) => { const v = Reflect.get(t, k, r); return typeof v === "object" && v !== null ? watch(v) : v; },
+    set: (t, k, v, r) => { counter.n++; return Reflect.set(t, k, v, r); },
+    deleteProperty: (t, k) => { counter.n++; return Reflect.deleteProperty(t, k); },
+  });
+  const tracked = watch(areas);
+  policyRevisions.set(tracked, counter);
+  return tracked;
+}
+
+export function areaPolicyRevision(areas: readonly StudioArea[]): number | null {
+  return policyRevisions.get(areas)?.n ?? null;
+}
+
 export function effectivePolicy(areaIds: readonly string[], areas: readonly StudioArea[]): { policy: AreaPolicy; unknown: string[] } {
   const byId = new Map(areas.map((a) => [a.id, a.policy ?? "cloud"]));
   const unknown = areaIds.filter((id) => !byId.has(id));
