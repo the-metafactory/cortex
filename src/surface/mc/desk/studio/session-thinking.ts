@@ -10,10 +10,14 @@ type DraftForThinking = { ok: true; draft: Pick<SessionDraftInput, "revision" | 
 
 const UNREADABLE = "The thread draft could not be read, so nothing was sent to a model. Your text is saved; retry the same turn.";
 
+const POLICY_MOVED = "The thread's model policy changed while its draft was read, so nothing was sent to a model. Your text is saved; retry the same turn.";
+
 export async function readDraftForThinking(
   input: { options: StudioOptions; areas: StudioWriteInput["areas"]; assistantName: string; thread: string },
   resolve: () => Promise<Pick<ActContext, "view">>,
 ): Promise<DraftForThinking> {
+  const before = sessionThread(await resolve(), input.thread);
+  if (!before) return { ok: false, error: UNREADABLE };
   let read;
   try { read = await getStudioDraft(input); }
   catch (err) {
@@ -23,6 +27,7 @@ export async function readDraftForThinking(
   if (!read.ok) return { ok: false, error: UNREADABLE };
   const after = sessionThread(await resolve(), input.thread);
   if (!after) return { ok: false, error: UNREADABLE };
+  if (after.policy !== before.policy) return { ok: false, error: POLICY_MOVED };
   return { ok: true, draft: { revision: read.draft.revision, text: read.draft.text }, thread: after };
 }
 
