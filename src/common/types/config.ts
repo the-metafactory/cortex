@@ -466,7 +466,11 @@ const LocalClassifierSchema = z
   .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.local.caFile belongs to the endpoint form; pass a CA to the command in its argv");
 
 const EmbedderEndpointSchema = endpointSchema("mc.desk.mail.embedder", 10);
-const StudioFilerAccessSchema = jsonModelSchema("mc.desk.studio.filer", 30).and(z.object({ maxPerPass: z.number().int().min(1).max(100).default(10) }));
+const StudioFilerAccessSchema = jsonModelSchema("mc.desk.studio.filer", 30).and(z.object({
+  maxPerPass: z.number().int().min(1).max(100).default(10),
+  contextTokens: z.number().int().min(1).optional(),
+  maxOutputTokens: z.number().int().min(1).optional(),
+})).refine(c => c.contextTokens === undefined || c.maxOutputTokens === undefined || c.maxOutputTokens < c.contextTokens, "mc.desk.studio.filer: maxOutputTokens must be smaller than contextTokens");
 const StudioFilerSchema = StudioFilerAccessSchema.and(z.object({ local: StudioFilerAccessSchema.optional() })).refine(config => config.local?.sourcePolicy !== "cloud", "A local model slot cannot declare cloud access");
 const DigestAccessSchema = jsonModelSchema("mc.desk.mail.digest.model", 60);
 const DigestModelSchema = DigestAccessSchema.and(z.object({ local: DigestAccessSchema.optional() })).refine(config => config.local?.sourcePolicy !== "cloud", "A local model slot cannot declare cloud access");

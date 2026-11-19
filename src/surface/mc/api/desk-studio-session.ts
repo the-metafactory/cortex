@@ -8,8 +8,10 @@ import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView } from "../desk/studio/view";
 import { runStudioAct, runStudioTransaction } from "../desk/studio/writer";
 import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionContent, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
+import { readDraftForThinking, refuseUnfit } from "../desk/studio/session-thinking";
 import { assistantNameOf } from "../desk/assistant-name";
 
+const POLICY_CHANGED = "The thread's model policy changed before its draft could be sent, so nothing was sent to a model. Your text is saved; retry the same turn.";
 const queues = new WeakMap<Database, Map<string, Promise<void>>>();
 const answer = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const fail = (status: number, error: string, session?: StudioSession): Response => answer(status, { ok: false, error, ...(session ? { session } : {}) });
@@ -110,8 +112,17 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     turn.policy = session.policy; turn.model = endpoint ? classifierLabel(endpoint) : "unavailable";
     save(db, dir, session);
     if (!endpoint) return fail(503, session.policy === "local" ? "The local model is not configured. Your text is saved; no cloud fallback was used." : "A Studio model is not configured. Your text is saved.", session);
+    const assistantName = assistantNameOf(desk);
+    const read = await readDraftForThinking({ options, areas: desk.areas, assistantName, thread: session.thread }, context);
+    if (!read.ok) return fail(409, read.error, session);
+    if (read.thread.policy !== thread.policy) return fail(409, POLICY_CHANGED, session);
+    const prompt = sessionPrompt(session, read.thread, read.draft);
+    const unfit = refuseUnfit(endpoint, prompt, assistantName);
+    if (unfit) return fail(409, unfit, session);
+    turn.draftRevision = read.draft.revision;
+    save(db, dir, session);
     try {
-      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, sessionPrompt(session, thread), sessionContent(thread), assistantNameOf(desk)));
+      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, prompt, sessionContent(read.thread), assistantName));
       save(db, dir, session);
       return answer(200, { ok: true, session });
     } catch {
