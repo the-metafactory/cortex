@@ -13,14 +13,14 @@ const UNREADABLE = "The thread draft could not be read, so nothing was sent to a
 
 const POLICY_MOVED = "The thread's model policy changed while its draft was read, so nothing was sent to a model. Your text is saved; retry the same turn.";
 
-function threadFileStamp(dir: string, path: string | undefined): string {
-  if (!path) return "";
+function threadFileStamp(dir: string, path: string | undefined): string | null {
+  if (!path) return null;
   try {
     const info = statSync(join(dir, path));
     return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
   } catch (err) {
     process.stderr.write(`studio thread stamp failed: ${err instanceof Error ? err.message : String(err)}\n`);
-    return "unreadable";
+    return null;
   }
 }
 
@@ -41,7 +41,8 @@ export async function readDraftForThinking(
   if (!read.ok) return { ok: false, error: UNREADABLE };
   const after = sessionThread(await resolve(), input.thread);
   if (!after) return { ok: false, error: UNREADABLE };
-  if (after.policy !== before.policy || areaPolicyRevision(input.areas) !== revisionBefore || threadFileStamp(input.options.dir, after.path) !== fileBefore) return { ok: false, error: POLICY_MOVED };
+  const fileAfter = threadFileStamp(input.options.dir, after.path);
+  if (fileBefore === null || fileAfter === null || after.policy !== before.policy || areaPolicyRevision(input.areas) !== revisionBefore || fileAfter !== fileBefore) return { ok: false, error: POLICY_MOVED };
   return { ok: true, draft: { revision: read.draft.revision, text: read.draft.text }, thread: after };
 }
 

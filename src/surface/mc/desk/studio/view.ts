@@ -26,6 +26,8 @@ const policyRevisions = new WeakMap<object, { n: number }>();
 
 const policyFingerprint = (areas: readonly StudioArea[]): string => JSON.stringify(areas.map((a) => [a.id, a.policy ?? "cloud"]));
 
+const ownedCopy = (value: unknown): unknown => (typeof value === "object" && value !== null ? structuredClone(value) : value);
+
 export function trackAreaPolicies<T extends StudioArea>(areas: readonly T[]): TrackedAreas<T> {
   const own = structuredClone([...areas]);
   const counter = { n: 0 };
@@ -36,7 +38,7 @@ export function trackAreaPolicies<T extends StudioArea>(areas: readonly T[]): Tr
   };
   const watch = <O extends object>(target: O): O => new Proxy(target, {
     get: (t, k, r) => { const v = Reflect.get(t, k, r); return typeof v === "object" && v !== null ? watch(v) : v; },
-    set: (t, k, v, r) => { const ok = Reflect.set(t, k, v, r); noteWrite(); return ok; },
+    set: (t, k, v, r) => { const ok = Reflect.set(t, k, ownedCopy(v), r); noteWrite(); return ok; },
     deleteProperty: (t, k) => { const ok = Reflect.deleteProperty(t, k); noteWrite(); return ok; },
   });
   const tracked = watch(own) as TrackedAreas<T>;

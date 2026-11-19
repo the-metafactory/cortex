@@ -1,5 +1,5 @@
 import type { AreaRule } from "../desk/rank";
-import { trackAreaPolicies } from "../desk/studio/view";
+import { areaPolicyRevision, trackAreaPolicies } from "../desk/studio/view";
 import { LOCAL_CONTENT, NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { classifierLabel } from "../desk/classify";
 import { draftWasRecorded } from "../desk/studio/session-draft";
@@ -294,7 +294,7 @@ async function readWhile(r: ReturnType<typeof rig>, onSecondResolve: () => void,
   let n = 0;
   const resolve = async () => {
     if (++n === 2) onSecondResolve();
-    return { view: { active: [{ slug: "alpha", state: "active", policy: policy(n) }], parked: [], closed: [] } } as never;
+    return { view: { active: [{ slug: "alpha", path: "threads/alpha.md", state: "active", policy: policy(n) }], parked: [], closed: [] } } as never;
   };
   return readDraftForThinking({ options: r.options.studio, areas: r.options.areas, assistantName: "Ivy", thread: "alpha" }, resolve);
 }
@@ -317,4 +317,18 @@ test("an unrelated commit during the draft read does not refuse the turn", async
   const r = rig(); await r.start();
   const read = await readWhile(r, () => { r.git("commit", "--allow-empty", "-qm", "Unrelated commit during read"); }, () => "cloud");
   expect(read.ok).toBe(true);
+});
+
+test("an area inserted through the tracker is owned: mutating the caller's reference moves the revision only through the tracker", () => {
+  const tracked = trackAreaPolicies<AreaRule>([]);
+  const area: AreaRule = { id: "x", label: "X", color: "", repos: [], goals: [], policy: "cloud" };
+  tracked.push(area);
+  const before = areaPolicyRevision(tracked);
+  area.policy = "local";
+  area.policy = "cloud";
+  expect(tracked[0]?.policy).toBe("cloud");
+  expect(areaPolicyRevision(tracked)).toBe(before);
+  const held = tracked[0];
+  if (held) { held.policy = "local"; held.policy = "cloud"; }
+  expect(areaPolicyRevision(tracked)).toBeGreaterThan(before);
 });
