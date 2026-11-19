@@ -1,5 +1,5 @@
 {
-  "version": "1.14.0",
+  "version": "1.15.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -52,6 +52,7 @@
     "GET /api/desk/search",
     "GET /api/desk/studio",
     "GET /api/desk/studio/relations",
+    "GET /api/desk/studio/{thread}/draft",
     "GET /api/desk/unimportant",
     "GET /api/desk/vips",
     "GET /api/vigil/subjects",
@@ -119,7 +120,8 @@
     "POST /api/desk/voice/speak",
     "POST /api/desk/voice/transcribe",
     "PUT /api/conversations/{id}/draft",
-    "PUT /api/desk/graph-repositories/{ref}"
+    "PUT /api/desk/graph-repositories/{ref}",
+    "PUT /api/desk/studio/{thread}/draft"
   ],
   "phraseCodes": [
     "act.busy",

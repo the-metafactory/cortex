@@ -37,6 +37,8 @@ A thread's **effective policy** is the strictest policy of its areas: if any are
 ```text
 <dir>/
   threads/<slug>.md      one file per thread
+  drafts/<slug>.md       complete principal-edited Markdown draft
+  drafts/<slug>.json     persisted draft revision and content digest
   inbox/<id>.md          captures that match no thread yet
   proposals/<id>.md      threads the assistant proposes
 ```
@@ -166,6 +168,7 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 - `parked` (oldest-opened first) and `closed` (most recently closed first).
 - `inbox` and `proposals`, oldest first. Proposals carry their effective `policy`, which also counts the `target.area`.
 - `problems`: one entry per file that could not be read or parsed, with its `path` and a `reason`. A broken file never breaks the response.
+- `board`: the coded facts a client draws the board from (see Board and last look).
 
 Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText`, its effective `policy`, its sparring `personas` and its `thinking` (see Sparring and Think now).
 
@@ -188,6 +191,36 @@ A material item carries `text` when the file holds indented lines under its bull
 - `proposed` holds the open `relation` notes, newest first; Keep and Dismiss go through `POST /api/desk/studio/act`.
 - `context` is `complete`, or `studio-only` when the Desk could not be composed; then `goals` come only from the material, `events` is empty, and the other groups are still served.
 - With the Studio off the route answers `{ "relations": null }`. A malformed slug answers 400, an unknown thread 404. Responses are `Cache-Control: no-store`.
+
+## Board and last look
+
+Desk API 1.15.0 adds `board` to `GET /api/desk/studio` and the route `POST /api/desk/studio/look`. The board is served as codes and numbers; every English sentence stays in a client. The bundled Desk keeps its own wording and uses the same pure builder as the route.
+
+`board.inbox` and `board.proposals` carry one `{id, target}` per capture and proposal, where `target` is `{kind: "thread", slug, place, why: "named-thread"}` for a target that names a placed thread, `{kind: "free", place, area, why: "first-free"}` with the lowest free place otherwise, `{kind: null, why: "thread-off-board"}` for a named thread that is not placed, `{kind: null, why: "no-free"}` when every place is taken, and `{kind: null, why: "no-target"}` when the file names no target.
+
+`board.shared` lists each pair of placed threads that share a material source once as `{a, b, label}`. `board.freePlaces` lists the free place numbers in order, and `board.waiting` counts the placed threads whose latest note still waits on you.
+
+`board.look` is the window the client words: `{since: now - 24h, kind: "day"}` without a stored look, `{since, kind: "overnight"}` when the last look fell inside the six hours before today started, and `{since, kind: "since-look"}` otherwise. Today starts in the server's time zone.
+
+`POST /api/desk/studio/look` takes no body and stores the request time as this principal's last look for this stack, answering `{ok: true, at}`. The stored look is one row per principal and stack in the Desk database. Reading the Studio never writes it. With the Desk or the Studio disabled the route answers the same disabled response as the other Studio routes and stores nothing.
+
+`GET /api/desk/studio` uses the stored look, so every client reads the same board.
+
+## Thread document draft <!-- glossary-ignore: thread -->
+
+Desk API 1.14.0 adds `GET /api/desk/studio/{thread}/draft` and `PUT` on the same route. These routes require the existing principal authority and HTTP Host and Origin checks. Every response carries `x-desk-api-version` and successful reads and saves carry `Cache-Control: no-store`. <!-- glossary-ignore: thread, host -->
+
+GET returns `{text, revision, editable}` for question, making and topic threads. An older thread without a draft returns empty text. Its initial opaque revision derives from its persisted creation history. Draft revisions survive process restarts and remain unchanged by notes, stands or thread metadata edits. <!-- glossary-ignore: thread, topic -->
+
+PUT accepts `{text, revision, requestId}` and returns the current saved shape. `revision` must match the last read. `requestId` uses the Studio request identity format: 8–64 word characters or hyphens. Each successful save persists a fresh revision, including when text returns to an earlier value. Retrying a recorded request returns the current draft without another write or revision, including after restart or a later save.
+
+Drafts preserve complete Markdown, including headings, horizontal rules, line endings and surrounding whitespace. The limit is 1,048,576 UTF-8 bytes of decoded text, inclusive. JSON escapes do not count toward this limit. Larger text returns 413 before any file or Git change. Malformed input returns 400, an unknown thread returns 404, and a read or write failure returns 500. A missing or corrupt saved draft never reads as an empty legacy draft. <!-- glossary-ignore: thread -->
+
+Active drafts are editable. Parked and closed drafts return `editable: false` and refuse writes with 409. A stale revision also returns 409. These refusals include the current `text`, `revision` and `editable`. A dirty Studio can refuse a save with 409. Draft reads and writes wait for a live writer. Empty legacy revisions are cached until Git HEAD changes, so repeated reads avoid history searches. An unavailable or abandoned write lock returns 503. The shared Studio transaction serializes competing clients and commits the text, revision metadata and request identity together.
+
+The document lives in `drafts/<validated-thread-slug>.md`, separately from `threads/*.md`. Drafts do not enter thread listings or capture search. Assistant read tools gain no draft write operation. This document is separate from the unsent Studio session composer draft described under Live discussions. <!-- glossary-ignore: thread -->
+
+Run `bun scripts/probe-desk-studio-draft.ts` to verify HTTP round-trip, a stale-save refusal, process restart persistence, request replay and unchanged notes and thread listings. The probe starts a development Cortex runtime using a disposable Git-backed Studio and temporary HOME. It never reads a principal's Studio. <!-- glossary-ignore: thread, run -->
 
 ## Thread page
 

@@ -160,12 +160,12 @@ export function buildBoard(studio: StudioView, clock: BoardClock, name: string):
     return "Every place is taken, so opening it would park a thread.";
   };
 
-  const inbox: BoardCapture[] = studio.inbox.map((capture) => {
-    const target = boardTarget(resolveTarget(capture.target, bySlug, facts.freePlaces[0]));
+  const inbox: BoardCapture[] = studio.inbox.map((capture, i) => {
+    const target = boardTarget(facts.inbox[i]?.target);
     return { id: capture.id, capture, target, reason: capture.target?.reason ?? null, sentence: looseSentence(capture.target, target, false) };
   });
-  const proposals: BoardProposal[] = studio.proposals.map((proposal) => {
-    const target = boardTarget(resolveTarget(proposal.target, bySlug, facts.freePlaces[0]));
+  const proposals: BoardProposal[] = studio.proposals.map((proposal, i) => {
+    const target = boardTarget(facts.proposals[i]?.target);
     return {
       id: proposal.id,
       proposal,
@@ -227,7 +227,8 @@ export function buildBoard(studio: StudioView, clock: BoardClock, name: string):
   };
 }
 
-function boardTarget(target: StudioBoardTarget): BoardTarget | null {
-  if (target.kind === null) return null;
-  return target.kind === "thread" ? { kind: "thread", slug: target.slug, place: target.place } : { kind: "free", place: target.place };
+function boardTarget(target: StudioBoardTarget | undefined): BoardTarget | null {
+  if (target?.kind === "thread") return { kind: "thread", slug: target.slug, place: target.place };
+  if (target?.kind === "free") return { kind: "free", place: target.place };
+  return null;
 }

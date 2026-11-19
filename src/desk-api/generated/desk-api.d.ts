@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.14.0";
+export declare const DESK_API_VERSION = "1.15.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -804,6 +804,21 @@ export type DeskStudioResponse = {
 	studio: DeskStudioView;
 	materialText: "untrusted";
 };
+export interface DeskStudioDraft {
+	text: string;
+	revision: string;
+	editable: boolean;
+}
+export interface DeskStudioDraftWrite {
+	text: string;
+	revision: string;
+	requestId: string;
+}
+export type DeskStudioDraftResponse = DeskStudioDraft | {
+	error: string;
+} | (DeskStudioDraft & {
+	error: string;
+});
 declare const HANDOFF_STATES: readonly [
 	"working",
 	"ready",
@@ -2336,6 +2351,13 @@ export interface DeskApiRouteTypes {
 	};
 	"POST /api/desk/studio/look": {
 		response: StudioLookResponse;
+	};
+	"GET /api/desk/studio/{thread}/draft": {
+		response: DeskStudioDraftResponse;
+	};
+	"PUT /api/desk/studio/{thread}/draft": {
+		request: DeskStudioDraftWrite;
+		response: DeskStudioDraftResponse;
 	};
 	"GET /api/desk/my-day": {
 		response: MyDayResponse;

@@ -221,3 +221,17 @@ export interface StudioBoard {
 export type StudioLookResponse = { ok: true; at: number } | { ok: false; error: string };
 
 export type DeskStudioResponse = { studio: null } | { directory: string; studio: DeskStudioView; materialText: "untrusted" };
+
+export interface DeskStudioDraft {
+  text: string;
+  revision: string;
+  editable: boolean;
+}
+
+export interface DeskStudioDraftWrite {
+  text: string;
+  revision: string;
+  requestId: string;
+}
+
+export type DeskStudioDraftResponse = DeskStudioDraft | { error: string } | (DeskStudioDraft & { error: string });
