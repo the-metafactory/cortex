@@ -253,6 +253,7 @@ describe("Studio thread drafts over HTTP", () => {
     rig.git("commit", "-qm", "Attributes");
     const first = await save("Literal $Id$ token\n");
     expect(rig.git("show", "HEAD:drafts/.gitattributes")).toContain("*.bin filter=vault\n*.md -text");
+    await rm(join(rig.studioDir, "drafts/question.md"));
     rig.git("checkout", "HEAD", "--", "drafts");
     expect(await rig.read()).toEqual(first.saved);
     expect((await rig.read()).text).toBe("Literal $Id$ token\n");
@@ -264,6 +265,7 @@ describe("Studio thread drafts over HTTP", () => {
     rig.git("add", "-A");
     rig.git("commit", "-qm", "Commented rule");
     const first = await save("Literal $Id$ token\n");
+    await rm(join(rig.studioDir, "drafts/question.md"));
     rig.git("checkout", "HEAD", "--", "drafts");
     expect(await rig.read()).toEqual(first.saved);
   });

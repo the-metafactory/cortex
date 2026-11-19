@@ -3,7 +3,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DeskStudioDraft, DeskStudioDraftWrite } from "../../../../desk-api";
 import { parseThreadFile, STUDIO_SLUG } from "./format";
-import { DRAFT_ATTRIBUTES_FILE, DRAFT_ATTRIBUTES_RULE, draftDigest, withDraftAttributes, draftPaths, DraftMetadataSchema, STUDIO_DRAFT_MAX_BYTES } from "./draft-format";
+import { DRAFT_ATTRIBUTES_FILE, draftDigest, hasFinalDraftRule, withDraftAttributes, draftPaths, DraftMetadataSchema, STUDIO_DRAFT_MAX_BYTES } from "./draft-format";
 import { spawnGit, type GitRunner } from "./git";
 import { STUDIO_MAX_FILE_BYTES } from "./read";
 import { writeStudioTransaction, withStudioLock, type StudioWriteInput } from "./writer";
@@ -37,7 +37,7 @@ async function legacyRevision(git: GitRunner, dir: string, thread: string, threa
 }
 
 function validateDraftWrite(file: StudioFile): string | null {
-  if (file.path === DRAFT_ATTRIBUTES_FILE) return file.text.endsWith(DRAFT_ATTRIBUTES_RULE) ? null : "The draft plan is invalid; nothing was written.";
+  if (file.path === DRAFT_ATTRIBUTES_FILE) return hasFinalDraftRule(file.text) ? null : "The draft plan is invalid; nothing was written.";
   const match = /^drafts\/(.+)\.(md|json)$/.exec(file.path);
   const invalid = "The draft plan is invalid; nothing was written.";
   if (!match?.[1] || !STUDIO_SLUG.test(match[1])) return invalid;
