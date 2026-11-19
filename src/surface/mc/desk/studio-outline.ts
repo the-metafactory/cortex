@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { findNode, type AppState, type OutlineNode } from "../../../balance";
+import { findNode, findParent, type AppState, type OutlineNode } from "../../../balance";
 import type { MyDayMeta } from "./my-day-schema";
 import { responseCoverage, lastResponseCoverage } from "./studio/response";
 import type { StudioThread } from "./studio/format";
@@ -52,16 +52,30 @@ function completion(state: AppState, entry: ProjectionEntry, thread: StudioThrea
     entry.response = time;
   }
 }
+const threadSource = (thread: StudioThread): string => thread.id ? `id:${thread.id}` : `path:${thread.path}`;
 function uniquelyIdentifiedThreads(input: StudioProjection): { source: string; thread: StudioThread }[] {
   const counts = new Map<string, number>();
   for (const thread of input.threads) if (thread.id) counts.set(thread.id, (counts.get(thread.id) ?? 0) + 1);
-  return input.threads.flatMap(thread => thread.id && counts.get(thread.id) !== 1 ? [] : [{ source: thread.id ? `id:${thread.id}` : `path:${thread.path}`, thread }]);
+  return input.threads.flatMap(thread => thread.id && counts.get(thread.id) !== 1 ? [] : [{ source: threadSource(thread), thread }]);
+}
+function removeOpenResponseTask(state: AppState, entry: ProjectionEntry): void {
+  if (!entry.pending) return;
+  const id = entry.pending.id;
+  const parent = findParent(state.outline, id);
+  if (parent) parent.children = parent.children.filter(child => child.id !== id);
+}
+function releaseGoneThreads(state: AppState, meta: MyDayMeta, input: StudioProjection): void {
+  const present = new Set(input.threads.map(threadSource));
+  const gone = meta.studio.filter(entry => entry.namespace === input.namespace && !present.has(entry.source));
+  for (const entry of gone) removeOpenResponseTask(state, entry);
+  meta.studio = meta.studio.filter(entry => !gone.includes(entry));
 }
 export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioProjection, date?: string): void {
   for (const entry of meta.studio) {
     const project = findNode(state.outline, entry.projectId);
     if (project) project.done = true;
   }
+  releaseGoneThreads(state, meta, input);
   for (const { source, thread } of uniquelyIdentifiedThreads(input)) {
     const latestResponse = lastResponseCoverage(thread);
     let entry = meta.studio.find(s => s.namespace === input.namespace && s.source === source);

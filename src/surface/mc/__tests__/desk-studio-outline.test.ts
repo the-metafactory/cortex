@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS, findNode, selectToday, type AppState } from "../../..
 import { initDatabase } from "../db/init";
 import { saveBalanceState, loadBalanceState } from "../desk/balance-store";
 import { syncBalance } from "../desk/balance-sync";
-import { changeMyDay, localDay, readMyDay } from "../desk/my-day";
+import { changeMyDay, loadMeta, localDay, readMyDay } from "../desk/my-day";
 import { MyDayMetaSchema } from "../desk/my-day-schema";
 import { projectStudio, type StudioProjection } from "../desk/studio-outline";
 import { readSyncedMyDay } from "../desk/studio-my-day";
@@ -68,8 +68,8 @@ describe("Studio source projection", () => {
     first(f.source.threads).responses.push({ at: responseAt, text: "Already answered." });
     f.sync(); expect(f.model.log).toHaveLength(0); expect(first(f.meta.studio).pending).toBeNull();
     first(f.source.threads).path = "threads/renamed.md"; first(f.source.threads).slug = "renamed";
-    f.sync(); expect(f.meta.studio).toHaveLength(2); expect(f.model.log).toHaveLength(0);
-    f.source.namespace = "directory-two"; f.sync(); expect(f.meta.studio).toHaveLength(3); expect(f.model.log).toHaveLength(0);
+    f.sync(); expect(f.meta.studio.map(s => s.source)).toEqual(["path:threads/renamed.md"]); expect(f.model.log).toHaveLength(0);
+    f.source.namespace = "directory-two"; f.sync(); expect(f.meta.studio.map(s => s.namespace)).toEqual(["directory-one", "directory-two"]); expect(f.model.log).toHaveLength(0);
   });
   test("stable UUID survives slug rename and first-area move while preserving scheduling edits and manual children", () => {
     const f = fixture(); first(f.source.threads).id = crypto.randomUUID(); f.sync();
@@ -269,6 +269,30 @@ test("a successful source sync makes computed picks available after an unavailab
     const started = changeMyDay({ db, desk, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "start", ids: [] }, studio: input });
     expect(started.view.items).toHaveLength(0);
     expect(readMyDay(db, desk, now, input).items).toHaveLength(0);
+  } finally { db.close(); }
+});
+
+test("a deleted thread releases its outline row for removal only after a complete read of the same Studio directory", () => {
+  const db = initDatabase(":memory:");
+  try {
+    const configured = { ...desk, studio: { dir: "/studio", maxActive: 5 } };
+    const present: StudioProjection = { namespace: "source", areas: ["lab", "other"], threads: [{ ...thread(), id: crypto.randomUUID() }] };
+    const gone: StudioProjection = { ...present, threads: [] };
+    syncBalance(db, configured, now, present);
+    const entry = first(loadMeta(db).studio);
+    const pendingId = entry.pending?.id ?? "";
+    const remove = (studio: StudioProjection | undefined) => changeMyDay({ db, desk: configured, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "outline-remove", revision: readMyDay(db, configured, now, studio).revision, id: entry.projectId, confirm: true }, studio });
+    for (const unread of [undefined, { namespace: "elsewhere", threads: [] }]) {
+      syncBalance(db, configured, now, unread);
+      expect(() => remove(unread)).toThrow("This item belongs to Studio");
+      expect(findNode(readMyDay(db, configured, now, present).outline, pendingId)).not.toBeNull();
+    }
+    syncBalance(db, configured, now, gone);
+    const released = readMyDay(db, configured, now, gone);
+    expect(released.studioProjects).toEqual([]);
+    expect(findNode(released.outline, pendingId)).toBeNull();
+    expect(findNode(released.outline, entry.projectId)?.children).toEqual([]);
+    expect(findNode(remove(gone).view.outline, entry.projectId)).toBeNull();
   } finally { db.close(); }
 });
 
