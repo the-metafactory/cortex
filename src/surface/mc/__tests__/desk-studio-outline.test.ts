@@ -296,6 +296,28 @@ test("a deleted thread releases its outline row for removal only after a complet
   } finally { db.close(); }
 });
 
+test("a released row keeps its credited responses as history and is no longer Studio-owned", () => {
+  const db = initDatabase(":memory:");
+  try {
+    const configured = { ...desk, studio: { dir: "/studio", maxActive: 5 } };
+    const answered = { ...thread(), id: crypto.randomUUID() };
+    const present: StudioProjection = { namespace: "source", areas: ["lab", "other"], threads: [answered] };
+    syncBalance(db, configured, now, present);
+    answered.responses.push({ at: responseAt, re: noteAt, text: "Use the small sketch." });
+    syncBalance(db, configured, now, present);
+    const entry = first(loadMeta(db).studio);
+    const change = (command: Parameters<typeof changeMyDay>[0]["command"], studio: StudioProjection) => changeMyDay({ db, desk: configured, now, date: localDay(now), requestId: crypto.randomUUID(), command, studio });
+    const move = (studio: StudioProjection) => change({ op: "outline-move", revision: readMyDay(db, configured, now, studio).revision, id: entry.projectId, parent: "area:other" }, studio);
+    expect(loadBalanceState(db)?.log).toHaveLength(1);
+    expect(() => move(present)).toThrow("This item belongs to Studio");
+    const gone: StudioProjection = { ...present, threads: [] };
+    syncBalance(db, configured, now, gone);
+    expect(findNode(move(gone).view.outline, "area:other")?.children.map(c => c.id)).toEqual([entry.projectId]);
+    expect(() => change({ op: "outline-remove", revision: readMyDay(db, configured, now, gone).revision, id: entry.projectId, confirm: true }, gone)).toThrow("completion history");
+    expect(loadBalanceState(db)?.log).toHaveLength(1);
+  } finally { db.close(); }
+});
+
 test("actual unavailable-to-available source fills only an empty proposal and respects deferral", async () => {
   const repo = await repository(); const db = initDatabase(":memory:");
   try {
