@@ -231,7 +231,7 @@ describe("Studio thread drafts over HTTP", () => {
     rig.git("add", ".gitattributes");
     rig.git("commit", "-qm", "Normalize draft text in Git");
     const initial = await save("# Initial\r\n\r\nExact CRLF\r\n");
-    expect(rig.git("show", "HEAD:drafts/question.md")).toContain("\r\n");
+    expect(rig.gitRaw("show", "HEAD:drafts/question.md")).toBe("# Initial\r\n\r\nExact CRLF\r\n");
     const hook = join(rig.studioDir, ".git/hooks/pre-commit");
     await writeFile(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const body = { text: markdown, revision: initial.saved.revision, requestId: randomUUID() };
@@ -243,5 +243,18 @@ describe("Studio thread drafts over HTTP", () => {
     await rm(hook);
     expect((await rig.put(body)).status).toBe(200);
     expect((await rig.read()).text).toBe(markdown);
+  });
+
+  it("keeps existing draft attributes and stays byte-exact under an inherited ident rule", async () => {
+    await writeFile(join(rig.studioDir, ".gitattributes"), "*.md ident\n");
+    await mkdir(join(rig.studioDir, "drafts"));
+    await writeFile(join(rig.studioDir, "drafts/.gitattributes"), "*.bin filter=vault");
+    rig.git("add", "-A");
+    rig.git("commit", "-qm", "Attributes");
+    const first = await save("Literal $Id$ token\n");
+    expect(rig.git("show", "HEAD:drafts/.gitattributes")).toContain("*.bin filter=vault\n*.md -text");
+    rig.git("checkout", "HEAD", "--", "drafts");
+    expect(await rig.read()).toEqual(first.saved);
+    expect((await rig.read()).text).toBe("Literal $Id$ token\n");
   });
 });

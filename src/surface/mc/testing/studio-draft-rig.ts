@@ -14,14 +14,16 @@ const draftThreadFile = (type = "question", state = "active"): string => `---\nt
 
 const FIXTURE_GIT_IDENTITY = { GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.org", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.org" };
 
-function draftGit(dir: string, ...args: string[]): string {
+function rawDraftGit(dir: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-C", dir, ...args], {
     env: { ...process.env, ...FIXTURE_GIT_IDENTITY },
     stdout: "pipe", stderr: "pipe",
   });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-  return result.stdout.toString().trim();
+  return result.stdout.toString();
 }
+
+const draftGit = (dir: string, ...args: string[]): string => rawDraftGit(dir, ...args).trim();
 
 async function serveDraftFixture(root: string, studioDir: string): Promise<{ url: string; stop: () => Promise<void> }> {
   const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir], { env: { ...process.env, ...FIXTURE_GIT_IDENTITY }, stdout: "pipe", stderr: "inherit" });
@@ -58,6 +60,7 @@ export async function openStudioDraftRig() {
     dir,
     studioDir,
     baseUrl: () => server.url,
+    gitRaw: (...args: string[]) => rawDraftGit(studioDir, ...args),
     git: (...args: string[]) => draftGit(studioDir, ...args),
     get: (thread = "question") => fetch(`${server.url}/api/desk/studio/${thread}/draft`),
     put: (body: DeskStudioDraftWrite, thread = "question", baseUrl = server.url) => fetch(`${baseUrl}/api/desk/studio/${thread}/draft`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify(body) }),
