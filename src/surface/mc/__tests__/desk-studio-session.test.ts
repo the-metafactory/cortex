@@ -294,3 +294,16 @@ test("a policy that moves while the draft is read refuses the turn", async () =>
   expect(read.ok).toBe(false);
   expect(read.ok ? "" : read.error).toContain("policy changed while its draft was read");
 });
+
+test("a policy that moves away and back during the draft read refuses the turn", async () => {
+  const r = rig(); await r.start();
+  const { readDraftForThinking } = await import("../desk/studio/session-thinking");
+  let n = 0;
+  const resolve = async () => {
+    if (++n === 2) r.git("commit", "--allow-empty", "-qm", "Policy flapped during read");
+    return { view: { active: [{ slug: "alpha", state: "active", policy: "cloud" }], parked: [], closed: [] } } as never;
+  };
+  const read = await readDraftForThinking({ options: r.options.studio, areas: r.options.areas, assistantName: "Ivy", thread: "alpha" }, resolve);
+  expect(read.ok).toBe(false);
+  expect(read.ok ? "" : read.error).toContain("policy changed while its draft was read");
+});
