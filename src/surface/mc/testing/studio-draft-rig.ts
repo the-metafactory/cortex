@@ -12,9 +12,11 @@ export const DraftSchema = z.object({ text: z.string(), revision: z.string().min
 
 const draftThreadFile = (type = "question", state = "active"): string => `---\ntype: ${type}\nareas: [lab]\nstate: ${state}\nopened: 2026-11-01\n${state === "closed" ? "outcome: dropped\n" : ""}---\n\n## Question\n\nA fixture ${type}?\n\n## Where I stand\n\nA separate stand.\n\n## Assistant's notes\n\n### 2026-11-02T10:00:00Z\ntrigger: fixture\nmodel: local\nkind: note\nstatus: kept\n\nA separate note.\n`;
 
+const FIXTURE_GIT_IDENTITY = { GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.org", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.org" };
+
 function draftGit(dir: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-C", dir, ...args], {
-    env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.org", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.org" },
+    env: { ...process.env, ...FIXTURE_GIT_IDENTITY },
     stdout: "pipe", stderr: "pipe",
   });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
@@ -22,7 +24,7 @@ function draftGit(dir: string, ...args: string[]): string {
 }
 
 async function serveDraftFixture(root: string, studioDir: string): Promise<{ url: string; stop: () => Promise<void> }> {
-  const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir], { env: process.env, stdout: "pipe", stderr: "inherit" });
+  const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir], { env: { ...process.env, ...FIXTURE_GIT_IDENTITY }, stdout: "pipe", stderr: "inherit" });
   const readinessTimeout = setTimeout(() => { child.kill(); }, 10000);
   const reader = child.stdout.getReader();
   let output = "";
