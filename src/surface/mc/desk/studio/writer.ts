@@ -1,3 +1,4 @@
+import { preserveStudioDrafts, validateSnapshotWrite } from "./draft-snapshots";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { acquireStudioLock, studioLockOwnerIsAlive } from "./write-lock";
@@ -28,7 +29,7 @@ export const studioWriteLock = new StudioWriteLock();
 
 export type ActResult =
   | { ok: true; message: string; commit: string; replayed: boolean; studio: StudioView }
-  | { ok: false; status: number; error: string; needsPark?: boolean };
+  | ({ ok: false } & ActRefusal);
 
 export interface StudioWriteInput {
   options: StudioOptions;
@@ -39,9 +40,10 @@ export interface StudioWriteInput {
   now?: Date;
   git?: GitRunner;
   lock?: StudioWriteLock;
+  wait?: boolean;
 }
 
-const fail = (status: number, error: string, extra: { needsPark?: boolean } = {}): ActResult => ({ ok: false, status, error, ...extra });
+const fail = (status: number, error: string, extra: Omit<ActRefusal, "status" | "error"> = {}): ActResult => ({ ok: false, status, error, ...extra });
 const reason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 async function exists(path: string): Promise<boolean> {
@@ -140,7 +142,7 @@ async function recordStudioTransaction(input: TransactionInput, makePlan: () => 
 
   const base = await git(["rev-parse", "--verify", "HEAD"], dir);
   const plan = await makePlan();
-  if (isRefusal(plan)) return fail(plan.status, plan.error, plan.needsPark ? { needsPark: true } : {});
+  if (isRefusal(plan)) return { ok: false, ...plan };
   for (const w of plan.writes) {
     const error = validateWrite(w);
     if (error) return fail(500, error);
@@ -166,10 +168,12 @@ export function writeStudioTransaction<T>(input: TransactionInput, makePlan: () 
 export function runStudioTransaction(input: TransactionInput, makePlan: MakePlan): Promise<ActResult> {
   return writeStudioTransaction(input, async () => {
     const { files, view } = await readView(input);
-    return makePlan({ files, view, now: input.now ?? new Date(), assistantName: input.assistantName });
+    const ctx = { files, view, now: input.now ?? new Date(), assistantName: input.assistantName };
+    return preserveStudioDrafts(input, ctx, await makePlan(ctx));
   }, {
-    wait: false,
+    wait: input.wait ?? false,
     validateWrite: file => {
+      if (file.path.startsWith("draft-snapshots/")) return validateSnapshotWrite(file);
       const parsed = file.path.startsWith("inbox/") ? parseCaptureFile(file.path, file.text) : parseThreadFile(file.path, file.text, input.assistantName);
       return parsed.ok ? null : `The change would leave ${file.path} unreadable (${parsed.reason}); nothing was written.`;
     },

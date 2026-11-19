@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.15.0";
+export declare const DESK_API_VERSION = "1.16.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -818,6 +818,38 @@ export type DeskStudioDraftResponse = DeskStudioDraft | {
 	error: string;
 } | (DeskStudioDraft & {
 	error: string;
+});
+export interface DeskStudioDraftSnapshotMetadata {
+	id: string;
+	revision: string;
+	transition: "park" | "close";
+	at: string;
+}
+export interface DeskStudioDraftSnapshot extends DeskStudioDraftSnapshotMetadata {
+	text: string;
+}
+export type DeskStudioDraftSnapshotsResponse = {
+	snapshots: DeskStudioDraftSnapshotMetadata[];
+} | {
+	error: string;
+};
+export type DeskStudioDraftSnapshotResponse = DeskStudioDraftSnapshot | {
+	error: string;
+};
+export interface DeskStudioDraftPrecondition {
+	draftRevision?: string;
+}
+export type DeskStudioDraftTransitionAct = DeskStudioDraftPrecondition & {
+	thread: string;
+	requestId: string;
+} & ({
+	act: "park";
+} | {
+	act: "close";
+	outcome: ThreadOutcome;
+	text: string;
+	expect?: string;
+	reviewOn?: string;
 });
 declare const HANDOFF_STATES: readonly [
 	"working",
@@ -2354,6 +2386,12 @@ export interface DeskApiRouteTypes {
 	};
 	"GET /api/desk/studio/{thread}/draft": {
 		response: DeskStudioDraftResponse;
+	};
+	"GET /api/desk/studio/{thread}/draft/snapshots": {
+		response: DeskStudioDraftSnapshotsResponse;
+	};
+	"GET /api/desk/studio/{thread}/draft/snapshots/{snapshot}": {
+		response: DeskStudioDraftSnapshotResponse;
 	};
 	"PUT /api/desk/studio/{thread}/draft": {
 		request: DeskStudioDraftWrite;

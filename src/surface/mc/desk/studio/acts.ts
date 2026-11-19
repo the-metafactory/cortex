@@ -1,3 +1,4 @@
+import type { DeskStudioDraftTransitionAct } from "../../../../desk-api";
 import { stringify } from "yaml";
 import { z } from "zod";
 import { clip, latestNote, plainQuestion } from "./board";
@@ -22,7 +23,7 @@ export const StudioActSchema = z.discriminatedUnion("act", [
   z.object({ act: z.literal("respond"), thread: slug, text: words(MAX_RESPONSE) }),
   z.object({ act: z.literal("keep"), thread: slug, note: z.string().min(1).max(64) }),
   z.object({ act: z.literal("dismiss"), thread: slug, note: z.string().min(1).max(64) }),
-  z.object({ act: z.literal("park"), thread: slug }),
+  z.object({ act: z.literal("park"), thread: slug, draftRevision: z.string().min(1).max(256).optional() }),
   z.object({ act: z.literal("unpark"), thread: slug, park: slug.optional() }),
   z.object({ act: z.literal("think"), thread: slug, on: z.boolean() }),
   z.object({ act: z.literal("rename"), thread: slug, question: words(MAX_QUESTION).regex(/^[^\r\n]+$/, "must be one line") }),
@@ -31,6 +32,7 @@ export const StudioActSchema = z.discriminatedUnion("act", [
     act: z.literal("close"),
     thread: slug,
     outcome: z.enum(THREAD_OUTCOMES),
+    draftRevision: z.string().min(1).max(256).optional(),
     text: words(MAX_OUTCOME),
     expect: z.string().trim().max(500).optional(),
     reviewOn: z.string().regex(ISO_DATE, "must be a date like 2026-12-15").refine(validDate, "is not a real date").optional(),
@@ -42,8 +44,10 @@ export const StudioActSchema = z.discriminatedUnion("act", [
 ]);
 
 export type StudioAct = z.infer<typeof StudioActSchema>;
+void (true satisfies (Extract<StudioAct, { act: "close" | "park" }> extends Omit<DeskStudioDraftTransitionAct, "requestId"> ? true : false));
 
 export interface ActPlan {
+  draftPrecondition?: { thread: string; revision: string };
   writes: StudioFile[];
   removes: string[];
   subject: string;
@@ -54,6 +58,9 @@ export interface ActRefusal {
   status: number;
   error: string;
   needsPark?: boolean;
+  text?: string;
+  revision?: string;
+  editable?: boolean;
 }
 
 export interface ActContext {
@@ -352,7 +359,11 @@ export function planAct(context: ActContext, act: StudioAct, via?: string): ActP
   const found = threadOf(ctx, act.thread);
   if (isRefusal(found)) return found;
   if (NEEDS_OPEN_THREAD.has(act.act) && found.thread.state === "closed") return refuse(409, `${quoted(found.thread.question)} is closed.`);
-  return threadAct(ctx, act, found);
+  const result = threadAct(ctx, act, found);
+  if (!isRefusal(result) && (act.act === "close" || act.act === "park") && act.draftRevision !== undefined) {
+    result.draftPrecondition = { thread: act.thread, revision: act.draftRevision };
+  }
+  return result;
 }
 
 export { isRefusal };

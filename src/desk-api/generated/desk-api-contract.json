@@ -1,5 +1,5 @@
 {
-  "version": "1.15.0",
+  "version": "1.16.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -53,6 +53,8 @@
     "GET /api/desk/studio",
     "GET /api/desk/studio/relations",
     "GET /api/desk/studio/{thread}/draft",
+    "GET /api/desk/studio/{thread}/draft/snapshots",
+    "GET /api/desk/studio/{thread}/draft/snapshots/{snapshot}",
     "GET /api/desk/unimportant",
     "GET /api/desk/vips",
     "GET /api/vigil/subjects",
