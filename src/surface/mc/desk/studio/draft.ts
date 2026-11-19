@@ -3,7 +3,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DeskStudioDraft, DeskStudioDraftWrite } from "../../../../desk-api";
 import { parseThreadFile, STUDIO_SLUG } from "./format";
-import { draftDigest, DraftMetadataSchema, STUDIO_DRAFT_MAX_BYTES } from "./draft-format";
+import { DRAFT_ATTRIBUTES_PATH, DRAFT_ATTRIBUTES_TEXT, draftDigest, draftPaths, DraftMetadataSchema, STUDIO_DRAFT_MAX_BYTES } from "./draft-format";
 import { spawnGit, type GitRunner } from "./git";
 import { STUDIO_MAX_FILE_BYTES } from "./read";
 import { writeStudioTransaction, withStudioLock, type StudioWriteInput } from "./writer";
@@ -25,7 +25,7 @@ async function legacyRevision(git: GitRunner, dir: string, thread: string, threa
   const key = join(dir, threadPath);
   const cached = cache.get(key);
   if (cached?.head === head.stdout) return cached.revision;
-  const history = await git(["log", "-1", "--format=%H", "--", `drafts/${thread}.md`, `drafts/${thread}.json`], dir);
+  const history = await git(["log", "-1", "--format=%H", "--", draftPaths(thread).text, draftPaths(thread).meta], dir);
   if (history.code !== 0 || history.stdout.trim()) throw new Error("A previously saved Studio draft is missing or its history could not be read.");
   const birth = await git(["log", "-1", "--diff-filter=A", "--format=%H", "--", threadPath], dir);
   if (birth.code !== 0 || !/^[a-f0-9]{40,64}$/.test(birth.stdout.trim())) throw new Error("The Studio thread's persisted creation revision could not be read.");
@@ -36,6 +36,7 @@ async function legacyRevision(git: GitRunner, dir: string, thread: string, threa
 }
 
 function validateDraftWrite(file: StudioFile): string | null {
+  if (file.path === DRAFT_ATTRIBUTES_PATH) return file.text === DRAFT_ATTRIBUTES_TEXT ? null : "The draft plan is invalid; nothing was written.";
   const match = /^drafts\/(.+)\.(md|json)$/.exec(file.path);
   const invalid = "The draft plan is invalid; nothing was written.";
   if (!match?.[1] || !STUDIO_SLUG.test(match[1])) return invalid;
@@ -72,8 +73,8 @@ async function readDraft(input: DraftInput): Promise<DraftResult> {
     const folder = await lstat(join(input.options.dir, "drafts"));
     if (!folder.isDirectory() || folder.isSymbolicLink()) throw new Error("The Studio drafts path is not a directory.");
   } catch (error) { if (!errnoIs(error, "ENOENT")) throw error; }
-  const text = await optionalFile(join(input.options.dir, `drafts/${input.thread}.md`), STUDIO_DRAFT_MAX_BYTES);
-  const metadata = await optionalFile(join(input.options.dir, `drafts/${input.thread}.json`), 1024);
+  const text = await optionalFile(join(input.options.dir, draftPaths(input.thread).text), STUDIO_DRAFT_MAX_BYTES);
+  const metadata = await optionalFile(join(input.options.dir, draftPaths(input.thread).meta), 1024);
   const editable = parsed.value.state === "active";
   if (text === null && metadata === null) {
     return { ok: true, draft: { text: "", revision: await legacyRevision(git, input.options.dir, input.thread, threadPath), editable } };
@@ -97,8 +98,9 @@ export async function saveStudioDraft(input: DraftInput & DeskStudioDraftWrite):
     const revision = randomUUID();
     return {
       writes: [
-        { path: `drafts/${input.thread}.md`, text: input.text },
-        { path: `drafts/${input.thread}.json`, text: `${JSON.stringify({ revision, digest: draftDigest(input.text) })}\n` },
+        { path: DRAFT_ATTRIBUTES_PATH, text: DRAFT_ATTRIBUTES_TEXT },
+        { path: draftPaths(input.thread).text, text: input.text },
+        { path: draftPaths(input.thread).meta, text: `${JSON.stringify({ revision, digest: draftDigest(input.text) })}\n` },
       ],
       removes: [],
       subject: `Save draft for ${input.thread}`,

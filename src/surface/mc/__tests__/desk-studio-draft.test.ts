@@ -231,6 +231,7 @@ describe("Studio thread drafts over HTTP", () => {
     rig.git("add", ".gitattributes");
     rig.git("commit", "-qm", "Normalize draft text in Git");
     const initial = await save("# Initial\r\n\r\nExact CRLF\r\n");
+    expect(rig.git("show", "HEAD:drafts/question.md")).toContain("\r\n");
     const hook = join(rig.studioDir, ".git/hooks/pre-commit");
     await writeFile(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
     const body = { text: markdown, revision: initial.saved.revision, requestId: randomUUID() };
