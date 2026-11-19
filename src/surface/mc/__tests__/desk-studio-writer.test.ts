@@ -310,7 +310,7 @@ describe("Studio writer safety", () => {
   it("refuses another process holding the shared repository lock", async () => {
     seed();
     mkdirSync(join(dir, ".git", "studio-write.lock"));
-    writeFileSync(join(dir, ".git", "studio-write.lock", "owner.json"), JSON.stringify({ pid: 4242, at: NOW.toISOString() }));
+    writeFileSync(join(dir, ".git", "studio-write.lock", "owner.json"), JSON.stringify({ pid: process.ppid, at: NOW.toISOString() }));
     const before = readFileSync(join(dir, "threads/alpha.md"), "utf8");
     const result = await run({ act: "park", thread: "alpha" });
     expect(result).toMatchObject({ ok: false, status: 409 });
