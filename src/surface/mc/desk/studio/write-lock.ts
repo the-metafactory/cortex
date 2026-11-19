@@ -1,10 +1,9 @@
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { errnoIs } from "./file-error";
 
-const OwnerSchema = z.object({ pid: z.number().int().positive(), host: z.string().optional() });
+const OwnerSchema = z.object({ pid: z.number().int().positive() });
 const TAKEOVER_MARKER = "takeover";
 const ABANDONED_AFTER_MS = 30_000;
 const UNREADABLE_OWNER = null;
@@ -44,7 +43,6 @@ function parseOwner(text: string | null): Owner | null {
 }
 
 function ownerIsGone(owner: Owner): boolean {
-  if (owner.host !== undefined && owner.host !== hostname()) return false;
   try {
     process.kill(owner.pid, 0);
     return false;
@@ -73,7 +71,7 @@ async function lockIsAbandoned(lock: string, seen: string | null): Promise<boole
 }
 
 async function writeOwner(lock: string, dir: string): Promise<void> {
-  await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString(), dir: await realpath(dir) }), { mode: 0o600 });
+  await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, at: new Date().toISOString(), dir: await realpath(dir) }), { mode: 0o600 });
 }
 
 async function clearAbandonedTakeover(marker: string): Promise<boolean> {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireStudioLock } from "../desk/studio/write-lock";
 
@@ -61,20 +61,6 @@ describe("Studio write lock", () => {
     const release = await acquireStudioLock(dir);
     expect(release).not.toBeNull();
     expect((await ownerOf(dir)).pid).toBe(process.pid);
-    await release?.();
-  });
-
-  test("leaves a lock whose owner ran on another host", async () => {
-    const dir = await studioDir();
-    await mkdir(lockOf(dir));
-    await writeFile(join(lockOf(dir), "owner.json"), JSON.stringify({ pid: await goneProcessPid(), host: `elsewhere-${hostname()}`, at: "2026-11-15T00:11:00.000Z", dir }));
-    expect(await acquireStudioLock(dir)).toBeNull();
-  });
-
-  test("records this host as the owner's host", async () => {
-    const dir = await studioDir();
-    const release = await acquireStudioLock(dir);
-    expect(JSON.parse(await readFile(join(lockOf(dir), "owner.json"), "utf8"))).toMatchObject({ pid: process.pid, host: hostname() });
     await release?.();
   });
 
