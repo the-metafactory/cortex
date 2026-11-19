@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { findNode } from "../../../balance";
 import { acquireStudioLock } from "../desk/studio/write-lock";
@@ -92,6 +92,20 @@ describe("GET /api/desk/my-day studioProjects", () => {
       expect(day.studioStatus).toBe("unavailable");
       expect(day.studioProjects).toEqual(synced.map(({ id, slug }) => ({ id, slug, state: null, openNotes: null })));
     } finally { await release(); }
+  });
+
+  test("reports each state again when a gone process left the Studio write lock behind", async () => {
+    const stack = await studio();
+    const synced = (await stack.read()).studioProjects;
+    const gone = Bun.spawn(["true"]);
+    await gone.exited;
+    const lock = join(stack.directory, ".git", "studio-write.lock");
+    await mkdir(lock);
+    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: gone.pid, at: "2026-11-15T00:11:00.000Z", dir: stack.directory }));
+    stack.setNow(SYNC_NOW + 1000);
+    const day = await stack.read();
+    expect(day.studioStatus).toBe("synced");
+    expect(day.studioProjects).toEqual(synced);
   });
 
   test("keeps id and slug but reports no state while the Studio is turned off", async () => {
