@@ -380,6 +380,17 @@ describe("Studio writer safety", () => {
     expect(existsSync(join(dir, "threads/a-guest-lecture-in-march.md"))).toBe(false);
     expect(git("status", "--porcelain")).toBe("");
   });
+  it("removes created files even when rollback cannot reset the index", async () => {
+    seed();
+    const failing = async (args: string[]) => {
+      if (args[0] === "commit" || args[0] === "reset") return { code: 1, stdout: "", stderr: "index unavailable" };
+      return { code: 0, stdout: git(...args), stderr: "" };
+    };
+    const request = runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, assistantName: "Assistant", requestId: rid(), act: { act: "open", from: "capture", id: "lecture", area: "lab" }, now: NOW, git: failing, lock: new StudioWriteLock() });
+    await expect(request).rejects.toThrow("Studio rollback could not restore the index");
+    expect(existsSync(join(dir, "threads/a-guest-lecture-in-march.md"))).toBe(false);
+    expect(existsSync(join(dir, "inbox/lecture.md"))).toBe(true);
+  });
 });
 
 describe("Studio text edits", () => {

@@ -136,6 +136,7 @@ import { wakeAssetResponse } from "./desk/wake-assets";
 import { handleDeskGoal } from "./api/desk-goal";
 import { handleDeskRuling } from "./api/desk-ruling";
 import { getVigilSubject } from "../../vigil/db";
+import { handleDeskStudioDraft } from "./api/desk-studio-draft";
 import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
 import { DESK_BALANCE_DESTINATIONS_PATH, handleDeskBalanceDestinations } from "./api/desk-balance-destinations";
@@ -646,7 +647,8 @@ async function handleApi(
   if (pathname === DESK_ADAPTER_ASSET_PATH || pathname.startsWith(`${DESK_ADAPTER_ASSET_PATH}/`)) return handleDeskAdapterAssets(req, url, guard, adapterAssets);
 
   const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
-  const deskBriefRead = pathname === DESK_MEETING_BRIEF_PATH || pathname === DESK_MEETING_PREVIOUS_PATH || pathname === DESK_CONTRACT_PATH;
+  const studioDraftRoute = /^\/api\/desk\/studio\/([^/]+)\/draft$/.exec(pathname);
+  const deskBriefRead = studioDraftRoute !== null || pathname === DESK_MEETING_BRIEF_PATH || pathname === DESK_MEETING_PREVIOUS_PATH || pathname === DESK_CONTRACT_PATH;
   if (deskFlowsRead || deskBriefRead || (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname))) {
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
@@ -770,6 +772,13 @@ async function handleApi(
 
   if (pathname === DESK_BALANCE_DESTINATIONS_PATH) return handleDeskBalanceDestinations(req, db, desk);
   if (pathname === DESK_SEARCH_PATH) return handleDeskSearch(req, db, desk, vigil);
+
+  if (studioDraftRoute?.[1]) {
+    let thread: string;
+    try { thread = decodeURIComponent(studioDraftRoute[1]); }
+    catch { return jsonError("Invalid Studio thread slug.", 400); }
+    return handleDeskStudioDraft(req, desk, thread);
+  }
 
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
   if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk, { imported: importedSessions(conversations) });

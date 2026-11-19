@@ -665,7 +665,7 @@
   "src/surface/mc/desk/studio/migrate-keys.ts": 2,
   "src/surface/mc/desk/studio/relates.ts": 1,
   "src/surface/mc/desk/studio/session.ts": 1,
-  "src/surface/mc/desk/studio/writer.ts": 2,
+  "src/surface/mc/desk/studio/writer.ts": 1,
   "src/surface/mc/desk/task-handoff-store.ts": 1,
   "src/surface/mc/desk/task-handoff.ts": 6,
   "src/surface/mc/desk/transports.ts": 1,
