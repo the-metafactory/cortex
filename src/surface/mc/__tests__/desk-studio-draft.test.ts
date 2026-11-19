@@ -20,6 +20,11 @@ const save = async (text: string, thread = "question") => {
 };
 
 describe("Studio thread drafts over HTTP", () => {
+  it("supplies the fixture identity to the environment-filtered HTTP writer", async () => {
+    await save("A disposable draft");
+    expect(rig.git("show", "-s", "--format=%an <%ae>%n%cn <%ce>", "HEAD")).toBe("Test <test@example.org>\nTest <test@example.org>");
+  });
+
   it("reads legacy empty drafts for every type and preserves complete Markdown outside the thread records", async () => {
     const before = rig.git("ls-tree", "-r", "HEAD", "threads");
     for (const type of ["question", "making", "topic"]) {

@@ -12,11 +12,9 @@ export const DraftSchema = z.object({ text: z.string(), revision: z.string().min
 
 const draftThreadFile = (type = "question", state = "active"): string => `---\ntype: ${type}\nareas: [lab]\nstate: ${state}\nopened: 2026-11-01\n${state === "closed" ? "outcome: dropped\n" : ""}---\n\n## Question\n\nA fixture ${type}?\n\n## Where I stand\n\nA separate stand.\n\n## Assistant's notes\n\n### 2026-11-02T10:00:00Z\ntrigger: fixture\nmodel: local\nkind: note\nstatus: kept\n\nA separate note.\n`;
 
-const FIXTURE_GIT_IDENTITY = { GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.org", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.org" };
-
 function rawDraftGit(dir: string, ...args: string[]): string {
-  const result = Bun.spawnSync(["git", "-C", dir, ...args], {
-    env: { ...process.env, ...FIXTURE_GIT_IDENTITY },
+  const result = Bun.spawnSync([join(dir, "..", "bin", "git"), "-C", dir, ...args], {
+    env: process.env,
     stdout: "pipe", stderr: "pipe",
   });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString());
@@ -26,7 +24,7 @@ function rawDraftGit(dir: string, ...args: string[]): string {
 const draftGit = (dir: string, ...args: string[]): string => rawDraftGit(dir, ...args).trim();
 
 async function serveDraftFixture(root: string, studioDir: string): Promise<{ url: string; stop: () => Promise<void> }> {
-  const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir], { env: { ...process.env, ...FIXTURE_GIT_IDENTITY }, stdout: "pipe", stderr: "inherit" });
+  const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir], { env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}` }, stdout: "pipe", stderr: "inherit" });
   const readinessTimeout = setTimeout(() => { child.kill(); }, 10000);
   const reader = child.stdout.getReader();
   let output = "";
@@ -36,7 +34,12 @@ async function serveDraftFixture(root: string, studioDir: string): Promise<{ url
       if (next.done) throw new Error(`Studio draft fixture exited before readiness: ${output}`);
       output += new TextDecoder().decode(next.value);
       const match = /studio-draft-url:(http:\/\/localhost:\d+)/.exec(output);
-      if (match?.[1]) return { url: match[1], stop: async () => { child.kill(); await child.exited; } };
+      if (match?.[1]) {
+        const draft = await fetch(`${match[1]}/api/desk/studio/question/draft`);
+        if (!draft.ok) throw new Error(`Studio draft fixture readiness failed: ${draft.status} ${await draft.text()}`);
+        DraftSchema.parse(await draft.json());
+        return { url: match[1], stop: async () => { child.kill(); await child.exited; } };
+      }
     }
   } catch (error) {
     child.kill();
@@ -46,7 +49,11 @@ async function serveDraftFixture(root: string, studioDir: string): Promise<{ url
 }
 
 export async function openStudioDraftRig() {
+  const git = Bun.which("git");
+  if (!git) throw new Error("The Studio draft fixture requires Git on PATH.");
   const dir = await mkdtemp(join(tmpdir(), "studio-draft-"));
+  await mkdir(join(dir, "bin"));
+  await writeFile(join(dir, "bin", "git"), `#!/bin/sh\nexec '${git.replaceAll("'", "'\\''")}' -c user.useConfigOnly=true -c user.name=Test -c user.email=test@example.org "$@"\n`, { mode: 0o755 });
   const studioDir = join(dir, "studio");
   await mkdir(join(studioDir, "threads"), { recursive: true });
   for (const type of ["question", "making", "topic"]) await writeFile(join(studioDir, `threads/${type}.md`), draftThreadFile(type));
