@@ -191,21 +191,21 @@ A material item carries `text` when the file holds indented lines under its bull
 - `context` is `complete`, or `studio-only` when the Desk could not be composed; then `goals` come only from the material, `events` is empty, and the other groups are still served.
 - With the Studio off the route answers `{ "relations": null }`. A malformed slug answers 400, an unknown thread 404. Responses are `Cache-Control: no-store`.
 
-## Thread document draft
+## Thread document draft <!-- glossary-ignore: thread -->
 
-Desk API 1.14.0 adds `GET /api/desk/studio/{thread}/draft` and `PUT` on the same path. These routes require the existing principal authority and Host/Origin checks. Every response carries `x-desk-api-version` and successful reads and saves carry `Cache-Control: no-store`.
+Desk API 1.14.0 adds `GET /api/desk/studio/{thread}/draft` and `PUT` on the same route. These routes require the existing principal authority and HTTP Host and Origin checks. Every response carries `x-desk-api-version` and successful reads and saves carry `Cache-Control: no-store`. <!-- glossary-ignore: thread, host -->
 
-GET returns `{text, revision, editable}` for question, making and topic threads. An older thread without a draft returns empty text. Its initial opaque revision derives from its persisted creation history. Draft revisions survive process restarts and remain unchanged by notes, stands or thread metadata edits.
+GET returns `{text, revision, editable}` for question, making and topic threads. An older thread without a draft returns empty text. Its initial opaque revision derives from its persisted creation history. Draft revisions survive process restarts and remain unchanged by notes, stands or thread metadata edits. <!-- glossary-ignore: thread, topic -->
 
 PUT accepts `{text, revision, requestId}` and returns the current saved shape. `revision` must match the last read. `requestId` uses the Studio request identity format: 8–64 word characters or hyphens. Each successful save persists a fresh revision, including when text returns to an earlier value. Retrying a recorded request returns the current draft without another write or revision, including after restart or a later save.
 
-Drafts preserve complete Markdown, including headings, horizontal rules, line endings and surrounding whitespace. The limit is 1,048,576 UTF-8 bytes of decoded text, inclusive. JSON escapes do not count toward this limit. Larger text returns 413 before any file or Git change. Malformed input returns 400, an unknown thread returns 404, and a read or write failure returns 500. A missing or corrupt saved draft never reads as an empty legacy draft.
+Drafts preserve complete Markdown, including headings, horizontal rules, line endings and surrounding whitespace. The limit is 1,048,576 UTF-8 bytes of decoded text, inclusive. JSON escapes do not count toward this limit. Larger text returns 413 before any file or Git change. Malformed input returns 400, an unknown thread returns 404, and a read or write failure returns 500. A missing or corrupt saved draft never reads as an empty legacy draft. <!-- glossary-ignore: thread -->
 
-Active drafts are editable. Parked and closed drafts return `editable: false` and refuse writes with 409. A stale revision also returns 409. These refusals include the current `text`, `revision` and `editable`. A dirty Studio can refuse a save with 409. Draft requests wait for a live writer. An unavailable or abandoned write lock returns 503. The shared Studio transaction serializes competing clients and commits the text, revision metadata and request identity together.
+Active drafts are editable. Parked and closed drafts return `editable: false` and refuse writes with 409. A stale revision also returns 409. These refusals include the current `text`, `revision` and `editable`. A dirty Studio can refuse a save with 409. Draft reads and writes wait for a live writer. Empty legacy revisions are cached until Git HEAD changes, so repeated reads avoid history searches. An unavailable or abandoned write lock returns 503. The shared Studio transaction serializes competing clients and commits the text, revision metadata and request identity together.
 
-The document lives in `drafts/<validated-thread-slug>.md`, separately from `threads/*.md`. Drafts do not enter thread listings or capture search. Assistant read tools gain no draft write operation. This document is separate from the unsent Studio session composer draft described under Live discussions.
+The document lives in `drafts/<validated-thread-slug>.md`, separately from `threads/*.md`. Drafts do not enter thread listings or capture search. Assistant read tools gain no draft write operation. This document is separate from the unsent Studio session composer draft described under Live discussions. <!-- glossary-ignore: thread -->
 
-Run `bun scripts/probe-desk-studio-draft.ts` to verify HTTP round-trip, a stale-save refusal, process restart persistence, request replay and unchanged notes and thread listings. The probe starts a development Cortex server using a disposable Git-backed Studio and temporary HOME. It never reads a principal's Studio.
+Run `bun scripts/probe-desk-studio-draft.ts` to verify HTTP round-trip, a stale-save refusal, process restart persistence, request replay and unchanged notes and thread listings. The probe starts a development Cortex runtime using a disposable Git-backed Studio and temporary HOME. It never reads a principal's Studio. <!-- glossary-ignore: thread, run -->
 
 ## Thread page
 

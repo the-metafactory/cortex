@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runWithTemporaryHome } from "./probe-temp-home";
-import { DraftSchema, openStudioDraftRig } from "../src/surface/mc/__tests__/fixtures/studio-draft-rig";
+import { DraftSchema, openStudioDraftRig } from "../src/surface/mc/testing/studio-draft-rig";
 
 async function probe(): Promise<void> {
   const rig = await openStudioDraftRig();

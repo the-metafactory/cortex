@@ -1,6 +1,7 @@
 import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { z } from "zod";
+import { errnoIs } from "./file-error";
 
 const OwnerSchema = z.object({ pid: z.number().int().positive() });
 
@@ -13,7 +14,7 @@ async function studioLockPath(dir: string): Promise<string> {
     if (!match?.[1]) throw new Error("The Studio Git directory pointer is invalid.");
     gitDir = resolve(root, match[1]);
   } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && error.code === "EISDIR")) throw error;
+    if (!errnoIs(error, "EISDIR")) throw error;
   }
   return join(gitDir, "studio-write.lock");
 }
@@ -24,7 +25,7 @@ export async function studioLockOwnerIsAlive(dir: string): Promise<boolean> {
     process.kill(owner.pid, 0);
     return true;
   } catch (error) {
-    return error !== null && typeof error === "object" && "code" in error && error.code === "EPERM";
+    return errnoIs(error, "EPERM");
   }
 }
 

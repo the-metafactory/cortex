@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { DeskStudioDraftWrite } from "../../../../desk-api";
-import { startServer } from "../../server";
-import { initDatabase } from "../../db/init";
-import { DEFAULT_CONFIG } from "../../config";
+import type { DeskStudioDraftWrite } from "../../../desk-api";
+import { startServer } from "../server";
+import { initDatabase } from "../db/init";
+import { DEFAULT_CONFIG } from "../config";
 
 export const DraftSchema = z.object({ text: z.string(), revision: z.string().min(1), editable: z.boolean() });
 
@@ -23,7 +23,7 @@ function draftGit(dir: string, ...args: string[]): string {
 
 async function serveDraftFixture(root: string, studioDir: string): Promise<{ url: string; stop: () => Promise<void> }> {
   const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir], { env: process.env, stdout: "pipe", stderr: "inherit" });
-  const readinessTimeout = setTimeout(() => child.kill(), 10000);
+  const readinessTimeout = setTimeout(() => { child.kill(); }, 10000);
   const reader = child.stdout.getReader();
   let output = "";
   try {

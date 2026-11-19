@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { access, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { DraftSchema, openStudioDraftRig } from "./fixtures/studio-draft-rig";
+import { DraftSchema, openStudioDraftRig } from "../testing/studio-draft-rig";
 import { DESK_API_VERSION } from "../../../desk-api/api-version";
+import { getStudioDraft } from "../desk/studio/draft";
+import { spawnGit, type GitRunner } from "../desk/studio/git";
 
 let rig: Awaited<ReturnType<typeof openStudioDraftRig>>;
 beforeEach(async () => { rig = await openStudioDraftRig(); });
@@ -65,6 +67,25 @@ describe("Studio thread drafts over HTTP", () => {
     rig.git("commit", "-qm", "Update notes before a draft exists");
     await rig.reopen();
     expect(await rig.read()).toEqual(before);
+  });
+
+  it("reuses legacy history reads without hiding a subsequently saved and missing draft", async () => {
+    const historyReads: string[][] = [];
+    const git: GitRunner = async (args, dir) => {
+      if (args[0] === "log") historyReads.push(args);
+      return spawnGit(args, dir);
+    };
+    const input = { options: { dir: rig.studioDir, maxActive: 5 }, areas: [], assistantName: "Assistant", thread: "question", git };
+    const initial = await getStudioDraft(input);
+    expect(initial).toMatchObject({ ok: true, draft: { text: "" } });
+    expect(historyReads.length).toBeGreaterThan(0);
+    const before = historyReads.length;
+    expect(await getStudioDraft(input)).toEqual(initial);
+    expect(historyReads).toHaveLength(before);
+    await save(markdown);
+    await rm(join(rig.studioDir, "drafts/question.md"));
+    await rm(join(rig.studioDir, "drafts/question.json"));
+    await expect(getStudioDraft(input)).rejects.toThrow("previously saved Studio draft is missing");
   });
 
   it("keeps a saved draft unchanged after parking, including a retry of its successful request", async () => {
