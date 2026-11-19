@@ -1,4 +1,4 @@
-import type { DeskView, MyDayResponse, DeskStudioResponse, DeskStudioDraftWrite, DeskStudioDraftResponse } from "./wire";
+import type { DeskView, MyDayResponse, DeskStudioResponse, DeskStudioDraftWrite, DeskStudioDraftResponse, StudioLookResponse } from "./wire";
 
 declare const BODY: unique symbol;
 
@@ -19,6 +19,7 @@ export interface DeskErrorBody {
 export interface DeskApiRouteTypes {
   "GET /api/desk": { response: DeskView | DeskDisabled };
   "GET /api/desk/studio": { response: DeskStudioResponse };
+  "POST /api/desk/studio/look": { response: StudioLookResponse };
   "GET /api/desk/studio/{thread}/draft": { response: DeskStudioDraftResponse };
   "PUT /api/desk/studio/{thread}/draft": { request: DeskStudioDraftWrite; response: DeskStudioDraftResponse };
   "GET /api/desk/my-day": { response: MyDayResponse };

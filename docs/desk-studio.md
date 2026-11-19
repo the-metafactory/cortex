@@ -168,6 +168,7 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 - `parked` (oldest-opened first) and `closed` (most recently closed first).
 - `inbox` and `proposals`, oldest first. Proposals carry their effective `policy`, which also counts the `target.area`.
 - `problems`: one entry per file that could not be read or parsed, with its `path` and a `reason`. A broken file never breaks the response.
+- `board`: the coded facts a client draws the board from (see Board and last look).
 
 Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText`, its effective `policy`, its sparring `personas` and its `thinking` (see Sparring and Think now).
 
@@ -190,6 +191,20 @@ A material item carries `text` when the file holds indented lines under its bull
 - `proposed` holds the open `relation` notes, newest first; Keep and Dismiss go through `POST /api/desk/studio/act`.
 - `context` is `complete`, or `studio-only` when the Desk could not be composed; then `goals` come only from the material, `events` is empty, and the other groups are still served.
 - With the Studio off the route answers `{ "relations": null }`. A malformed slug answers 400, an unknown thread 404. Responses are `Cache-Control: no-store`.
+
+## Board and last look
+
+Desk API 1.15.0 adds `board` to `GET /api/desk/studio` and the route `POST /api/desk/studio/look`. The board is served as codes and numbers; every English sentence stays in a client. The bundled Desk keeps its own wording and uses the same pure builder as the route.
+
+`board.inbox` and `board.proposals` carry one `{id, target}` per capture and proposal, where `target` is `{kind: "thread", slug, place, why: "named-thread"}` for a target that names a placed thread, `{kind: "free", place, area, why: "first-free"}` with the lowest free place otherwise, `{kind: null, why: "thread-off-board"}` for a named thread that is not placed, `{kind: null, why: "no-free"}` when every place is taken, and `{kind: null, why: "no-target"}` when the file names no target.
+
+`board.shared` lists each pair of placed threads that share a material source once as `{a, b, label}`. `board.freePlaces` lists the free place numbers in order, and `board.waiting` counts the placed threads whose latest note still waits on you.
+
+`board.look` is the window the client words: `{since: now - 24h, kind: "day"}` without a stored look, `{since, kind: "overnight"}` when the last look fell inside the six hours before today started, and `{since, kind: "since-look"}` otherwise. Today starts in the server's time zone.
+
+`POST /api/desk/studio/look` takes no body and stores the request time as this principal's last look for this stack, answering `{ok: true, at}`. The stored look is one row per principal and stack in the Desk database. Reading the Studio never writes it. With the Desk or the Studio disabled the route answers the same disabled response as the other Studio routes and stores nothing.
+
+`GET /api/desk/studio` uses the stored look, so every client reads the same board.
 
 ## Thread document draft <!-- glossary-ignore: thread -->
 

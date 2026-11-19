@@ -1,6 +1,7 @@
+import type { StudioBoardTarget } from "../../../desk-api/wire/studio";
 import { describe, expect, it } from "bun:test";
 import { studioNote, studioThread } from "./__fixtures__/studio";
-import { buildBoard, normaliseLabel, sharedPairs, type BoardCard, type BoardClock, type BoardFree } from "../desk/studio/board";
+import { buildBoard, buildBoardFacts, normaliseLabel, sharedPairs, type BoardCard, type BoardClock, type BoardFree } from "../desk/studio/board";
 import type { AssistantNote, MaterialLink, StudioCapture } from "../desk/studio/format";
 import type { StudioProposalView, StudioThreadView, StudioView } from "../desk/studio/view";
 
@@ -54,6 +55,70 @@ const FIXTURE: StudioView = {
   proposals: [proposal("spark", { place: "new", area: "work", reason: "Place 5 is free." })],
   problems: [{ path: "threads/broken.md", reason: "has no ## Question" }],
 };
+
+describe("served Studio board facts", () => {
+  it("resolves captures and proposals through the same coded target branches", () => {
+    const targets = [
+      { thread: "desk-open", reason: "named" },
+      { place: "new" as const, area: "work", reason: "new" },
+      { thread: "workshops", reason: "parked" },
+      { thread: "missing", reason: "missing" },
+    ];
+    const view = { ...FIXTURE, inbox: [...targets.map((target, i) => capture(String(i), target)), capture("untargeted")], proposals: targets.map((target, i) => proposal(String(i), target)) };
+    const facts = buildBoardFacts(view, CLOCK);
+    const resolved: StudioBoardTarget[] = [
+      { kind: "thread", slug: "desk-open", place: 3, why: "named-thread" },
+      { kind: "free", place: 5, area: "work", why: "first-free" },
+      { kind: null, why: "thread-off-board" },
+      { kind: null, why: "thread-off-board" },
+    ];
+    expect(facts.inbox.map(c => c.target)).toEqual([...resolved, { kind: null, why: "no-target" }]);
+    expect(facts.proposals.map(p => p.target)).toEqual(resolved);
+    expect(facts.inbox.map(c => c.id)).toEqual(["0", "1", "2", "3", "untargeted"]);
+    expect(facts.proposals.map(p => p.id)).toEqual(["0", "1", "2", "3"]);
+  });
+
+  it("uses the lowest free place without reserving it, preserves absent areas and refuses a full board", () => {
+    const view = { ...FIXTURE, active: [thread("second", { place: 2 })], inbox: [capture("one", { place: "new", reason: "new" })], proposals: [proposal("two", { place: "new", reason: "new" })] };
+    const facts = buildBoardFacts(view, CLOCK);
+    expect(facts.freePlaces).toEqual([1, 3, 4, 5]);
+    expect(facts.inbox[0]?.target).toEqual({ kind: "free", place: 1, area: null, why: "first-free" });
+    expect(facts.proposals[0]?.target).toEqual(facts.inbox[0]?.target);
+    const full = buildBoardFacts({ ...view, maxActive: 1, active: [thread("first", { place: 1 })] }, CLOCK);
+    expect(full.freePlaces).toEqual([]);
+    expect(full.inbox[0]?.target).toEqual({ kind: null, why: "no-free" });
+    expect(full.proposals[0]?.target).toEqual({ kind: null, why: "no-free" });
+  });
+
+  it("shares material once per placed pair and counts only placed waiting threads", () => {
+    const source = material("Source", "https://example.org/source");
+    const active = [
+      thread("a", { place: 1, material: [source, source], notes: [note("2026-10-30T10:00:00Z")] }),
+      thread("b", { place: 3, material: [source] }),
+      thread("over", { overCap: true, material: [source], notes: [note("2026-10-30T10:00:00Z")] }),
+    ];
+    const facts = buildBoardFacts({ ...FIXTURE, active, parked: [thread("parked", { material: [source] })] }, CLOCK);
+    expect(facts.shared).toEqual([{ a: "a", b: "b", label: "Source" }]);
+    expect(facts.shared).toEqual(sharedPairs(active.slice(0, 2)));
+    expect(facts.waiting).toBe(1);
+    expect(facts.freePlaces).toEqual([2, 4, 5]);
+  });
+
+  it("serves each look-window boundary without composed sentences", () => {
+    expect(buildBoardFacts(FIXTURE, CLOCK).look).toEqual({ since: NOW - 86_400_000, kind: "day" });
+    for (const [lastLook, kind] of [
+      [TODAY - 6 * 3_600_000 - 1, "since-look"],
+      [TODAY - 6 * 3_600_000, "overnight"],
+      [TODAY - 1, "overnight"],
+      [TODAY, "since-look"],
+      [NOW, "since-look"],
+    ] as const) {
+      expect(buildBoardFacts(FIXTURE, { ...CLOCK, lastLook }).look).toEqual({ since: lastLook, kind });
+    }
+    const empty = buildBoardFacts({ ...FIXTURE, maxActive: 0, active: [], inbox: [], proposals: [] }, CLOCK);
+    expect(empty).toEqual({ inbox: [], proposals: [], shared: [], freePlaces: [], waiting: 0, look: { since: NOW - 86_400_000, kind: "day" } });
+  });
+});
 
 const cards = (board: ReturnType<typeof buildBoard>): BoardCard[] => board.places.filter((p): p is BoardCard => p.kind === "thread");
 

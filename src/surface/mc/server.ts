@@ -138,6 +138,7 @@ import { handleDeskRuling } from "./api/desk-ruling";
 import { getVigilSubject } from "../../vigil/db";
 import { handleDeskStudioDraft } from "./api/desk-studio-draft";
 import { handleGetDeskStudio } from "./api/desk-studio";
+import { handleDeskStudioLook } from "./api/desk-studio-look";
 import { handleGetDeskStudioRelations } from "./api/desk-studio-relations";
 import { DESK_BALANCE_DESTINATIONS_PATH, handleDeskBalanceDestinations } from "./api/desk-balance-destinations";
 import { DESK_SEARCH_PATH, handleDeskSearch } from "./api/desk-search";
@@ -762,7 +763,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/studio") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
-    return handleGetDeskStudio(desk);
+    return handleGetDeskStudio(desk, undefined, { db });
   }
 
   if (pathname === "/api/desk/studio/relations") {
@@ -781,6 +782,7 @@ async function handleApi(
   }
 
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
+  if (pathname === "/api/desk/studio/look") return handleDeskStudioLook(req, db, desk);
   if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk, { imported: importedSessions(conversations) });
   if (pathname === DESK_OUTLINE_ASK_PATH) return handleDeskOutlineAsk(req, db, desk);
   if (pathname === DESK_OUTLINE_HISTORY_PATH) return handleDeskOutlineHistory(req, db, desk);
