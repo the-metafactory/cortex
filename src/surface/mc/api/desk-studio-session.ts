@@ -122,7 +122,7 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     turn.draftRevision = read.draft.revision;
     save(db, dir, session);
     try {
-      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, prompt, sessionContent(read.thread), assistantName));
+      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, prompt, sessionContent(session), assistantName));
       save(db, dir, session);
       return answer(200, { ok: true, session });
     } catch {

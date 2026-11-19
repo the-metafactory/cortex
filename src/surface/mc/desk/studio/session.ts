@@ -22,7 +22,7 @@ export const sessionSystem = (name: string): string => `You are ${name}, a think
 export const sessionMessages = (prompt: SessionPrompt, assistantName: string): { role: "system" | "user"; content: string }[] => [
   { role: "system", content: sessionSystem(assistantName) }, { role: "user", content: JSON.stringify(prompt) },
 ];
-export const sessionModel: SessionModel = (config, prompt, content, assistantName) => modelJson(config)(sessionMessages(prompt, assistantName), config.timeoutSeconds * 1000, content);
+export const sessionModel: SessionModel = (config, prompt, content, assistantName) => modelJson(config, undefined, undefined, undefined, config.maxOutputTokens)(sessionMessages(prompt, assistantName), config.timeoutSeconds * 1000, content);
 export const sessionEndpoint = (options: StudioOptions, thread: Pick<StudioThreadView, "policy">): ClassifierConfig | undefined => thread.policy === "local" ? options.filer?.local : options.filer;
 export const sessionContent = (thread: Pick<StudioThreadView, "policy">): PromptContent => thread.policy === "cloud" ? NOT_LOCAL_CONTENT : LOCAL_CONTENT;
 export const sessionThread = (ctx: Pick<ActContext, "view">, slug: string): StudioThreadView | undefined => [...ctx.view.active, ...ctx.view.parked, ...ctx.view.closed].find(t => t.slug === slug);

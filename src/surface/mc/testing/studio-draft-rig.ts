@@ -24,7 +24,7 @@ function rawDraftGit(dir: string, ...args: string[]): string {
 
 const draftGit = (dir: string, ...args: string[]): string => rawDraftGit(dir, ...args).trim();
 
-async function serveDraftFixture(root: string, studioDir: string, filer?: object): Promise<{ url: string; stop: () => Promise<void> }> {
+async function serveDraftFixture(root: string, studioDir: string, filer?: StudioOptions["filer"]): Promise<{ url: string; stop: () => Promise<void> }> {
   const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir, ...(filer ? [JSON.stringify(filer)] : [])], { env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}` }, stdout: "pipe", stderr: "inherit" });
   const readinessTimeout = setTimeout(() => { child.kill(); }, 10000);
   const reader = child.stdout.getReader();
@@ -49,7 +49,7 @@ async function serveDraftFixture(root: string, studioDir: string, filer?: object
   } finally { clearTimeout(readinessTimeout); reader.releaseLock(); }
 }
 
-export async function openStudioDraftRig(options: { filer?: object } = {}) {
+export async function openStudioDraftRig(options: { filer?: StudioOptions["filer"] } = {}) {
   const git = Bun.which("git");
   if (!git) throw new Error("The Studio draft fixture requires Git on PATH.");
   const dir = await mkdtemp(join(tmpdir(), "studio-draft-"));

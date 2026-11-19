@@ -1,4 +1,4 @@
-import { NOT_LOCAL_CONTENT } from "../desk/source-boundary";
+import { LOCAL_CONTENT, NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { classifierLabel } from "../desk/classify";
 import { draftWasRecorded } from "../desk/studio/session-draft";
 import { Database } from "bun:sqlite";
@@ -76,6 +76,14 @@ test("strictest current policy picks the model and the session never loses its l
   expect(models).toEqual(["cloud-model", "local-model", "local-model"]);
 });
 
+test("a session pinned local stays local content when its thread policy later turns cloud", async () => {
+  const r = rig(); await r.start(); const contents: unknown[] = [];
+  const model: SessionModel = async (_config, _prompt, content) => { contents.push(content); return result; };
+  r.options.areas.splice(0, 1, { id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "local" }); await r.say(model);
+  r.options.areas.splice(0, 1, { id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "cloud" }); await r.say(model);
+  expect(contents).toEqual([LOCAL_CONTENT, LOCAL_CONTENT]);
+});
+
 test("unknown and mixed areas require local; an absent local endpoint saves text and makes no model call", async () => {
   const r = rig(); writeFileSync(join(r.dir, "threads/alpha.md"), fixture().replace("[lab]", "[lab, unknown]")); r.git("add", "."); r.git("commit", "-qm", "unknown area");
   Reflect.deleteProperty(r.options.studio.filer, "local");
@@ -121,10 +129,10 @@ test("concurrent committed edits survive; changed ghost refuses applying outcome
 
 test("the real session transport declares no tools and sends only its explicit synthetic payload", async () => {
   const server = Bun.serve({ port: 0, fetch: async req => {
-    const body = await req.json(); expect(body.tools).toBeUndefined(); expect(body.messages).toHaveLength(2); expect(body.messages[1].content).toContain("paper glider");
+    const body = await req.json(); expect(body.tools).toBeUndefined(); expect(body.max_tokens).toBe(321); expect(body.messages).toHaveLength(2); expect(body.messages[1].content).toContain("paper glider");
     return Response.json({ choices: [{ message: { content: JSON.stringify(result) } }] });
   } });
-  try { expect(await sessionModel({ baseUrl: `http://127.0.0.1:${server.port}/v1`, model: "test", timeoutSeconds: 2, maxPerPass: 1 }, { question: "paper glider", stand: "", subject: "fold", context: "", exchange: [], draft: { revision: "r", untrusted: true, text: "" } }, NOT_LOCAL_CONTENT, "Assistant")).toEqual(result); }
+  try { expect(await sessionModel({ baseUrl: `http://127.0.0.1:${server.port}/v1`, model: "test", timeoutSeconds: 2, maxPerPass: 1, contextTokens: 10_000, maxOutputTokens: 321 }, { question: "paper glider", stand: "", subject: "fold", context: "", exchange: [], draft: { revision: "r", untrusted: true, text: "" } }, NOT_LOCAL_CONTENT, "Assistant")).toEqual(result); }
   finally { server.stop(true); }
 });
 
