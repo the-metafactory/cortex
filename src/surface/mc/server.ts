@@ -777,11 +777,13 @@ async function handleApi(
   if (pathname === DESK_SEARCH_PATH) return handleDeskSearch(req, db, desk, vigil);
 
   if (studioSnapshotsRoute?.[1]) {
+    let thread: string;
+    let snapshot: string | undefined;
     try {
-      return await handleDeskStudioDraftSnapshots(req, desk, decodeURIComponent(studioSnapshotsRoute[1]), studioSnapshotsRoute[2] === undefined ? undefined : decodeURIComponent(studioSnapshotsRoute[2]));
-    } catch {
-      return Response.json({ error: "Invalid Studio thread or snapshot id." }, { status: 400 });
-    }
+      thread = decodeURIComponent(studioSnapshotsRoute[1]);
+      snapshot = studioSnapshotsRoute[2] === undefined ? undefined : decodeURIComponent(studioSnapshotsRoute[2]);
+    } catch { return jsonError("Invalid Studio thread or snapshot id.", 400); }
+    return handleDeskStudioDraftSnapshots(req, desk, thread, snapshot);
   }
   if (studioDraftRoute?.[1]) {
     let thread: string;
