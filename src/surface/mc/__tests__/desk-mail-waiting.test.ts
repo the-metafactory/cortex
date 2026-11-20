@@ -9,6 +9,7 @@ import { addWorkingDays, asksForAnswer, DEFAULT_WAITING, dueWaiting, readWaiting
 import { parseSourceOutput, SourceCache, type SourceMail, type SourceReading, type SourceSent } from "../desk/sources/command";
 import { initDatabase } from "../db/init";
 import { composeWith, mailDesk, queue } from "./desk-mail-fixtures";
+import { actionText } from "../desk/wording";
 
 let db: Database;
 beforeEach(() => {
@@ -80,7 +81,8 @@ describe("waiting-for tracker", () => {
     const [card] = cards(FRIDAY);
     expect(card?.title).toBe("No answer from Priya Shah about Venue quote since Monday");
     expect(card?.why).toContain("4 working days without an answer.");
-    expect(card?.actions.map((a) => `${a.id}:${a.label}`)).toEqual(["mail.draft:Draft a nudge", "waiting.snooze:Wait 2 more days", "waiting.done:Done"]);
+    expect(card?.actions.map((a) => `${a.id}:${actionText(a)}`)).toEqual(["mail.draft:Draft a nudge", "waiting.snooze:Wait 2 more days", "waiting.done:Done"]);
+    expect(card?.actions.map((a) => a.labelPhrase)).toEqual([{ code: "waiting.nudge" }, { code: "waiting.snooze", params: { days: 2 } }, undefined]);
     expect(card?.more?.map((a) => a.id)).toEqual(["waiting.no-answer", "waiting.expect", "open"]);
     expect(card?.reply).toEqual({ to: "Priya Shah <priya@example.org>", subject: "Re: Venue quote" });
     expect(cards(FRIDAY, false)[0]?.actions.map((a) => a.id)).toEqual(["waiting.snooze", "waiting.done"]);

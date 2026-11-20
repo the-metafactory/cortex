@@ -6,6 +6,7 @@ import type { MoveTarget } from "./mail-move";
 import type { SourceMail } from "./sources/command";
 import { MAIL_ROUND_GROUP_KINDS } from "../../../desk-api/wire/mail-round";
 import type { MailRoundGroupKind, MailRoundUnavailable, MailRoundView } from "../../../desk-api/wire/mail-round";
+import { sweepText } from "./wording";
 export { MAIL_ROUND_GROUP_KINDS };
 export type { MailRoundView };
 
@@ -206,7 +207,7 @@ function parseStored<T>(value: string, fallback: T): T {
 }
 
 function groupMeta(group: SweepGroup): Omit<StoredGroup, "memberKeys"> {
-  return { id: group.id, kind: group.kind, label: group.label, title: group.title, target: group.target, area: group.area };
+  return { id: group.id, kind: group.kind, label: sweepText(group), title: group.title, target: group.target, area: group.area };
 }
 
 function candidatesOf(input: MailRoundInput): Candidates {

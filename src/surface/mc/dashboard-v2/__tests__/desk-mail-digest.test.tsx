@@ -4,7 +4,7 @@ import { digestsInArea, MailDigests } from "../components/desk-mail-digest";
 import type { MailDigestView } from "../../desk/mail-digest";
 
 const DIGEST: MailDigestView = {
-  id: "digest:2026-11-02", day: "2026-11-02", kind: "digest", basis: "day", target: "archive", label: "newsletters", title: "3 newsletters from Monday 2 November",
+  id: "digest:2026-11-02", day: "2026-11-02", kind: "digest", basis: "day", target: "archive", title: "3 newsletters from Monday 2 November",
   why: "Worth reading: 1 item.", area: null,
   mails: [
     { key: "mail:a", subject: "Patch round-up", from: "Security Briefing", at: "2026-11-02T06:00:00.000Z", url: "message://%3Ca%3E" },

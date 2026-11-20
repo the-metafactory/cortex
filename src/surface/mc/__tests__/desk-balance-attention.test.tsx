@@ -16,6 +16,7 @@ import { DeskItemRow } from "../dashboard-v2/components/desk-view";
 import { SourceCache } from "../desk/sources/command";
 import { localDay } from "../desk/time";
 import { BALANCE_ATTENTION_MAIL as MAIL, openBalanceAttentionStack } from "../desk/fixtures/balance-attention";
+import { actionText } from "../desk/wording";
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
 const DATE = localDay(NOW);
@@ -198,8 +199,8 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     await stack.balance.check();
     const view = await stack.compose();
     const studio = row(view, "Studio answer");
-    expect(studio?.actions).toMatchObject([{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: true, target: "thread-1" }]);
-    expect(studio?.actions.some(action => action.label === "Done")).toBe(false);
+    expect(studio?.actions).toMatchObject([{ id: "studio.respond", role: "primary", wired: true, target: "thread-1" }]);
+    expect(studio?.actions.some(action => actionText(action) === "Done")).toBe(false);
     expect(studio?.readOnly).toBe(true);
   });
 
@@ -207,7 +208,7 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     const stack = await build({}, false);
     await stack.balance.check();
     const studio = row(await stack.compose(), "Studio answer");
-    expect(studio?.actions).toMatchObject([{ id: "studio.respond", label: "Respond in Studio", wired: false }]);
+    expect(studio?.actions).toMatchObject([{ id: "studio.respond", wired: false }]);
     expect(studio?.actions[0]?.target).toBeUndefined();
   });
 
@@ -287,7 +288,7 @@ describe("a row capability reaches host authority", () => {
     await stack.synthetic.ingest(0);
     const view = await stack.compose();
     const synthetic = row(view, "Synthetic review");
-    expect(synthetic?.actions).toMatchObject([{ id: "adapter.capability:synthetic-one.complete", label: "Complete", target: stack.synthetic.capabilityOf(0) }]);
+    expect(synthetic?.actions).toMatchObject([{ id: "adapter.capability:synthetic-one.complete", content: "Complete", target: stack.synthetic.capabilityOf(0) }]);
     const response = await handleDeskAdapterAction(post(synthetic?.key ?? "", stack.synthetic.capabilityOf(0)), stack.runtime, NOW);
     expect(response.status).toBe(403);
     expect(stack.synthetic.rig.calls.dispatch).toBe(0);

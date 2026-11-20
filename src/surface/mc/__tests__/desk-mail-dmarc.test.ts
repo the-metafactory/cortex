@@ -162,7 +162,7 @@ describe("failure cards", () => {
     expect(card?.title).toBe("4 mails as example.org from 203.0.113.9 failed SPF and DKIM.");
     expect(card?.area).toBe("personal");
     expect(card?.actions.map((a) => [a.id, a.url ?? a.target])).toEqual([["dmarc.open", "message://%3Cbad%3E"], ["dmarc.ack", "bad"]]);
-    expect(card?.detail.links).toEqual([{ kind: "report", label: "Raw report", url: "message://%3Cbad%3E" }]);
+    expect(card?.detail.links).toEqual([{ kind: "report", url: "message://%3Cbad%3E" }]);
     expect(card?.detail.history).toEqual(["203.0.113.9: 4 failing mails (SPF 4, DKIM 4, both 4)"]);
   });
 

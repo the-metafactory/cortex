@@ -1,4 +1,5 @@
-import { fold, FOLDED_LABELS } from "./rank";
+import { fold } from "./rank";
+import { FOLDED_LABELS } from "./wording";
 export { clock } from "./time";
 import type { DeskFoldedGroup, DeskItem, DeskItemKind, DeskView } from "./types";
 

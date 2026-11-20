@@ -244,14 +244,14 @@ function failureCard(row: Row, d: DmarcDomain, config: FailureConfig, area: stri
     why: `${row.org ?? "A receiver"} reported ${reported} for ${span}. Someone may be sending as your domain, or one of your senders is not set up.`,
     score: 40,
     actions: [
-      ...(row.url ? [{ id: "dmarc.open", label: "Open the report", role: "primary" as const, wired: true, url: row.url }] : []),
-      { id: "dmarc.ack", label: "Got it", role: row.url ? "secondary" as const : "primary" as const, wired: true, target: row.message_id },
+      ...(row.url ? [{ id: "dmarc.open", role: "primary" as const, wired: true, url: row.url }] : []),
+      { id: "dmarc.ack", role: row.url ? "secondary" as const : "primary" as const, wired: true, target: row.message_id },
     ],
     detail: {
       summary: `${d.domain}: ${plural(d.messages, "message")} in this report, SPF failed for ${d.spf.fail}, DKIM for ${d.dkim.fail}, both for ${d.dmarcFail}. Receivers quarantined ${d.disposition.quarantine} and rejected ${d.disposition.reject}.`,
       history: sources.map((s) => `${s.ip}: ${plural(s.count, "failing mail")} (SPF ${s.spfFail}, DKIM ${s.dkimFail}, both ${s.dmarcFail})`),
       refs: [row.message_id],
-      links: row.url ? [{ kind: "report" as const, label: "Raw report", url: row.url }] : [],
+      links: row.url ? [{ kind: "report" as const, url: row.url }] : [],
     },
     since: row.created_at,
   };

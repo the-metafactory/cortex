@@ -59,6 +59,19 @@ The Desk prepares, and you confirm. Every write goes through Mission Control's r
 - **Rules that attach**: a mail rule with `action: "attach"` and a fixed `target` (`{kind: "task", id}` or `{kind: "thread", slug}` on `POST /api/desk/mail/rules` `create` or `edit`) links each matching unread mail to that task, or files it in that Studio thread, without touching the mailbox. Each run shows under **Done for you** with Undo and Stop. When your recent attaches by hand of one sender's mail all went to the same task or thread (Add to thread counts as an attach), the Desk proposes such a rule after as many attaches as a move proposal needs. If the task is done or gone, or the thread is closed, the run fails, the rule turns itself off and the mail stays on the Desk. Attach and digest rules work without the move command.
 - **The command bar** (⌘K, or the microphone) turns what you say into a card: a reminder, a note, an agent task, a goal draft or a calendar entry. You confirm the card, and Cortex runs the writer for that kind. An open question or a request to think something over becomes a proposal to start a conversation with Ivy instead.
 
+## How a client words the Desk
+
+Desk API 2.0 serves codes, not English, for the Desk's own fixed wording. A client phrases each of these itself:
+
+- An action (`actions`, `more`, a junk mail's `action`) from its `id`, or from `labelPhrase` when the wording takes a parameter or differs by card (`meeting.join`, `meeting.open`, `ranger.ruling`, `mail.junk-review`, `goal.run-check`, `waiting.nudge`, `waiting.snooze`). An adapter capability's own label arrives as `content` and is shown as it is.
+- A detail link from its `kind` and `url`, or from `labelPhrase` (`task.link`).
+- A mail bundle, sweep or digest from its `kind` and `basis`, or from `labelPhrase` (`mail.sweep-category`).
+- An interruption reason from its `code` and, for VIP mail, `target`.
+- An autonomy type from its `action`.
+- An unknown calendar source from its `reasonPhrase`.
+
+The `label` fields on actions, links, mail groups, interruption reasons, autonomy types and folded groups, the autonomy `note`, and the English `reason` of an unknown calendar source were served through 1.x and are gone in 2.0. The bundled Desk phrases them in `src/surface/mc/desk/wording.ts`. Contract version 2.1.0 adds the card label codes listed above.
+
 ## Conversation draft setup limit
 
 The programmatic `MissionControlViews` options accepted by `startServer` and

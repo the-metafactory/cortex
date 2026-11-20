@@ -54,7 +54,7 @@ describe("Vigil escalation explanations and answers", () => {
     expect(reads).toEqual([["example/app", "12"]]);
     expect(prompts).toEqual([expect.objectContaining({ repo: "example/app", node: "12", body: BODY })]);
     expect(card.explanation).toEqual(EXPLANATION);
-    expect(card.actions[0]).toEqual({ id: "ranger.rule", label: "Give your ruling", role: "primary", wired: true });
+    expect(card.actions[0]).toEqual({ id: "ranger.rule", role: "primary", wired: true });
     expect(card.detail.summary).toContain("Answer from this card");
     expect(card.detail.links[0]?.url).toBe("https://github.com/example/app/issues/12");
   });
@@ -140,7 +140,7 @@ describe("Vigil escalation explanations and answers", () => {
       const card = (await compose(async () => read)).items[0]!;
       expect(card.actions.some(action => action.id === "ranger.rule")).toBe(false);
       expect(card.detail.summary).toContain("Answer on the issue.");
-      expect(card.detail.links).toEqual([{ kind: "issue", label: "Issue", url: "https://github.com/example/app/issues/12" }]);
+      expect(card.detail.links).toEqual([{ kind: "issue", url: "https://github.com/example/app/issues/12" }]);
     }
   });
 

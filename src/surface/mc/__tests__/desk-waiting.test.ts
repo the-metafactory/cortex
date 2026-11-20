@@ -4,6 +4,7 @@ import { initDatabase } from "../db/init";
 import { composeDesk, type ComposeDeps, type DeskOptions } from "../desk/compose";
 import { WaitingTasks, questionSummary, readWaitingTask, type WaitingTask } from "../desk/sources/waiting";
 import { writeVigilSubject } from "../../../vigil/db";
+import { actionText } from "../desk/wording";
 
 const NOW = Date.parse("2026-11-01T06:00:00Z");
 const DESK: DeskOptions = { enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [], sources: [] };
@@ -35,7 +36,7 @@ describe("waiting-task source projection", () => {
       ['"Choose a hull" needs you.', "Should the trader use the ring hull? In game."],
       ['"Choose a scanner" needs you.', "Approve the longer scanner range. In game."],
     ]);
-    expect(view.items[0]?.actions.map(a => a.label)).toEqual(["Look first", "Not now"]);
+    expect(view.items[0]?.actions.map(actionText)).toEqual(["Look first", "Not now"]);
     expect(view.items[0]?.detail.links[0]?.url).toBe("https://github.com/example/game/issues/12");
     expect(view.agents.waiting).toBe(2);
   });

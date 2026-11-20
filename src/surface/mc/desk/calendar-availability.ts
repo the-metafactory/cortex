@@ -1,5 +1,4 @@
 import type { DeskCalendar } from "./calendars";
-import { calendarReasons } from "./calendar-reasons";
 import { calendarKey, calendarSetting } from "./calendars";
 import type { SourceReading, DeskSourceConfig } from "./sources/command";
 import type { CalendarSourceState, CalendarInterval, CalendarAvailability, CalendarGap, CalendarGapReason } from "../../../desk-api/wire/calendar";
@@ -9,7 +8,7 @@ export function calendarAvailability(args: { sources: DeskSourceConfig[]; readin
   const settings = new Map(args.calendars.map(calendar => [calendarKey(calendar.source, calendar.name, calendar.calendarId), calendar]));
   const sources = args.sources.map((source): CalendarSourceState => {
     const reading = args.readings.find(value => value.id === source.id);
-    const unknown = (code: Extract<CalendarGapReason, { params: { source: string } }>["code"]): CalendarSourceState => ({ id: source.id, kind: "unknown", reason: calendarReasons[code], reasonPhrase: { code, params: { source: source.id } } });
+    const unknown = (code: Extract<CalendarGapReason, { params: { source: string } }>["code"]): CalendarSourceState => ({ id: source.id, kind: "unknown", reasonPhrase: { code, params: { source: source.id } } });
     if (!reading) return unknown("calendar.not-read");
     if (reading.error) return unknown("calendar.read-failed");
     if (args.now - reading.readAt >= source.everySeconds * 1000) return unknown("calendar.stale");

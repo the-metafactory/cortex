@@ -80,8 +80,7 @@ describe("the mail.link-meeting grant", () => {
     const { compose } = deskWithClassifier([mail("m1")]);
     const view = await compose();
     expect(view.autonomy.types.find((t) => t.action === "mail.link-meeting")).toEqual({
-      action: "mail.link-meeting", label: "Link mail to its meeting", on: false,
-      note: "When the classifier finds that a mail belongs to an upcoming meeting, the Desk links it there. Each link shows here with Undo, which brings the mail back.",
+      action: "mail.link-meeting", on: false,
     });
   });
 
