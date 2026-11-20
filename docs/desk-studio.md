@@ -221,7 +221,7 @@ Active drafts are editable. Parked and closed drafts return `editable: false` an
 
 The document lives in `drafts/<validated-thread-slug>.md`, separately from `threads/*.md`. Drafts do not enter thread listings or capture search. Assistant read tools gain no draft write operation. This document is separate from the unsent Studio session composer draft described under Live discussions. <!-- glossary-ignore: thread -->
 
-`StudioThread.stand` is the optional answer so far. `DeskStudioDraft.text` carries the complete document. Saving either never copies its text into the other. Desk API 1.15.1 clarifies these roles without removing fields or rewriting existing stands.
+`StudioThread.stand` is the optional answer so far. `DeskStudioDraft.text` carries the complete document. Saving either never copies its text into the other. Desk API 1.15.1 states these roles. It also refuses, with 409, a new question stand that is empty or contains a line break, whether it comes from a conversation stand note, a session proposal or a reworded stand idea. It removes no field and rewrites no stored stand.
 
 Run `bun scripts/probe-desk-studio-optional-stand.ts` to verify a question without a stand can read and edit its full draft. The probe uses a disposable development stack and checks that legacy multiline stands round-trip unchanged. <!-- glossary-ignore: run -->
 
