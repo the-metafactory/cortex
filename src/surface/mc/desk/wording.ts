@@ -58,7 +58,6 @@ const ACTION_TEXT: Readonly<Record<string, string>> = {
   todo: "Plan this",
 };
 
-/** The bundled Desk's English for a label phrase; null for a code that is not a label. */
 function labelPhraseText(phrase: DeskPhrase): string | null {
   switch (phrase.code) {
     case "mailrule.release": return `Handle all ${phrase.params.count}`;

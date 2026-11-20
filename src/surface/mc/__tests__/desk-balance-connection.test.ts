@@ -7,6 +7,7 @@ import { balanceConnectionStack, BALANCE_PRINCIPAL } from "./fixtures/balance-co
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { balanceDestinations } from "../desk/balance-destinations";
 import { actionText } from "../desk/wording";
+import type { DeskAction } from "../desk/types";
 
 const READ = "/api/desk/balance/read";
 
@@ -54,7 +55,7 @@ test("the enabled Balance connection feeds My Day from the durable observation p
     expect(desk.status).toBe(200);
     expect(desk.body.myDay.observation).toMatchObject({ status: "fresh" });
     expect(desk.body.myDay.outline).toEqual(loadBalanceState(stack.db)!.outline);
-    const adapters = (desk.body.items as { kind: string; title: string; badge?: string; actions: { label: string }[] }[]).filter(item => item.kind === "adapter");
+    const adapters = (desk.body.items as { kind: string; title: string; badge?: string; actions: DeskAction[] }[]).filter(item => item.kind === "adapter");
     expect(adapters.map(item => item.title).sort()).toEqual(["Buy glue", "Cut the wing", "Studio answer"]);
     expect(adapters.flatMap(item => item.actions.map(actionText))).toEqual(["Respond in Studio"]);
     expect(desk.body.sources.some((source: { id: string; ok: boolean }) => source.id === "adapter:balance" && source.ok)).toBe(true);
