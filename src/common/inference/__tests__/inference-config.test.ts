@@ -16,13 +16,8 @@
 
 import { test, expect, describe } from "bun:test";
 import { InferenceConfigSchema } from "../../types/cortex-config";
-import {
-  SecretRefSchema,
-  resolveSecretRef,
-  secretRefEnvVar,
-  SecretRefResolutionError,
-  SECRET_REF_PATTERN,
-} from "../secret-ref";
+import { SecretRefSchema, secretRefEnvVar, SECRET_REF_PATTERN } from "../secret-ref";
+import { resolveSecretRef, SecretRefResolutionError } from "../resolve-secret-ref";
 
 // The design §Configuration example block (issue #2057 "What to build").
 const EXAMPLE_INFERENCE = {

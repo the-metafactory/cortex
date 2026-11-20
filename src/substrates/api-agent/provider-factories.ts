@@ -32,7 +32,7 @@ import type {
 } from "../../common/inference/registry";
 import { InferenceRegistry } from "../../common/inference/registry";
 import type { InferenceConfig, InferenceProvider } from "../../common/types/cortex-config";
-import { resolveSecretRef } from "../../common/inference/secret-ref";
+import { resolveSecretRef } from "../../common/inference/resolve-secret-ref";
 import { AnthropicMessagesProvider } from "../../providers/anthropic/messages-provider";
 import { OpenAICompatibleProvider } from "../../providers/openai-compatible/chat-completions-provider";
 

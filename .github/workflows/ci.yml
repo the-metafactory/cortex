@@ -122,6 +122,21 @@ jobs:
       - name: tsc --noEmit
         run: bun scripts/check.ts typecheck
 
+  dashboard-build:
+    name: Dashboard build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: build:dashboard
+        run: bun scripts/check.ts dashboard
+
   # ──────────────────────────────────────────────────────────────────
   # Vocab carve-out gate — the 0002 vocabulary-migration ratchet.
   # Runs scripts/check-carveouts.sh, which FAILS when any UNGATED
