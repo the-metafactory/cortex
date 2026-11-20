@@ -1,5 +1,5 @@
 {
-  "version": "1.16.0",
+  "version": "2.0.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",

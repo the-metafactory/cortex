@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -71,6 +71,19 @@ export async function openStudioDraftRig() {
     git: (...args: string[]) => draftGit(studioDir, ...args),
     act: (body: unknown, baseUrl = server.url) => fetch(`${baseUrl}/api/desk/studio/act`, { method: "POST", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify(body) }),
     snapshots: (thread = "question", id?: string) => fetch(`${server.url}/api/desk/studio/${thread}/draft/snapshots${id === undefined ? "" : `/${id}`}`),
+    setStand: async (stand: string | null, thread = "question") => {
+      const path = join(studioDir, `threads/${thread}.md`);
+      const original = await readFile(path, "utf8");
+      const start = original.indexOf("## Where I stand");
+      const end = original.indexOf("## Assistant's notes");
+      if (end < 0) throw new Error(`threads/${thread}.md has no Assistant's notes heading`);
+      const prefix = original.slice(0, start < 0 ? end : start);
+      const file = `${prefix}${stand === null ? "" : `## Where I stand\n\n${stand}\n\n`}${original.slice(end)}`;
+      await writeFile(path, file);
+      draftGit(studioDir, "add", `threads/${thread}.md`);
+      draftGit(studioDir, "commit", "-qm", "Set disposable stand fixture");
+      return file;
+    },
     get: (thread = "question") => fetch(`${server.url}/api/desk/studio/${thread}/draft`),
     put: (body: DeskStudioDraftWrite, thread = "question", baseUrl = server.url) => fetch(`${baseUrl}/api/desk/studio/${thread}/draft`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify(body) }),
     read: async (thread = "question") => {

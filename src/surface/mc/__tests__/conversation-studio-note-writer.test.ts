@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { StudioAct } from "../desk/studio/acts";
 import { runStudioAct } from "../desk/studio/writer";
 import { failureOf, studioConversationRig } from "./studio-conversation-rig";
@@ -9,6 +11,41 @@ let acts = 0;
 const act = (dir: string, studioAct: StudioAct) => runStudioAct({ options: { dir, maxActive: 5 }, areas: AREAS, assistantName: "Assistant", requestId: `studio-act-${++acts}-xyz`, act: studioAct });
 
 describe("Studio note writer", () => {
+  test("refuses new multiline question stands without losing text, while full notes remain valid", async () => {
+    const r = await rig();
+    try {
+      const before = r.commits();
+      for (const separator of ["\n", "\r\n", "\r", "\u0085", "\u2028", "\u2029"]) {
+        const { reply } = await r.submit({ thread: "alpha", kind: "stand", text: `Answer.${separator}Full reasoning.` });
+        expect(reply.status).toBe(409);
+        expect(failureOf(reply.body.proposal)).toContain("single-line answer so far");
+        expect(r.commits()).toEqual(before);
+        expect(r.parsed("alpha").notes).toEqual([]);
+      }
+      r.created((await r.submit({ thread: "alpha", kind: "note", text: "Answer.\n\nFull reasoning." })).reply);
+      expect(r.parsed("alpha").notes[0]?.text).toBe("Answer.\n\nFull reasoning.");
+    } finally { r.repo.clean(); }
+  });
+
+  test("new question proposals work without a stand, and topic or making proposals remain multiline", async () => {
+    for (const type of ["question", "topic", "making"]) {
+      const r = await rig();
+      try {
+        const path = join(r.repo.dir, "threads/alpha.md");
+        const file = readFileSync(path, "utf8").replace("type: question", `type: ${type}`).replace("## Where I stand\n\nNot settled.\n", "");
+        writeFileSync(path, file);
+        r.repo.git("add", "."); r.repo.git("commit", "-qm", "Optional stand fixture");
+        const text = type === "question" ? "Try a narrow fold." : "First paragraph.\n\nSecond paragraph.";
+        r.created((await r.submit({ thread: "alpha", kind: "stand", text })).reply);
+        expect(r.parsed("alpha").stand).toBe("");
+        const note = r.parsed("alpha").notes[0];
+        expect(note?.text).toBe(text);
+        expect(await act(r.repo.dir, { act: "keep", thread: "alpha", note: note?.at ?? "" })).toMatchObject({ ok: true });
+        expect(r.parsed("alpha").stand).toBe(text);
+      } finally { r.repo.clean(); }
+    }
+  });
+
   test("adds an open stand as Ivy's proposal, leaves Where I stand alone, and Keep in Studio makes it the stand", async () => {
     const r = await rig();
     try {

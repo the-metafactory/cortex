@@ -139,6 +139,20 @@ afterEach(() => {
 });
 
 describe("Studio writer acts", () => {
+  it("allows thinking and closure without a question stand and preserves a legacy multiline stand on other writes", async () => {
+    seed();
+    writeFileSync(join(dir, "threads/alpha.md"), read("threads/alpha.md").replace("## Where I stand\n\nNot settled.\n\n", ""));
+    const legacy = "A legacy answer.\n\nWith its original reasoning.";
+    writeFileSync(join(dir, "threads/beta.md"), read("threads/beta.md").replace("Not settled.", legacy));
+    git("add", "."); git("commit", "-qm", "Stand compatibility fixtures");
+    expect(parsed("alpha").stand).toBe("");
+    expect(await run({ act: "think", thread: "alpha", on: true })).toMatchObject({ ok: true });
+    expect(await run({ act: "close", thread: "alpha", outcome: "decided", text: "The complete conclusion.", expect: "Test the conclusion.", reviewOn: "2026-12-15" })).toMatchObject({ ok: true });
+    expect(parsed("alpha")).toMatchObject({ stand: "", state: "closed", outcomeText: "The complete conclusion." });
+    expect(await run({ act: "respond", thread: "beta", text: "Leave the legacy answer as it is." })).toMatchObject({ ok: true });
+    expect(parsed("beta").stand).toBe(legacy);
+  });
+
   it("records a response, clears Ivy waits on you and commits once", async () => {
     seed();
     expect(waitsOnYou(parsed("alpha"))).toBe(true);
@@ -310,7 +324,7 @@ describe("Studio writer safety", () => {
   it("refuses another process holding the shared repository lock", async () => {
     seed();
     mkdirSync(join(dir, ".git", "studio-write.lock"));
-    writeFileSync(join(dir, ".git", "studio-write.lock", "owner.json"), JSON.stringify({ pid: 4242, at: NOW.toISOString() }));
+    writeFileSync(join(dir, ".git", "studio-write.lock", "owner.json"), JSON.stringify({ pid: process.ppid, at: NOW.toISOString() }));
     const before = readFileSync(join(dir, "threads/alpha.md"), "utf8");
     const result = await run({ act: "park", thread: "alpha" });
     expect(result).toMatchObject({ ok: false, status: 409 });
