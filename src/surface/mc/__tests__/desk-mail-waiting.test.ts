@@ -82,6 +82,7 @@ describe("waiting-for tracker", () => {
     expect(card?.title).toBe("No answer from Priya Shah about Venue quote since Monday");
     expect(card?.why).toContain("4 working days without an answer.");
     expect(card?.actions.map((a) => `${a.id}:${actionText(a)}`)).toEqual(["mail.draft:Draft a nudge", "waiting.snooze:Wait 2 more days", "waiting.done:Done"]);
+    expect(card?.actions.map((a) => a.labelPhrase)).toEqual([{ code: "waiting.nudge" }, { code: "waiting.snooze", params: { days: 2 } }, undefined]);
     expect(card?.more?.map((a) => a.id)).toEqual(["waiting.no-answer", "waiting.expect", "open"]);
     expect(card?.reply).toEqual({ to: "Priya Shah <priya@example.org>", subject: "Re: Venue quote" });
     expect(cards(FRIDAY, false)[0]?.actions.map((a) => a.id)).toEqual(["waiting.snooze", "waiting.done"]);

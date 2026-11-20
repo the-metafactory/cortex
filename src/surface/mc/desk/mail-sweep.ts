@@ -40,7 +40,6 @@ const SAFE = "None is from a VIP or looks suspicious.";
 
 const hash = (text: string): string => textHash(text).slice(0, 16);
 export const senderOf = (m: SweepMember): string => m.from.name ?? m.from.address;
-export { plural };
 export const commonArea = (members: readonly SweepMember[]): string | null => {
   const first = members[0]?.area ?? null;
   return members.every((m) => m.area === first) ? first : null;

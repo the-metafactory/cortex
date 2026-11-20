@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { plural } from "./wording";
 import { modelJson, modelIdentity, modelPaths, classifierLabel, readApiKey, readClassifications, type ModelConfig, type KeyReader, type MailClassification } from "./classify";
 import { isDmarcReportMail } from "./mail-dmarc";
 import type { DigestConfig, DigestModel } from "./mail-digest-schema";
@@ -8,7 +9,7 @@ import { digestedIds } from "./mail-rules";
 import { textHash } from "./mail-similar";
 import { SingleFlight } from "./single-flight";
 import { suspicionContext, suspicionOf, type SuspicionContext } from "./mail-suspicion";
-import { byAge, commonArea, listSweeps, plural, senderOf, sweepContext, sweepView, SWEEP_LIMITS, type SweepGroup, type SweepMember, type SweepOptions } from "./mail-sweep";
+import { byAge, commonArea, listSweeps, senderOf, sweepContext, sweepView, SWEEP_LIMITS, type SweepGroup, type SweepMember, type SweepOptions } from "./mail-sweep";
 import type { ListedMail } from "./mail-actions";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS, localDay } from "./time";

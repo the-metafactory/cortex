@@ -1,5 +1,5 @@
 import type { DeskPhrase } from "../../../desk-api/wire/phrases";
-import type { DeskAction, DeskLink, InterruptReasonCode } from "../../../desk-api/wire/types";
+import type { DeskAction, DeskItemKind, DeskLink, InterruptReasonCode } from "../../../desk-api/wire/types";
 import type { MailSweepView } from "../../../desk-api/wire/mail";
 import type { PromotableAction } from "./autonomy";
 import type { DeskVip } from "./vips";
@@ -139,3 +139,24 @@ export const AUTONOMY_TEXT: Record<PromotableAction, { label: string; note: stri
 export function autonomyText(action: string): { label: string; note: string } {
   return Object.hasOwn(AUTONOMY_TEXT, action) ? AUTONOMY_TEXT[action as PromotableAction] : { label: action, note: "" };
 }
+
+export const FOLDED_LABELS: Record<DeskItemKind, string> = {
+  adapter: "Connected items",
+  sensor: "Goal checks that stopped working",
+  goal: "Goals that need a look",
+  "agent-blocked": "Agent tasks waiting for your ruling",
+  "agent-failed": "Agent tasks parked after a failure",
+  decision: "Decisions agents are waiting for",
+  grilling: "Questions agents want to grill you on",
+  escalation: "Older escalations",
+  mail: "Mail you may want to read",
+  "mail-junk": "Junk mail to review",
+  reminder: "Reminders",
+  meeting: "Meetings starting soon",
+  "meeting-after": "Meetings that just ended",
+  "mail-rule": "Mail rules the Desk proposes",
+  dmarc: "DMARC failures for your domains",
+  "mail-waiting": "Mail still waiting for an answer",
+  "mail-handoff": "Mail you handed off",
+  "task-handoff": "Tasks an agent worked on",
+};

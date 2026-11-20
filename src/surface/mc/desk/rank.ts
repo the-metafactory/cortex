@@ -52,27 +52,6 @@ const action = (id: string, role: DeskAction["role"], wired: boolean): DeskActio
 const LOOK = action("detail", "secondary", true);
 const LATER = action("snooze", "secondary", true);
 
-export const FOLDED_LABELS: Record<DeskItemKind, string> = {
-  adapter: "Connected items",
-  sensor: "Goal checks that stopped working",
-  goal: "Goals that need a look",
-  "agent-blocked": "Agent tasks waiting for your ruling",
-  "agent-failed": "Agent tasks parked after a failure",
-  decision: "Decisions agents are waiting for",
-  grilling: "Questions agents want to grill you on",
-  escalation: "Older escalations",
-  mail: "Mail you may want to read",
-  "mail-junk": "Junk mail to review",
-  reminder: "Reminders",
-  meeting: "Meetings starting soon",
-  "meeting-after": "Meetings that just ended",
-  "mail-rule": "Mail rules the Desk proposes",
-  dmarc: "DMARC failures for your domains",
-  "mail-waiting": "Mail still waiting for an answer",
-  "mail-handoff": "Mail you handed off",
-  "task-handoff": "Tasks an agent worked on",
-};
-
 export const isRegressedGoalCheck = (s: VigilSubjectView): boolean => s.vocab === "check" && s.goalId !== null && s.value === "regressed";
 
 export function areaFor(areas: AreaRule[], repo: string | null, goalId: string | null): string | null {

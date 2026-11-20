@@ -45,8 +45,7 @@ import { MicButton, VoicePanel, WakeStatus, WakeSwitch } from "./desk-voice";
 import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import { freshnessLabel } from "../../desk/types";
-import { actionText, autonomyText, linkText } from "../../desk/wording";
-import { FOLDED_LABELS } from "../../desk/rank";
+import { actionText, autonomyText, FOLDED_LABELS, linkText } from "../../desk/wording";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
 import { CORRECTION_MOVES } from "../../desk/mail-correction-schema";
@@ -1416,10 +1415,14 @@ const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsub
 const confirmLabel = (a: DeskAction): string | undefined => CONFIRM_LABEL[a.id] ?? (a.target ? CONFIRM_TARGET[a.id]?.(a.target) : undefined);
 
 export function withConfirm(item: DeskItem, actionId: string): DeskItem {
-  return { ...item, actions: item.actions.map((a) => { const content = a.id === actionId ? confirmLabel(a) : undefined; return content ? { ...a, content } : a; }) };
+  return { ...item, actions: item.actions.map((a) => { const confirm = a.id === actionId ? confirmLabel(a) : undefined; return confirm ? { ...a, confirm } : a; }) };
 }
 
-export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
+type ShownAction = DeskAction & { confirm?: string };
+
+export const buttonText = (action: ShownAction): string => action.confirm ?? actionText(action);
+
+export function ActionButton({ action, onRun, sending }: { action: ShownAction; onRun: (a: DeskAction) => void; sending: string | null }) {
   const style = action.role === "primary" ? " pri" : action.id === "snooze" ? " ghost" : "";
   const busy = sending === action.id;
   return (
@@ -1431,7 +1434,7 @@ export function ActionButton({ action, onRun, sending }: { action: DeskAction; o
       title={action.wired ? undefined : "Not connected yet"}
       onClick={() => { onRun(action); }}
     >
-      {busy ? BUSY_LABEL[action.id] ?? "Sending…" : actionText(action)}
+      {busy ? BUSY_LABEL[action.id] ?? "Sending…" : buttonText(action)}
     </button>
   );
 }

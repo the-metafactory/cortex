@@ -154,6 +154,8 @@ test("GET /api/desk serves every why phrase code beside its original sentence or
   const escalation = seedSubject("escalation", "example/other#6", "needs-principal", null);
   waiting.set("example/other#6", { kind: "open", title: "Escalated", question: "Original agent question?", url: "https://example.test/6" });
   let view = await read();
+  expect(item(view, "ranger:example/app#1").actions[0]).toMatchObject({ id: "open", labelPhrase: { code: "ranger.ruling" } });
+  expect(item(view, sensor).actions[0]).toMatchObject({ id: "goal.check", labelPhrase: { code: "goal.run-check" } });
   check(view, "ranger:example/app#1", "The agent in app cannot go on without a decision from you.", { code: "ranger.blocked", params: { repo: "app" } });
   check(view, "ranger:example/app#2", `It stopped today at ${clock(EARLIER)} in app, and nothing moves until it is retried or parked.`, { code: "ranger.stopped", params: { repo: "app", endedAt: iso(EARLIER), failed: true } });
   check(view, "ranger:example/app#3", "Ranger queued the resume, at place 2. It starts when the lane is free.", { code: "ranger.resume-queued", params: { position: 2 } });
@@ -247,7 +249,7 @@ const postSnooze = async (until: unknown): Promise<DeskPhrase | undefined> => {
   return (await response.json() as { labelPhrase?: DeskPhrase }).labelPhrase;
 };
 
-test("GET, a snooze answer and the classifier input serve every label phrase code", async () => {
+test("GET, a snooze answer and the classifier input serve every label phrase code except the card wordings, which the why-code GET test and the meeting, junk and waiting tests serve", async () => {
   const config = { ...CONFIG, maxPerPass: 1, sourcePolicy: "local" as const };
   const corrections: DeskPhrase[] = [];
   options().mailActions = { move: ["unused-move"], draft: ["unused-draft"], timeoutSeconds: 5 };

@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { FOLDED_LABELS } from "./rank";
+import { FOLDED_LABELS } from "./wording";
 import { DESK_ITEM_KINDS, type DeskCorrection, type DeskCorrectionMode, type DeskItem, type DeskItemKind } from "./types";
 
 export const CORRECTION_MODES = ["less", "always"] as const satisfies readonly DeskCorrectionMode[];

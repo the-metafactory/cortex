@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, CorrectionNote, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, correctionStep, dismissesMenu, precedentText, withConfirm } from "../components/desk-view";
+import { ActionButton, CorrectionNote, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, correctionStep, dismissesMenu, precedentText, withConfirm, buttonText } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
@@ -11,7 +11,6 @@ import type { DeskProposal } from "../../desk/ask";
 import { openGroup, selectItems } from "../../desk/present";
 import { DeskWakeSchema } from "../../../../common/types/desk-wake";
 import type { MailSweepView } from "../../desk/mail-sweep";
-import { actionText } from "../../desk/wording";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
 
@@ -545,7 +544,7 @@ describe("a goal item's actions", () => {
   });
 
   it("asks once more before it pauses a goal", () => {
-    expect(withConfirm(goal, "goal.pause").actions.map(actionText)).toEqual(["Check again now", "Yes, pause it"]);
+    expect(withConfirm(goal, "goal.pause").actions.map(buttonText)).toEqual(["Check again now", "Yes, pause it"]);
     expect(renderToStaticMarkup(<ActionButton action={pause} onRun={() => {}} sending="goal.pause" />)).toContain(">Pausing…</button>");
   });
 });
@@ -557,8 +556,8 @@ describe("a mail item's actions", () => {
   const mail = item(11, { key: "mail:m3", kind: "mail", title: 'Grace Hopper wrote: "Compilers"', actions: [seen, del], more: [always] });
 
   it("asks once more before Delete, but not before Seen, delete", () => {
-    expect(withConfirm(mail, "mail.trash").actions.map(actionText)).toEqual(["Seen, delete", "Yes, move it to Trash"]);
-    expect(withConfirm(mail, "mail.seen").actions.map(actionText)).toEqual(["Seen, delete", "Delete"]);
+    expect(withConfirm(mail, "mail.trash").actions.map(buttonText)).toEqual(["Seen, delete", "Yes, move it to Trash"]);
+    expect(withConfirm(mail, "mail.seen").actions.map(buttonText)).toEqual(["Seen, delete", "Delete"]);
     expect(renderToStaticMarkup(<ActionButton action={seen} onRun={() => {}} sending="mail.seen" />)).toContain(">Deleting…</button>");
   });
 
@@ -591,7 +590,7 @@ describe("a mail item's actions", () => {
     const spam = (confirmBlock: boolean) => renderToStaticMarkup(<MailReceipt receipt={{ text: "Moved to Junk.", undo: "move-2", block: "@spam.example", confirmBlock }} onUndo={() => {}} onBlock={() => {}} />);
     expect(spam(false)).toContain(">Also block @spam.example</button>");
     expect(spam(true)).toContain(">Yes, block @spam.example</button>");
-    expect(withConfirm({ ...mail, actions: [{ id: "mail.spam", role: "secondary", wired: true }] }, "mail.spam").actions[0]?.content).toBe("Yes, move it to Junk");
+    expect(withConfirm({ ...mail, actions: [{ id: "mail.spam", role: "secondary", wired: true }] }, "mail.spam").actions.map(buttonText)[0]).toBe("Yes, move it to Junk");
   });
 });
 

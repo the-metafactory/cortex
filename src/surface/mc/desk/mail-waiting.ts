@@ -4,7 +4,7 @@ import { modelJson, modelPaths, classifierLabel, readApiKey, type ModelConfig, t
 import { LOCAL_CONTENT, NOT_LOCAL_CONTENT, type LocalSources, type PromptContent } from "./source-boundary";
 import { logMailDecision, senderDomain, type MailFeatures, type MailLogAction } from "./mail-log";
 import type { ListedMail } from "./mail-actions";
-import { plural } from "./mail-sweep";
+import { plural } from "./wording";
 import { replySubject } from "./mail-triage";
 import { ago, mailLink } from "./rank";
 import type { SourceReading, SourceSent } from "./sources/command";
