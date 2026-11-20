@@ -283,14 +283,14 @@ export function taskHandoffItems(rows: readonly TaskHandoffRow[], dispatch: Disp
       const why = row.error ?? "No reason was given.";
       return [{
         ...base, title: `${label} could not finish “${title}”`, why, score: 50,
-        actions: [act("task.retry", "Retry", "primary", row.id), act("task.discard", "Discard", "secondary", row.id)],
+        actions: [act("task.retry", "primary", row.id), act("task.discard", "secondary", row.id)],
         detail: { summary: why, history, refs: [row.taskId], links: [] }, handoff,
       }];
     }
     const result = row.result ?? "";
     return [{
       ...base, title: `${label} finished “${title}”`, why: `${label}'s answer is below, as the agent wrote it. Done marks the task done; Keep open leaves it on your list.`, score: 60,
-      actions: [act("task.done", "Done", "primary", row.id), act("task.keep", "Keep open", "secondary", row.id), act("task.discard", "Discard", "secondary", row.id)],
+      actions: [act("task.done", "primary", row.id), act("task.keep", "secondary", row.id), act("task.discard", "secondary", row.id)],
       detail: { summary: result, history, refs: [row.taskId], links: [] }, excerpt: result, handoff: { ...handoff, result },
     }];
   });

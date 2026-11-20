@@ -16,6 +16,7 @@ import { trustedViews } from "../desk/mail-trust";
 import { suspicionContext, suspicionOf } from "../desk/mail-suspicion";
 import { JunkReview } from "../dashboard-v2/components/desk-mail-junk";
 import { composeWith, mailPost, MOVE_DESK, NOW, queue } from "./desk-mail-fixtures";
+import { actionText } from "../desk/wording";
 
 const mail = (id: string, at = NOW - 1000): SourceMail => ({ kind: "mail", id, from: { name: "Example Sender", address: `${id}@example.org` }, subject: `Subject ${id}`, receivedAt: new Date(at).toISOString(), unread: true, account: "work", firstParagraph: "PRIVATE JUNK BODY", headers: { replyTo: "other@example.net" } });
 let db: Database;
@@ -88,6 +89,8 @@ describe("junk source readings", () => {
     expect(items.map((i: { source: string }) => i.source).sort()).toEqual(["second", "work-mail"]);
     expect(items[0]?.junkReview?.mails).toHaveLength(2);
     expect(items[0]?.junkReview?.mails[0]).toMatchObject({ from: mail("one").from, subject: "Subject one", receivedAt: new Date(at).toISOString(), action: { id: "mail.notspam", wired: true } });
+    expect(items[0]?.actions).toEqual([{ id: "detail", labelPhrase: { code: "mail.junk-review" }, role: "primary", wired: true }]);
+    expect(items[0]?.actions.map(actionText)).toEqual(["Review junk"]);
     expect(JSON.stringify(items)).not.toContain("PRIVATE JUNK BODY");
     expect((await reviews(await runtime([])))).toEqual([]);
     expect((await reviews(await runtime(null)))).toEqual([]);

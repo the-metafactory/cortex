@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { actionText } from "../src/surface/mc/desk/wording";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { planBalanceToday, seedBalanceObservationOverflow } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
@@ -33,11 +34,11 @@ await runWithTemporaryHome(import.meta.path, async () => {
     assert.equal(planned?.badge, "In today");
     assert.equal(adapters.find(item => item.title === "Buy glue")?.badge, undefined);
     const studio = adapters.find(item => item.title === "Studio answer");
-    assert.deepEqual(studio?.actions, [{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: true, target: "thread-1" }]);
-    assert.equal(studio?.actions.some(action => action.label === "Done"), false);
+    assert.deepEqual(studio?.actions, [{ id: "studio.respond", role: "primary", wired: true, target: "thread-1" }]);
+    assert.equal(studio?.actions.some(action => actionText(action) === "Done"), false);
     const syntheticRow = adapters.find(item => item.title === "Synthetic review");
     assert.equal(syntheticRow?.score, 55);
-    assert.deepEqual(syntheticRow?.actions.map(action => action.label), ["Complete"]);
+    assert.deepEqual(syntheticRow?.actions.map(actionText), ["Complete"]);
     console.log("Catch-up: every actionable task is one row beside mail, with In today, Respond in Studio and no Done on the Studio row.");
 
     const selection = selectItems(view, ALL_AREAS, new Set());

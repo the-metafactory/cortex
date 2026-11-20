@@ -37,7 +37,7 @@ function seed(): AppState {
   ] }] }, settings: { ...DEFAULT_SETTINGS }, log: [], history: { deficits: {}, lastSurfaced: {} }, dayState: null };
 }
 function source(kind: "mail" | "agent-blocked"): DeskItem {
-  return { key: `${kind}:source`, kind, source: kind === "mail" ? "inbox" : "ranger", title: "Choose a next step", why: "A decision is waiting.", dueAt: "2026-11-04T12:00:00Z", area: "work", urgency: "today", score: 50, actions: [], detail: { summary: "A synthetic item", history: [], refs: [], links: [{ kind: "source", label: "Source", url: "https://example.test/item" }] } };
+  return { key: `${kind}:source`, kind, source: kind === "mail" ? "inbox" : "ranger", title: "Choose a next step", why: "A decision is waiting.", dueAt: "2026-11-04T12:00:00Z", area: "work", urgency: "today", score: 50, actions: [], detail: { summary: "A synthetic item", history: [], refs: [], links: [{ kind: "source", url: "https://example.test/item" }] } };
 }
 describe("My day lane and day contract", () => {
   let db: Database;
@@ -45,7 +45,7 @@ describe("My day lane and day contract", () => {
   afterEach(() => db.close());
   const change = (command: MyDayCommand, requestId: string = crypto.randomUUID(), extra: { now?: number; date?: string; source?: DeskItem; desk?: DeskOptions } = {}) => changeMyDay({ db, desk, now: NOW, date: DATE, requestId, command, ...extra });
   const renderCalendar = (events: CalendarInterval[], known = true): string => {
-    const calendar: CalendarAvailability = { sources: known ? [{ id: "calendar", kind: "calendar", from: NOW - 86_400_000, to: NOW + 86_400_000, readAt: NOW, calendars: ["work"], provenance: "owned-reader" }] : [{ id: "calendar", kind: "unknown", reason: "The reading is stale.", reasonPhrase: { code: "calendar.stale", params: { source: "calendar" } } }], events };
+    const calendar: CalendarAvailability = { sources: known ? [{ id: "calendar", kind: "calendar", from: NOW - 86_400_000, to: NOW + 86_400_000, readAt: NOW, calendars: ["work"], provenance: "owned-reader" }] : [{ id: "calendar", kind: "unknown", reasonPhrase: { code: "calendar.stale", params: { source: "calendar" } } }], events };
     return renderToStaticMarkup(createElement(DeskTimeFirst, { day: readMyDay(db, desk, NOW), calendar, now: NOW, before: null, after: null, proposal: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => {}, onThread: () => {} }));
   };
   const currentEvent = (title: string, key: string, start: number, end: number): CalendarInterval => ({ key, source: "calendar", calendar: "Work", calendarId: "work", title, at: NOW + start * 60_000, end: NOW + end * 60_000, availability: { status: "busy", provenance: "owned-provider" } });

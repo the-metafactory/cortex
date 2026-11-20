@@ -36,7 +36,7 @@ test("an adapter capability label remains content without a phrase", async () =>
   const view = await compose(item);
   const card = view.items[0];
   expect(card?.actions).toHaveLength(1);
-  expect(card?.actions[0]).toMatchObject({ label: "Complete" });
+  expect(card?.actions[0]).toMatchObject({ content: "Complete" });
   expect(card?.actions[0]).not.toHaveProperty("labelPhrase");
 });
 
@@ -49,7 +49,7 @@ test("two unknown adapters produce distinct canonical items and use existing Cat
   expect(view.items).toHaveLength(2);
   for (const source of item.sources) {
     const card = view.items.find(card => card.source === source.adapterId)!;
-    expect(card).toMatchObject({ kind: "adapter", title: "Synthetic review", why: "Review the synthetic observation.", dueAt: "2026-11-01", area: "lab", urgency: "today", score: 55, actions: [], readOnly: true, freshness: "fresh", detail: { links: [{ kind: "source", label: "Open source", url: "https://example.test/synthetic" }] } });
+    expect(card).toMatchObject({ kind: "adapter", title: "Synthetic review", why: "Review the synthetic observation.", dueAt: "2026-11-01", area: "lab", urgency: "today", score: 55, actions: [], readOnly: true, freshness: "fresh", detail: { links: [{ kind: "source", url: "https://example.test/synthetic" }] } });
     expect(card.key).toBe(`adapter:${canonicalWire({ adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: "item-0" })}`);
     expect(card.attention).toBeUndefined();
     expect(card.whyPhrase).toBeUndefined();

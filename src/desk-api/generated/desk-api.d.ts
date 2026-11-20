@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "2.0.0";
+export declare const DESK_API_VERSION = "2.1.0";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -247,13 +247,12 @@ export interface SweepMailView {
 	url?: string;
 	unsubscribe?: UnsubscribeView;
 }
-/** `label` is deprecated in favour of `kind` and `basis`, or `labelPhrase` for a category. Served through 1.x; removed in 2.0. */
+/** A client phrases a group from its `kind` and `basis`, or from `labelPhrase` for a category. */
 export interface MailSweepView {
 	id: string;
 	kind: SweepKind;
 	basis: SweepBasis;
 	target: MoveTarget;
-	label: string;
 	labelPhrase?: DeskPhrase;
 	title: string;
 	why: string;
@@ -346,14 +345,13 @@ export type CalendarGapReason = {
 } | {
 	code: "calendar.no-coverage" | "calendar.event-unverified";
 };
-/** Unknown sources use reasonPhrase as their canonical reason; the English reason field is deprecated. */
+/** An unknown source carries its reason as `reasonPhrase`. */
 export type CalendarSourceState = {
 	id: string;
 	kind: "attention";
 } | {
 	id: string;
 	kind: "unknown";
-	reason: string;
 	reasonPhrase: CalendarGapReason;
 } | {
 	id: string;
@@ -1486,6 +1484,23 @@ export type DeskPhrase = {
 		id: string;
 	};
 } | {
+	code: "meeting.join";
+} | {
+	code: "meeting.open";
+} | {
+	code: "ranger.ruling";
+} | {
+	code: "mail.junk-review";
+} | {
+	code: "goal.run-check";
+} | {
+	code: "waiting.nudge";
+} | {
+	code: "waiting.snooze";
+	params: {
+		days: number;
+	};
+} | {
 	code: "mail.put-away-time";
 	params: {
 		until: string;
@@ -2032,20 +2047,19 @@ export interface DeskArea {
 	label: string;
 	color: string;
 }
-/** `label` is deprecated in favour of `id` for fixed wording, or `labelPhrase` for wording with parameters. Adapter capability labels are content. Served through 1.x; removed in 2.0. */
+/** A client phrases an action from its `id`, or from `labelPhrase` when the wording takes parameters or differs by card. `content` is wording shown as it is and never phrased: an adapter capability's own label. */
 export interface DeskAction {
 	id: string;
-	label: string;
 	labelPhrase?: DeskPhrase;
+	content?: string;
 	role: "primary" | "secondary";
 	wired: boolean;
 	url?: string;
 	target?: string;
 }
-/** `label` is deprecated in favour of `kind` and `url`, or `labelPhrase` for a task identifier. Served through 1.x; removed in 2.0. */
+/** A client phrases a link from its `kind` and `url`, or from `labelPhrase` for a task identifier. */
 export interface DeskLink {
 	kind: "mail" | "issue" | "report" | "source" | "unsubscribe-page" | "task" | "meeting" | "meeting-join";
-	label: string;
 	labelPhrase?: DeskPhrase;
 	url: string;
 }
@@ -2186,20 +2200,18 @@ export interface DeskInterrupt {
 	held?: MeetingHold;
 	feedback?: InterruptFeedback;
 }
-/** `label` is deprecated in favour of `code` and, for VIP mail, `target` and the configured VIP label. Served through 1.x; removed in 2.0. */
+/** A client phrases a reason from its `code` and, for VIP mail, `target` and the configured VIP label. */
 export interface InterruptReasonView {
 	code: InterruptReasonCode;
 	target?: string;
-	label: string;
 	on: boolean;
 	available: boolean;
 	setBy: "default" | "switch" | "feedback";
 	changedAt?: number;
 }
-/** `label` is deprecated in favour of `kind`. Served through 1.x; removed in 2.0. */
+/** A client phrases a group from its `kind`. */
 export interface DeskFoldedGroup {
 	kind: DeskItemKind;
-	label: string;
 	count: number;
 	example: string;
 }
@@ -2315,12 +2327,10 @@ export type DeskMailClassifier = {
 	localModel?: string;
 	localProblem?: string;
 };
-/** Each type's `label` and `note` are deprecated in favour of its `action` code. Served through 1.x; removed in 2.0. */
+/** A client phrases each type from its `action` code. */
 export interface DeskAutonomy {
 	types: {
 		action: string;
-		label: string;
-		note: string;
 		on: boolean;
 	}[];
 	done: {

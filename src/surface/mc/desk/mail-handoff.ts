@@ -395,7 +395,7 @@ export function handoffLine(row: HandoffRow, now: number, name: string): string 
 const viewOf = (row: HandoffRow, now: number, name: string): HandoffView => ({ id: row.id, state: row.state, line: handoffLine(row, now, name), since: row.createdAt });
 
 const HAND_TO_ASSISTANT = "mail.assistant";
-const retryAction = (name: string, target?: string): DeskAction => ({ ...act("assistant.retry", `Ask ${name} again`, "primary", target), labelPhrase: { code: "assistant.retry", params: { name } } });
+const retryAction = (name: string, target?: string): DeskAction => ({ ...act("assistant.retry", "primary", target), labelPhrase: { code: "assistant.retry", params: { name } } });
 
 /** The mail card while the assistant has it: the status line, no second hand-off, and Retry after a failure. */
 export function withHandoff(item: DeskItem, row: HandoffRow | undefined, now: number, name: string): DeskItem {
@@ -418,8 +418,8 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     if (row.state !== "ready" && !(row.state === "failed" && !listed.has(row.messageId))) return [];
     const who = row.fromName ?? row.fromAddress;
     const subject = oneLine(row.subject) || "(no subject)";
-    const links = [...(row.url ? [mailLink(row.url)] : []), ...(row.taskUrl ? [{ kind: "task" as const, label: `Task ${row.taskId}`, labelPhrase: { code: "task.link" as const, params: { id: row.taskId } }, url: row.taskUrl }] : [])];
-    const open = row.url ? [{ ...act("open", "Open in Mail", "secondary"), url: row.url }] : [];
+    const links = [...(row.url ? [mailLink(row.url)] : []), ...(row.taskUrl ? [{ kind: "task" as const, labelPhrase: { code: "task.link" as const, params: { id: row.taskId } }, url: row.taskUrl }] : [])];
+    const open = row.url ? [{ ...act("open", "secondary"), url: row.url }] : [];
     const history = [
       `You handed it to ${name} ${ago(now, row.createdAt)}${row.instruction ? ` and asked: “${oneLine(row.instruction)}”` : ""}.`,
       `${name} works it as ${row.taskId} on your private task map, on the ${row.route} model lane${row.model ? ` (${row.model})` : ""}.`,
@@ -428,7 +428,7 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     if (row.state === "failed") {
       return [{
         ...base, key: handoffKey(row.id), title: `${name} could not finish “${subject}” from ${who}`, why: row.error ?? NO_REASON, score: 50,
-        actions: [retryAction(name), act("assistant.discard", "Discard", "secondary")], more: open,
+        actions: [retryAction(name), act("assistant.discard", "secondary")], more: open,
         detail: { ...base.detail, summary: row.error ?? NO_REASON },
         handoff: viewOf(row, now, name), since: row.finishedAt ?? row.createdAt,
       }];
@@ -437,7 +437,7 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     return [{
       ...base, key: handoffKey(row.id), title: `${name} drafted a reply to ${who}: “${subject}”`,
       why: row.account ? `Approve saves it in your ${row.account} Drafts; nothing is sent.` : "The mail source names no account for this mail, so the Desk cannot save the draft. Copy it from the card.", score: 60,
-      actions: row.account ? [act("assistant.approve", "Approve", "primary"), act("assistant.edit", "Edit", "secondary"), act("assistant.discard", "Discard", "secondary")] : [act("assistant.discard", "Discard", "primary")], more: open,
+      actions: row.account ? [act("assistant.approve", "primary"), act("assistant.edit", "secondary"), act("assistant.discard", "secondary")] : [act("assistant.discard", "primary")], more: open,
       detail: { ...base.detail, summary: row.findings.join("\n") },
       excerpt: draft,
       ...(row.account ? { reply: { to: senderOf(row.fromName, row.fromAddress), subject: replySubject(row.subject) } } : {}),

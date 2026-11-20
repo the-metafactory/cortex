@@ -26,7 +26,7 @@ import { withTempHome } from "./probe-temp-home";
 
 const LABEL = "ai.meta-factory.cortex.balance-inbox-cutover-probe";
 const PORT = 8768;
-const MAIL: DeskItem = { key: "mail:probe-1@example.test", kind: "mail", source: "work-mail", area: "area-example", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ kind: "mail", label: "Open", url: "message://probe-1" }] } };
+const MAIL: DeskItem = { key: "mail:probe-1@example.test", kind: "mail", source: "work-mail", area: "area-example", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ kind: "mail", url: "message://probe-1" }] } };
 const LISTED: ListedMail = { kind: "mail", id: "probe-1@example.test", from: { name: "Kit Shop", address: "Sales@Kits.Example" }, subject: MAIL.title, receivedAt: "2026-11-02T08:00:00.000Z", unread: true, account: "work", sourceId: "work-mail" };
 const SENSOR: DeskItem = { ...MAIL, key: "sensor:probe-2", kind: "sensor", source: "synthetic", title: "Water the seedlings" };
 

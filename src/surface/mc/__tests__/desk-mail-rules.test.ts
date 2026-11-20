@@ -20,6 +20,7 @@ import { saveBalanceState } from "../desk/balance-store";
 import { snoozeMail } from "../desk/mail-snooze";
 import { DEFAULT_SETTINGS, type AppState } from "../../../balance";
 import { mailDesk, queue } from "./desk-mail-fixtures";
+import { actionText } from "../desk/wording";
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
 const MOVE = ["/opt/adapters/bin/desk-mail-move.ts"];
@@ -254,7 +255,7 @@ describe("the Desk view and the rules API", () => {
     const rt = runtime([]);
     const card = (await view(rt)).items.find((i) => i.kind === "mail-rule");
     expect(card).toMatchObject({ title: "Archive mail from reports@dmarc.example on its own?", urgency: "this-week" });
-    expect(card?.actions.map((a) => a.label)).toEqual(["Approve", "Not now", "Never"]);
+    expect(card?.actions.map(actionText)).toEqual(["Approve", "Not now", "Never"]);
     expect(card?.detail.history[0]).toStartWith("“Report reports@dmarc.example-0”: archived on the Desk ");
 
     const res = await handleDeskMailRules(post({ op: "approve", proposal: card?.key }), db, rt, { now: () => NOW, newId: () => "r1" });

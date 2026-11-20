@@ -39,7 +39,7 @@ function moveDeps(results: (WriterResult | Error)[] = []) {
 }
 
 const REPORTS = ["r1", "r2", "r3"].map((id) => mail(id, "stats@otrs.example", { headers: { listId: "<stats.otrs.example>" } }));
-const group = (members: SourceMail[]): SweepGroup => ({ id: "bundle:archive:x", kind: "bundle", basis: "list", target: "archive", label: "same mailing list", title: "3 mails from the stats list", about: "from the stats list", why: "", area: null, members: members.map(member) });
+const group = (members: SourceMail[]): SweepGroup => ({ id: "bundle:archive:x", kind: "bundle", basis: "list", target: "archive", title: "3 mails from the stats list", about: "from the stats list", why: "", area: null, members: members.map(member) });
 const doneRows = () => db.query<{ attempt_key: string; action: string; status: string; message: string }, []>("SELECT attempt_key, action, status, message FROM desk_done ORDER BY created_at, attempt_key").all();
 const doneTitle = (): string | undefined => db.query<{ title: string }, []>("SELECT title FROM desk_done WHERE action LIKE 'mail.sweep%'").get()?.title;
 const movedIds = (calls: { stdin: unknown }[]) => calls.map((c) => (c.stdin as { messageId: string }).messageId);
@@ -91,7 +91,7 @@ describe("sweep builder", () => {
     const groups = buildSweeps(input([...fyi, reply, fresh], { f1: fyiClass, f2: fyiClass, f3: fyiClass, f4: fyiClass, f5: fyiClass, q1: { ...fyiClass, predictedAction: "reply" } }));
     const sweep = groups.find((g) => g.id === "sweep:age:fyi");
     expect(sweep?.title).toBe("4 fyi mails older than 3 days are still unread");
-    expect(sweep).toMatchObject({ label: "fyi", labelPhrase: { code: "mail.sweep-category", params: { category: "fyi" } } });
+    expect(sweep).toMatchObject({ labelPhrase: { code: "mail.sweep-category", params: { category: "fyi" } } });
     expect(sweep?.members.map((m) => m.id)).toEqual(["f1", "f2", "f3", "f4"]);
   });
 });

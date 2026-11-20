@@ -24,7 +24,7 @@ const writerRig = conversationWriterRig("conversation-balance-inbox-cutover-", "
 interface Reply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string } }
 
 const OWNER = BALANCE_INBOX_TASK_CONTRACT.owner;
-const MAIL: DeskItem = { key: "mail:cutover-1@example.test", kind: "mail", source: "work-mail", area: "area-example", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ kind: "mail", label: "Open", url: "message://cutover-1" }] } };
+const MAIL: DeskItem = { key: "mail:cutover-1@example.test", kind: "mail", source: "work-mail", area: "area-example", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ kind: "mail", url: "message://cutover-1" }] } };
 const LISTED: ListedMail = { kind: "mail", id: "cutover-1@example.test", from: { name: "Kit Shop", address: "Sales@Kits.Example" }, subject: MAIL.title, receivedAt: "2026-11-02T08:00:00.000Z", unread: true, account: "work", sourceId: "work-mail" };
 const SENSOR: DeskItem = { ...MAIL, key: "sensor:cutover-2", kind: "sensor", source: "synthetic", title: "Water the seedlings" };
 

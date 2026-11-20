@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { sweepText } from "../../desk/wording";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { SWEEP_WORDS } from "../../desk/mail-sweep-schema";
 import type { MoveTarget } from "../../desk/mail-move";
@@ -27,7 +28,7 @@ export function MailSweeps({ sweeps, onPreview }: { sweeps: readonly MailSweepVi
         <article key={s.id} className="desk-sweep" data-sweep={s.id}>
           <div className="desk-sweep-head">
             <span>{s.kind === "bundle" ? `${s.mails.length} like these` : "Sweep"}</span>
-            <span className="desk-sweep-tag">{s.label}</span>
+            <span className="desk-sweep-tag">{sweepText(s)}</span>
           </div>
           <h3>{s.title}</h3>
           <p className={s.kind === "bundle" ? "desk-sweep-learned" : "desk-why"}>{s.kind === "bundle" && <b>Learned </b>}{s.why}</p>
@@ -62,7 +63,7 @@ export function SweepPreview({ sweep, target = sweep.target, busy, onConfirm, on
   return (
     <div className="desk-sweep-preview">
       <div className="desk-panel-top">
-        <span className="area">{SWEEP_NAMES[sweep.kind]} · {sweep.label}</span>
+        <span className="area">{SWEEP_NAMES[sweep.kind]} · {sweepText(sweep)}</span>
         <button type="button" className="desk-close" aria-label="Close" onClick={onCancel}>×</button>
       </div>
       <h3>{verb} {keys.length} {keys.length === 1 ? "mail" : "mails"}</h3>

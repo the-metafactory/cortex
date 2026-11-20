@@ -69,26 +69,12 @@ export function reasonOn(rules: InterruptRules, switches: InterruptSwitches, cod
   return switches.get(switchKey(code, target))?.on ?? reasonDefault(rules, code);
 }
 
-const LABELS: Record<InterruptReasonCode, string> = {
-  "meeting.soon": "A meeting is about to start",
-  "reminder.due": "A reminder is due",
-  "mail.meeting-today": "Mail about a meeting later today",
-  "mail.deadline-today": "Mail with a deadline today",
-  "mail.vip": "Mail from a VIP",
-  "mail.ranked": "Other mail ranked for today",
-};
-
-export function reasonLabel(code: InterruptReasonCode, vip?: Pick<DeskVip, "address" | "label">): string {
-  return vip ? `Mail from ${vip.label ?? vip.address}` : LABELS[code];
-}
-
 export function listReasons(rules: InterruptRules, switches: InterruptSwitches, vips: readonly Pick<DeskVip, "address" | "label">[], deskOn: boolean): InterruptReasonView[] {
   const view = (code: InterruptReasonCode, vip?: Pick<DeskVip, "address" | "label">): InterruptReasonView => {
     const stored = switches.get(switchKey(code, vip?.address));
     return {
       code,
       ...(vip ? { target: vip.address } : {}),
-      label: reasonLabel(code, vip),
       on: stored?.on ?? reasonDefault(rules, code),
       available: deskOn && reasonAvailable(rules, code),
       setBy: stored?.setBy ?? "default",

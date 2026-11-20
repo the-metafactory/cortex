@@ -8,17 +8,6 @@ export type PromotableAction = (typeof PROMOTABLE)[number];
 
 export const isPromotable = (id: unknown): id is PromotableAction => PROMOTABLE.includes(id as PromotableAction);
 
-export const PROMOTABLE_LABELS: Record<PromotableAction, { label: string; note: string }> = {
-  "capability.install": { label: "Install merged capabilities", note: "Each bundle installation shows here with Undo, which uninstalls the bundle." },
-  "studio.capture": { label: "File thoughts in the Studio", note: "Each capture shows its reason and can be undone." },
-  "mail.rules": { label: "Handle mail by the rules you approved", note: "Each mail shows here with Undo. A pass that would handle many mails at once asks first." },
-  "mail.link-meeting": { label: "Link mail to its meeting", note: "When the classifier finds that a mail belongs to an upcoming meeting, the Desk links it there. Each link shows here with Undo, which brings the mail back." },
-  "ranger.retry": {
-    label: "Retry agent tasks that failed",
-    note: "Each task is retried once a day at most. A retry cannot be taken back.",
-  },
-};
-
 const KEEP_MS = 7 * DAY_MS;
 
 export function listGrants(db: Database): Set<PromotableAction> {

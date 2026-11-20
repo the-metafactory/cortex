@@ -4,7 +4,7 @@ import { modelJson, modelPaths, classifierLabel, readApiKey, type ModelConfig, t
 import { LOCAL_CONTENT, NOT_LOCAL_CONTENT, type LocalSources, type PromptContent } from "./source-boundary";
 import { logMailDecision, senderDomain, type MailFeatures, type MailLogAction } from "./mail-log";
 import type { ListedMail } from "./mail-actions";
-import { plural } from "./mail-sweep";
+import { plural } from "./wording";
 import { replySubject } from "./mail-triage";
 import { ago, mailLink } from "./rank";
 import type { SourceReading, SourceSent } from "./sources/command";
@@ -295,7 +295,7 @@ const whom = (recipients: readonly Address[]): string => {
 const detector = (w: WaitingRow): string =>
   w.detectedBy === "principal" ? "You said you expect an answer." : w.detectedBy === "follow-up" ? "It follows up on your earlier question in this conversation." : w.detectedBy.startsWith("model:") ? `The model ${w.detectedBy.slice("model:".length)} read it as asking for an answer.` : "It contains a question or a request.";
 
-const act = (id: string, label: string, role: DeskAction["role"]): DeskAction => ({ id, label, role, wired: true });
+const act = (id: string, role: DeskAction["role"]): DeskAction => ({ id, role, wired: true });
 
 export interface WaitingItemOptions {
   config?: WaitingConfig;
@@ -312,15 +312,15 @@ export function waitingItems(db: Database, now: number, options: WaitingItemOpti
     const nudgeTo = options.draft && w.account ? first : undefined;
     const canNudge = nudgeTo !== undefined;
     const silence = days === 0 ? "No answer yet." : `${plural(days, "working day")} without an answer.`;
-    const actions = [
-      ...(canNudge ? [act("mail.draft", "Draft a nudge", "primary")] : []),
-      act("waiting.snooze", `Wait ${plural(config.snoozeDays, "more day")}`, "secondary"),
-      act("waiting.done", "Done", canNudge ? "secondary" : "primary"),
+    const actions: DeskAction[] = [
+      ...(canNudge ? [{ ...act("mail.draft", "primary"), labelPhrase: { code: "waiting.nudge" as const } }] : []),
+      { ...act("waiting.snooze", "secondary"), labelPhrase: { code: "waiting.snooze", params: { days: config.snoozeDays } } },
+      act("waiting.done", canNudge ? "secondary" : "primary"),
     ];
     const more = [
-      act("waiting.no-answer", "No answer needed", "secondary"),
-      ...(w.detectedBy === "principal" ? [] : [act("waiting.expect", "Yes, I expect an answer", "secondary")]),
-      ...(w.url ? [{ ...act("open", "Open in Mail", "secondary"), url: w.url }] : []),
+      act("waiting.no-answer", "secondary"),
+      ...(w.detectedBy === "principal" ? [] : [act("waiting.expect", "secondary")]),
+      ...(w.url ? [{ ...act("open", "secondary"), url: w.url }] : []),
     ];
     return {
       key: waitingKey(w.messageId),

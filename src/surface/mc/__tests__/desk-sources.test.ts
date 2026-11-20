@@ -117,7 +117,7 @@ describe("mail on the Desk", () => {
     const [item] = mailItems({ now: NOW, mail: [mail()], events: [], vips: new Set(["ada@example.org"]) });
     expect(item).toMatchObject({ kind: "mail", urgency: "today", title: 'Ada Lovelace wrote: "Budget"', excerpt: "Could you look at the budget?", area: "switch" });
     expect(item?.why).toMatch(/^Ada Lovelace is on your VIP list\./);
-    expect(item?.actions[0]).toMatchObject({ id: "open", label: "Open in Mail", url: "message://%3Cm1%40x%3E", wired: true });
+    expect(item?.actions[0]).toMatchObject({ id: "open", url: "message://%3Cm1%40x%3E", wired: true });
     expect(item?.actions.some((a) => a.id === "vip.add")).toBe(false);
     expect(item?.score).toBeGreaterThan(70);
   });

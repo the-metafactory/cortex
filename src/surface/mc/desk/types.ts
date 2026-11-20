@@ -26,7 +26,7 @@ const FRESHNESS_LABEL: Record<NonNullable<DeskItem["freshness"]>, string | null>
   unavailable: "Observation unavailable",
 };
 
-/** The freshness label is deprecated in favour of the item's `freshness` code. This helper remains through 1.x and is removed in 2.0. */
+/** The bundled Desk's wording for an item's `freshness` code. */
 export function freshnessLabel(status: DeskItem["freshness"]): string | null {
   return status ? FRESHNESS_LABEL[status] : null;
 }

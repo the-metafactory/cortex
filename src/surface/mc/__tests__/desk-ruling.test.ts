@@ -287,11 +287,11 @@ describe("a blocked item on the Desk", () => {
       return view.items.find((i) => i.key === KEY);
     };
     const wired = await blocked(DESK);
-    expect(wired?.actions[0]).toEqual({ id: "ranger.rule", label: "Give your ruling", role: "primary", wired: true });
+    expect(wired?.actions[0]).toEqual({ id: "ranger.rule", role: "primary", wired: true });
     expect(wired?.question).toEqual({ condition: "the principal picks CSV or JSON", reason: "Blocked: the spec names both formats." });
-    expect(wired?.detail.links).toEqual([{ kind: "issue", label: "Issue", url: "https://github.com/example/app/issues/12" }]);
+    expect(wired?.detail.links).toEqual([{ kind: "issue", url: "https://github.com/example/app/issues/12" }]);
     const unwired = await blocked({ ...DESK, somaBin: "" });
-    expect(unwired?.actions[0]).toMatchObject({ id: "open", label: "Give your ruling", url: "https://github.com/example/app/issues/12" });
+    expect(unwired?.actions[0]).toMatchObject({ id: "open", labelPhrase: { code: "ranger.ruling" }, url: "https://github.com/example/app/issues/12" });
     db.close();
   });
 
