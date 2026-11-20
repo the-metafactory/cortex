@@ -111,6 +111,7 @@ import {
   buildCapabilityRegisteredEnvelope,
   type CapabilityRegistryEntry,
 } from "./bus";
+import { trackAreaPolicies } from "./surface/mc/desk/studio/view";
 import { ReviewConsumer } from "./bus/review-consumer";
 import {
   BrainConsumer,
@@ -5013,7 +5014,7 @@ export async function startCortex(
             config: config.mc.desk.ranger.config ? expandTilde(config.mc.desk.ranger.config) : "",
           },
           somaBin: config.mc.desk.soma.bin ? expandTilde(config.mc.desk.soma.bin) : "",
-          areas: config.mc.desk.areas,
+          areas: trackAreaPolicies(config.mc.desk.areas),
           conversationProjects: config.mc.desk.conversations?.tools?.projects,
           ...(config.mc.desk.studio ? { studio: resolveStudio(config.mc.desk.studio, expandTilde) } : {}),
           sources: config.mc.desk.sources,

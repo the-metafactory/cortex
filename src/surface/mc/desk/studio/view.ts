@@ -20,6 +20,38 @@ export { DEFAULT_YES_FILTER } from "../yes-filter";
 import type { StudioThreadView, StudioView, StudioProblem, StudioProposalView } from "../../../../desk-api/wire/studio";
 export type { StudioThreadView, StudioView, StudioProblem, StudioProposalView } from "../../../../desk-api/wire/studio";
 
+export type TrackedAreas<T extends StudioArea = StudioArea> = T[] & { readonly policyTracked: true };
+
+const policyRevisions = new WeakMap<object, { n: number }>();
+
+const policyFingerprint = (areas: readonly StudioArea[]): string => JSON.stringify(areas.map((a) => [a.id, a.policy ?? "cloud"]));
+
+const ownedCopy = (value: unknown): unknown => (typeof value === "object" && value !== null ? structuredClone(value) : value);
+
+export function trackAreaPolicies<T extends StudioArea>(areas: readonly T[]): TrackedAreas<T> {
+  const own = structuredClone([...areas]);
+  const counter = { n: 0 };
+  let last = policyFingerprint(own);
+  const noteWrite = (): void => {
+    const now = policyFingerprint(own);
+    if (now !== last) { counter.n++; last = now; }
+  };
+  const watch = <O extends object>(target: O): O => new Proxy(target, {
+    get: (t, k, r) => { const v = Reflect.get(t, k, r); return typeof v === "object" && v !== null ? watch(v) : v; },
+    set: (t, k, v, r) => { const ok = Reflect.set(t, k, ownedCopy(v), r); noteWrite(); return ok; },
+    deleteProperty: (t, k) => { const ok = Reflect.deleteProperty(t, k); noteWrite(); return ok; },
+  });
+  const tracked = watch(own) as TrackedAreas<T>;
+  policyRevisions.set(tracked, counter);
+  return tracked;
+}
+
+export const asTrackedAreas = <T extends StudioArea>(areas: readonly T[]): TrackedAreas<T> | null => (policyRevisions.has(areas) ? (areas as TrackedAreas<T>) : null);
+
+export function areaPolicyRevision(areas: TrackedAreas): number {
+  return policyRevisions.get(areas)?.n ?? 0;
+}
+
 export function effectivePolicy(areaIds: readonly string[], areas: readonly StudioArea[]): { policy: AreaPolicy; unknown: string[] } {
   const byId = new Map(areas.map((a) => [a.id, a.policy ?? "cloud"]));
   const unknown = areaIds.filter((id) => !byId.has(id));

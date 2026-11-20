@@ -191,6 +191,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-studio-draft.ts",
   "probe-desk-studio-draft-snapshots.ts",
   "probe-desk-studio-optional-stand.ts",
+  "probe-desk-studio-draft-thinking.ts",
   "probe-desk-package-backend.ts",
   "probe-desk-query.ts",
   "probe-desk-read-admission.ts",
