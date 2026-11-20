@@ -1,0 +1,107 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box} html,body{margin:0;width:1600px;height:900px;background:#EAE9DF;font-family:"Avenir Next","Helvetica Neue",Arial,sans-serif;color:#1A1A2E}
+.wrap{padding:24px 30px}
+h1{font-family:Georgia,serif;font-style:italic;font-size:34px;margin:0 0 3px}
+.sub{font-family:Georgia,serif;font-size:17px;color:#2D2D2D;margin-bottom:14px}
+.main{display:grid;grid-template-columns:330px 1fr 400px;gap:14px}
+.card{background:#fff;border-radius:10px;border:2px solid var(--c);overflow:hidden}
+.card .hd{background:var(--c);color:#fff;padding:8px 12px}
+.card .hd b{font-size:11px;letter-spacing:1.2px;opacity:.9;display:block}
+.card .hd span{font-size:16px;font-weight:700}
+.card ul{list-style:none;margin:6px 0 4px;padding:0 12px}
+.card li{font-size:14px;line-height:1.32;padding:10px 0;border-bottom:1px solid #EEE;display:flex;gap:8px;align-items:flex-start}
+.card li:last-child{border-bottom:0}
+.card li em{display:block;font-style:normal;color:#6B7280;font-size:11.5px}
+.ico{flex:0 0 22px;height:22px;border-radius:5px;background:var(--bg);color:var(--fg);font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center}
+/* board */
+.board{padding:10px 12px}
+.cols{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.col{background:#F6F5EF;border-radius:8px;padding:7px;min-height:318px}
+.col h4{margin:0 0 6px;font-size:11px;letter-spacing:1px;color:#4A148C;text-transform:uppercase}
+.t{background:#fff;border:1.5px solid #CFCFC4;border-radius:6px;padding:7px 8px;font-size:13px;line-height:1.25;margin-bottom:6px}
+.t small{display:block;color:#6B7280;font-size:10.5px}
+.t .who{display:inline-block;font-size:10px;font-weight:800;border-radius:4px;padding:0 4px;margin-top:3px}
+.a1{background:#E3E6F5;color:#283593}.a2{background:#DDF1EE;color:#00695C}.a3{background:#FFF0D1;color:#8A6100}.hu{background:#F1E6FA;color:#4A148C}
+.t.need{border-color:#E0A200;border-style:dashed}
+.t.appr{border-color:#C62828;border-style:dashed}
+.loop{margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lp{border:1.5px solid var(--c);border-radius:8px;padding:8px 10px;font-size:13px;line-height:1.35;background:#fff}
+.lp b{color:var(--c)}
+.rt{display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap}
+.rt span{border:1.5px solid #00796B;border-radius:14px;padding:3px 10px;font-size:12.5px;background:#fff}
+.rt span.todo{border-style:dashed}
+.rt b{font-size:12px;color:#00796B;margin-right:2px}
+/* mapping */
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:9px 9px;border-bottom:1px solid #EEE;vertical-align:top;line-height:1.3}
+td:first-child{color:#6B7280;width:44%}
+tr:last-child td{border-bottom:0}
+td.diff{color:#C62828;font-weight:600}
+.bottom{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:18px}
+.box{background:#fff;border-radius:10px;border:1.5px solid #2D2D2D;padding:12px 15px;font-size:13.5px;line-height:1.45}
+.box h3{margin:0 0 5px;font-size:14.5px}
+.rules{border-color:#C62828} .rules h3{color:#C62828}
+.foot{margin-top:8px;font-size:11.5px;color:#6B7280;display:flex;justify-content:space-between}
+.k{display:inline-block;width:12px;height:10px;border:1.5px dashed #6B7280;border-radius:3px;vertical-align:-1px}
+</style></head><body><div class="wrap">
+<h1>Bots on cortex: agents, one board, any runtime</h1>
+<div class="sub">How cortex agents work on the sovereign stack, set against Hermes profiles, bots and Kanban · DD-1, DD-11, DD-12 · cortex#2553</div>
+<div class="main">
+
+ <div class="card" style="--c:#00796B"><div class="hd"><b>ONE AGENT = ONE CONTAINER</b><span>Anatomy of a bot</span></div><ul>
+  <li><span class="ico" style="--bg:#DDF1EE;--fg:#00695C">ID</span><span>Identity<em>stack-signed envelopes · its own creds · DD-1</em></span></li>
+  <li><span class="ico" style="--bg:#DDF1EE;--fg:#00695C">P</span><span>Persona + skills<em>arc bundle, which works like a Hermes profile distribution</em></span></li>
+  <li><span class="ico" style="--bg:#DDF1EE;--fg:#00695C">R</span><span>Runtime, chosen per agent<em>claude-code · codex · pi-dev · api-agent</em></span></li>
+  <li><span class="ico" style="--bg:#DDF1EE;--fg:#00695C">W</span><span>Workspace repo<em>its whole world · repo-scoped token · Artifacts EU or local git · DD-11</em></span></li>
+  <li><span class="ico" style="--bg:#DDF1EE;--fg:#00695C">D</span><span>Data grants<em>canonical repos read-only (e.g. registry) · writes only by proposal</em></span></li>
+  <li><span class="ico" style="--bg:#DDF1EE;--fg:#00695C">N</span><span>Egress<em>no default route · per-agent allowlist</em></span></li>
+  <li><span class="ico" style="--bg:#DDF1EE;--fg:#00695C">S</span><span>Surface binding = the "bot"<em>a Discord / Slack / Mattermost account through the gateway</em></span></li></ul></div>
+
+ <div class="card" style="--c:#4A148C"><div class="hd"><b>DD-12 · MISSION CONTROL IS THE BOARD</b><span>Many agents, one board per stack</span></div>
+  <div class="board">
+   <div class="cols">
+    <div class="col"><h4>Backlog</h4>
+     <div class="t">Reconcile Sept bills<small>from inbox</small><span class="who hu">principal</span></div>
+     <div class="t">Disk alert on host-2<small>alert tap</small></div></div>
+    <div class="col"><h4>Ready</h4>
+     <div class="t">Draft invoice E-012<small>deps done</small></div>
+     <div class="t">Summarise RFC thread</div></div>
+    <div class="col"><h4>Claimed</h4>
+     <div class="t">Triage disk alert<small>heartbeat ♥ 30 s</small><span class="who a2">ops-responder</span></div>
+     <div class="t">Research Hermes<small>heartbeat ♥</small><span class="who a3">research</span></div></div>
+    <div class="col"><h4>Waiting on you</h4>
+     <div class="t need">Which cost centre?<small>needs_input → attention card</small><span class="who a1">bookkeeper</span></div>
+     <div class="t appr">Send invoice $4,200<small>proposal → passkey</small><span class="who a1">bookkeeper</span></div></div>
+    <div class="col"><h4>Review → done</h4>
+     <div class="t">Restart cache svc<small>auto tier · audited</small><span class="who a2">ops-responder</span></div>
+     <div class="t">Weekly digest<small>reviewer approved</small><span class="who a3">research</span></div></div>
+   </div>
+   <div class="loop">
+    <div class="lp" style="--c:#E0A200"><b>needs_input:</b> the agent blocks, an attention card opens and Discord pings you. You comment, and the agent resumes with the whole thread.</div>
+    <div class="lp" style="--c:#C62828"><b>awaiting approval:</b> the card links a broker proposal. You approve with a passkey bound to the hash, then the broker executes.</div>
+   </div>
+   <div class="rt"><b>RUNTIMES</b><span>claude-code ✓</span><span>api-agent ✓</span><span>codex · pi via sage + bus peers ✓</span><span class="todo">codex as dispatch harness</span></div>
+  </div></div>
+
+ <div class="card" style="--c:#1A1A2E"><div class="hd"><b>PRIOR ART · HERMES (NOUS)</b><span>Same shape, different trust</span></div>
+  <table>
+   <tr><td>Profile</td><td>Agent (fragment + persona + skills)</td></tr>
+   <tr><td>Bot = profile + gateway</td><td>Agent + surface binding</td></tr>
+   <tr><td>Kanban (SQLite, boards)</td><td>Mission Control board, one per stack</td></tr>
+   <tr><td>claim + heartbeat · deps</td><td>Same, as signed bus events</td></tr>
+   <tr><td>block(needs_input) + comment</td><td>Attention card + thread</td></tr>
+   <tr><td>task_events (local)</td><td>Hash-chained audit, off-host, verified</td></tr>
+   <tr><td>Codex / Claude via herdr</td><td>Runtime per agent (substrate)</td></tr>
+   <tr><td>Profiles see every task</td><td class="diff">An agent sees only what it's granted</td></tr>
+   <tr><td>Dashboard skips auth on localhost</td><td class="diff">CF Access + passkey step-up</td></tr>
+   <tr><td>Trusted local user, single host</td><td class="diff">Container per agent · broker holds creds</td></tr>
+  </table></div>
+</div>
+
+<div class="bottom">
+ <div class="box"><h3>Wired today</h3>Claude Code dispatch · api-agent harness · Codex and pi through sage and bus peers · Mission Control iteration kanban + attention queue · surface gateway with Discord / Slack / Mattermost bundles</div>
+ <div class="box"><h3>To build</h3>Claim, heartbeat and dependencies on the board · needs_input loop · Codex as a dispatch harness · per-agent containers + workspace repos · broker + passkey approvals · off-host audit</div>
+ <div class="box rules"><h3>Rules</h3>An agent never holds write credentials for business systems or canonical repos.<br>Every board transition is a signed event, so it's in the audit log.<br>No shared "default" profile: each agent is named, granted and contained.</div>
+</div>
+<div class="foot"><span><span class="k"></span> dashed = to build · solid = exists · example cards are illustrative</span><span>Hermes: hermes-agent.nousresearch.com/docs (profiles, kanban) · Design: docs/design-sovereign-agent-stack.md</span></div>
+</div></body></html>
