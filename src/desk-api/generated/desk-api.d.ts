@@ -15,7 +15,7 @@
 // the published shape changes.
 // ============================================================================
 
-export declare const DESK_API_VERSION = "1.15.0";
+export declare const DESK_API_VERSION = "1.15.1";
 declare const INTERRUPT_REASON_CODES: readonly [
 	"meeting.soon",
 	"reminder.due",
@@ -586,6 +586,7 @@ export interface LogEntry {
 	at?: string;
 	text: string;
 }
+/** `stand` is an optional answer so far for a question: empty string means no stand. New question stands use one line; legacy multiline text and topic/making stands remain readable. Full document text is DeskStudioDraft.text. */
 export interface StudioThread {
 	id?: string;
 	slug: string;
@@ -804,6 +805,7 @@ export type DeskStudioResponse = {
 	studio: DeskStudioView;
 	materialText: "untrusted";
 };
+/** `text` is the complete principal-edited Markdown document, independent of StudioThread.stand, including when the stand is empty. */
 export interface DeskStudioDraft {
 	text: string;
 	revision: string;

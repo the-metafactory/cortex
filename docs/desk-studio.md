@@ -109,6 +109,7 @@ Rules:
 
 - Front matter is YAML between two `---` lines. Unknown keys are ignored.
 - `## Question` is required. The other H2 sections are optional, appear at most once, and may come in any order. Other H2 sections are ignored.
+- For a question, **Where I stand** is an optional one-line answer so far. An absent or empty section reads as `stand: ""`; the published field remains a string. Full reasoning belongs in notes and the [thread document draft](#thread-document-draft). Missing stand text never blocks draft reads, draft saves, thinking or closure. Existing multiline stands and topic or making stands remain readable without conversion. New question stand proposals and rewordings must use one line; the writer refuses multiline input instead of truncating it. Keeping an existing proposal preserves its text. <!-- glossary-ignore: thread, topic -->
 - **Assistant's notes** are append-only H3 entries. Older files may head the section `## Ivy's notes`; the parser reads both, and a file with both headings reads the notes of each. The heading is an ISO time with a zone. Below it come metadata lines, then a blank line and the note text:
   - `trigger:` (required) names what started the note.
   - `model:` (required) names the model policy or model that wrote it.
@@ -220,6 +221,10 @@ Active drafts are editable. Parked and closed drafts return `editable: false` an
 
 The document lives in `drafts/<validated-thread-slug>.md`, separately from `threads/*.md`. Drafts do not enter thread listings or capture search. Assistant read tools gain no draft write operation. This document is separate from the unsent Studio session composer draft described under Live discussions. <!-- glossary-ignore: thread -->
 
+`StudioThread.stand` is the optional answer so far. `DeskStudioDraft.text` carries the complete document. Saving either never copies its text into the other. Desk API 1.15.1 clarifies these roles without removing fields or rewriting existing stands.
+
+Run `bun scripts/probe-desk-studio-optional-stand.ts` to verify a question without a stand can read and edit its full draft. The probe uses a disposable development stack and checks that legacy multiline stands round-trip unchanged. <!-- glossary-ignore: run -->
+
 Run `bun scripts/probe-desk-studio-draft.ts` to verify HTTP round-trip, a stale-save refusal, process restart persistence, request replay and unchanged notes and thread listings. The probe starts a development Cortex runtime using a disposable Git-backed Studio and temporary HOME. It never reads a principal's Studio. <!-- glossary-ignore: thread, run -->
 
 ## Thread page
@@ -302,7 +307,7 @@ The stack-wide `studio.thinking` keeps Ranger's raw `dailyRuns` and `runs`.
 
 The response is `{ ok, message, studio }`. Ranger retains the request id after completion, so a retry uses the original job rather than starting another. Reusing an id with a different thread or mode returns a conflict. The page keeps the request pending until a note carrying that job's `run` UUID appears. Other notes cannot clear it. A failed job shows its failure reason. Queue and note changes arrive through the Studio's 30-second refresh.
 
-Thinking never replaces Where I stand automatically; generated stands remain proposals. Native Ranger execution continues to enforce the model policy and Studio write checks.
+Thinking never replaces Where I stand automatically; generated stands remain proposals. Native Ranger execution continues to enforce the model policy and Studio write checks. For a question, Ranger's native producer asks for a single-line stand and refuses a generated stand that contains a line break, writing nothing; full reasoning stays in the note.
 
 ## Live discussions
 

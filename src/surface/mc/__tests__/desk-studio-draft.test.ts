@@ -20,6 +20,25 @@ const save = async (text: string, thread = "question") => {
 };
 
 describe("Studio thread drafts over HTTP", () => {
+  it("reads optional and legacy stands unchanged while the full draft stays independently editable", async () => {
+    for (const stand of [null, "", "Try a narrow fold.", "Legacy answer.\n\nFull reasoning stays here."]) {
+      const file = await rig.setStand(stand);
+      const listing = await (await fetch(`${rig.baseUrl()}/api/desk/studio`)).json();
+      expect(listing.studio.active.find((thread: { slug: string }) => thread.slug === "question").stand).toBe(stand ?? "");
+      await save(markdown);
+      expect((await rig.read()).text).toBe(markdown);
+      expect(await readFile(join(rig.studioDir, "threads/question.md"), "utf8")).toBe(file);
+    }
+    for (const type of ["topic", "making"]) {
+      const stand = "Existing stand.\n\nStill here.";
+      const file = await rig.setStand(stand, type);
+      await save(markdown, type);
+      const listing = await (await fetch(`${rig.baseUrl()}/api/desk/studio`)).json();
+      expect(listing.studio.active.find((thread: { slug: string }) => thread.slug === type).stand).toBe(stand);
+      expect(await readFile(join(rig.studioDir, `threads/${type}.md`), "utf8")).toBe(file);
+    }
+  });
+
   it("supplies the fixture identity to the environment-filtered HTTP writer", async () => {
     await save("A disposable draft");
     expect(rig.git("show", "-s", "--format=%an <%ae>%n%cn <%ce>", "HEAD")).toBe("Test <test@example.org>\nTest <test@example.org>");
