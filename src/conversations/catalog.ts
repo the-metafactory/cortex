@@ -81,7 +81,7 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
   ] },
   "studio-close": { row: "O11", label: "Studio close", owner: "Studio", egress: "local", fields: [
     text("thread", "Thread", true, true), text("outcome", "Outcome (decided, shipped or dropped)"), long("text", "Outcome text", true),
-    long("expect", "What you expect to happen"), { name: "reviewOn", label: "Review date", kind: "date", required: false },
+    long("expect", "What you expect to happen"), { name: "reviewOn", label: "Review date", kind: "date", required: false }, text("draftRevision", "Approved draft revision", false),
   ] },
   flow: { row: "O14", label: "Flow", owner: "Pulse", egress: "local", fields: [
     text("name", "Name"), long("definition", "Flow definition", true),

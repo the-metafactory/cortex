@@ -237,3 +237,26 @@ export interface DeskStudioDraftWrite {
 }
 
 export type DeskStudioDraftResponse = DeskStudioDraft | { error: string } | (DeskStudioDraft & { error: string });
+
+export interface DeskStudioDraftSnapshotMetadata {
+  id: string;
+  revision: string;
+  transition: "park" | "close";
+  at: string;
+}
+
+export interface DeskStudioDraftSnapshot extends DeskStudioDraftSnapshotMetadata {
+  text: string;
+}
+
+export type DeskStudioDraftSnapshotsResponse = { snapshots: DeskStudioDraftSnapshotMetadata[] } | { error: string };
+export type DeskStudioDraftSnapshotResponse = DeskStudioDraftSnapshot | { error: string };
+
+export interface DeskStudioDraftPrecondition {
+  draftRevision?: string;
+}
+
+export type DeskStudioDraftTransitionAct = DeskStudioDraftPrecondition & { thread: string; requestId: string } & (
+  | { act: "park" }
+  | { act: "close"; outcome: ThreadOutcome; text: string; expect?: string; reviewOn?: string }
+);

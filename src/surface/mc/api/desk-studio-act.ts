@@ -50,11 +50,12 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
     areas: desk.areas,
     requestId: body.requestId,
     act: parsed.data,
+    wait: parsed.data.act === "close" || parsed.data.act === "park",
     ...(deps.now ? { now: deps.now() } : {}),
     ...(deps.git ? { git: deps.git } : {}),
     ...(deps.lock ? { lock: deps.lock } : {}),
   });
-  if (!result.ok) return fail(result.status, result.error, result.needsPark ? { needsPark: true } : {});
+  if (!result.ok) return fail(result.status, result.error, { ...(result.needsPark ? { needsPark: true } : {}), ...(result.revision !== undefined ? { text: result.text, revision: result.revision, editable: result.editable } : {}) });
   try {
     if (deps.db) await syncStudioBalance(deps.db, desk, deps.now?.().getTime() ?? Date.now());
   } catch {

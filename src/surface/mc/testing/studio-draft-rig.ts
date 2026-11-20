@@ -69,6 +69,8 @@ export async function openStudioDraftRig() {
     baseUrl: () => server.url,
     gitRaw: (...args: string[]) => rawDraftGit(studioDir, ...args),
     git: (...args: string[]) => draftGit(studioDir, ...args),
+    act: (body: unknown, baseUrl = server.url) => fetch(`${baseUrl}/api/desk/studio/act`, { method: "POST", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify(body) }),
+    snapshots: (thread = "question", id?: string) => fetch(`${server.url}/api/desk/studio/${thread}/draft/snapshots${id === undefined ? "" : `/${id}`}`),
     setStand: async (stand: string | null, thread = "question") => {
       const path = join(studioDir, `threads/${thread}.md`);
       const original = await readFile(path, "utf8");

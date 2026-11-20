@@ -227,6 +227,23 @@ Run `bun scripts/probe-desk-studio-optional-stand.ts` to verify a question witho
 
 Run `bun scripts/probe-desk-studio-draft.ts` to verify HTTP round-trip, a stale-save refusal, process restart persistence, request replay and unchanged notes and thread listings. The probe starts a development Cortex runtime using a disposable Git-backed Studio and temporary HOME. It never reads a principal's Studio. <!-- glossary-ignore: thread, run -->
 
+### Immutable draft snapshots
+
+Desk API 2.0.0 adds draft snapshots and is a major version: a `park` or `close` that 1.x accepted now refuses when its thread has a saved draft and the request has no `draftRevision`. A client checks for major 2 on `GET /api/desk/contract` and sends `draftRevision`, using the opaque revision from GET or PUT. Every previously saved draft requires it, including a draft saved as empty. A missing or stale revision returns 409 with the current `text`, `revision`, and `editable`. The thread and snapshot history stay unchanged. A never-edited legacy empty draft may still park or close without this field. Conversation close also accepts `draftRevision`. Existing outcome validation still applies. <!-- glossary-ignore: thread -->
+
+A successful park or close stores `{id, revision, transition, at, text}` in the same Git transaction as the state change. `transition` is `park` or `close`; `at` is a UTC ISO timestamp. The draft becomes `editable: false` in that committed state. Snapshot text preserves the approved draft exactly. A shipped outcome requires nonblank draft text. A link with a description counts as text. Decided and dropped outcomes can preserve an empty draft. The act's short `text` summary, `expect`, and `reviewOn` remain separate from the full answer and reasoning.
+
+- `GET /api/desk/studio/<thread>/draft/snapshots` returns `{snapshots: [{id, revision, transition, at}]}`, ordered by timestamp then id.
+- `GET /api/desk/studio/<thread>/draft/snapshots/<snapshot>` returns that snapshot's metadata and stored `text`.
+
+Both routes use the current draft's Host, Origin, and identity gates and send `Cache-Control: no-store`. Thread ids use the existing lowercase Studio slug form. Snapshot ids are lowercase version-4 UUIDs. Invalid identifiers return 400; an unknown thread or snapshot returns 404. Reads return stored snapshot text independently of later draft changes. <!-- glossary-ignore: thread -->
+
+Unpark restores draft editability. Later edits and transitions append distinct snapshots without changing earlier files. Successful request retries return the recorded transaction without adding snapshots. Failed transactions restore the thread and remove any new snapshot. Snapshot files live under `draft-snapshots/<thread>/<snapshot>.json`, outside `threads/*.md` scanning. <!-- glossary-ignore: thread -->
+
+The combined open or unpark act can park a never-edited empty thread to make room. If the target has an edited draft, first park it explicitly with its `draftRevision`, then open or unpark the other thread. <!-- glossary-ignore: thread -->
+
+`bun scripts/probe-desk-studio-draft-snapshots.ts` runs the HTTP workflow against a disposable Git-backed development stack. It checks stale close refusal, exact parked text, unpark and edit preservation, retry identity, and blank shipped refusal.
+
 ## Thread page
 
 Opening a thread on the board zooms the card into its thread page; `?desk=studio&thread=<slug>` holds the open thread, so reload and the browser's back button work. With `prefers-reduced-motion`, the page opens and closes without animation. Keep, Dismiss, Close with an outcome, Park, Bring back, Think tonight and the response box write to the files (see Changes). Discuss stays disabled until live sessions with the assistant arrive.
@@ -252,10 +269,10 @@ Goals, events and people link to their `href` when the material or the event has
 | `spar` | `thread`, `mode` | enqueues native `assistant-think`; its eventual note is a separate git commit |
 | `respond` | `thread`, `text` | a Responses entry; clears "(name) waits on you" |
 | `keep`, `dismiss` | `thread`, `note` (the note's heading time) | the note's `status:`; keeping a `stand` also replaces "Where I stand" |
-| `park` | `thread` | `state: parked` |
+| `park` | `thread`, optional `draftRevision` | `state: parked` and an immutable draft snapshot |
 | `unpark` | `thread`, `park` when every place is in use | `state: active` |
 | `think` | `thread`, `on` | `thinkTonight` |
-| `close` | `thread`, `outcome`, `text`; `expect` and `reviewOn` when decided | `state: closed`, `closed`, `outcome`, the Outcome section |
+| `close` | `thread`, `outcome`, `text`, optional `draftRevision`; `expect` and `reviewOn` when decided | `state: closed`, `closed`, `outcome`, the Outcome section and an immutable draft snapshot |
 | `open` | `from` (`proposal` or `capture`), `id`, `area`, `park` when every place is in use, optional `answers` | a new `threads/<slug>.md`; removes the proposal or capture |
 
 Rules:

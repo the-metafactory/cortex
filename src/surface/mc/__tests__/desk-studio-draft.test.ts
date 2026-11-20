@@ -116,7 +116,7 @@ describe("Studio thread drafts over HTTP", () => {
     const { body, saved } = await save(markdown);
     const parked = await fetch(`${rig.baseUrl()}/api/desk/studio/act`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ act: "park", thread: "question", requestId: randomUUID() }),
+      body: JSON.stringify({ act: "park", thread: "question", draftRevision: saved.revision, requestId: randomUUID() }),
     });
     expect(parked.status).toBe(200);
     await parked.arrayBuffer();

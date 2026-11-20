@@ -1,1 +1,1 @@
-export const DESK_API_VERSION = "1.15.1";
+export const DESK_API_VERSION = "2.0.0";
