@@ -74,6 +74,7 @@ export async function openStudioDraftRig() {
       const original = await readFile(path, "utf8");
       const start = original.indexOf("## Where I stand");
       const end = original.indexOf("## Assistant's notes");
+      if (end < 0) throw new Error(`threads/${thread}.md has no Assistant's notes heading`);
       const prefix = original.slice(0, start < 0 ? end : start);
       const file = `${prefix}${stand === null ? "" : `## Where I stand\n\n${stand}\n\n`}${original.slice(end)}`;
       await writeFile(path, file);
