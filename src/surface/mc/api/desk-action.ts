@@ -2,7 +2,8 @@ import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { answer } from "../desk/act-result";
 import { afterMeetingEvents, dismissAfterMeeting, MEETING_AFTER_KIND, MEETING_DISMISS_ACTION } from "../desk/meeting-after";
-import { isPromotable, PROMOTABLE_LABELS, setGrant } from "../desk/autonomy";
+import { isPromotable, setGrant } from "../desk/autonomy";
+import { AUTONOMY_TEXT } from "../desk/wording";
 import { isRangerAction, oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner } from "../desk/actions";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
@@ -76,7 +77,7 @@ export async function handleDeskAutonomy(req: Request, db: Database, runtime: De
   if (!ready) return fail(409, "That action is not set up on this stack.");
   setGrant(db, body.action, body.on, now());
   if (body.on) void (body.action === "mail.rules" ? runtime?.mailRules?.kick() : runtime?.autonomy?.tick());
-  const label = PROMOTABLE_LABELS[body.action].label.toLowerCase();
+  const label = AUTONOMY_TEXT[body.action].label.toLowerCase();
   return Response.json(
     { ok: true, message: body.on ? `The Desk will ${label} on its own and list them under "Done for you".` : `The Desk will ask you again before it acts: ${label}.` },
     { headers: noStore },

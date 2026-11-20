@@ -252,7 +252,7 @@ describe("Balance project writer for conversation proposals", () => {
 });
 
 describe("Balance Inbox writer for conversation proposals", () => {
-  const MAIL: DeskItem = { key: "mail:probe-1@example.test", kind: "mail", source: "work-mail", area: "lab", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ kind: "mail", label: "Open", url: "message://probe-1" }] } };
+  const MAIL: DeskItem = { key: "mail:probe-1@example.test", kind: "mail", source: "work-mail", area: "lab", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ kind: "mail", url: "message://probe-1" }] } };
   const LISTED: ListedMail = { kind: "mail", id: "probe-1@example.test", from: { name: "Kit Shop", address: "Sales@Kits.Example" }, subject: "Quote for the glider kit", receivedAt: "2026-11-02T08:00:00.000Z", unread: true, account: "work", sourceId: "work-mail" };
   const inboxRig = (view: DeskItem[] = [{ ...MAIL }]) => rig(outline([GLIDER]), undefined, view, [LISTED]);
   const inbox = (r: Awaited<ReturnType<typeof rig>>) => readMyDay(r.db, r.options, Date.now()).inbox;

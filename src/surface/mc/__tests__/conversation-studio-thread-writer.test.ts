@@ -32,7 +32,8 @@ describe("Studio thread writer", () => {
       expect(reply.status).toBe(200);
       expect(reply.body.proposal.feedback).toBe("created");
       expect(r.commits()).toHaveLength(2);
-      expect(r.repo.git("show", "--name-only", "--format=", "HEAD").trim().split("\n").sort()).toEqual(["threads/beta.md", "threads/who-teaches-in-march.md"]);
+      const changed = r.repo.git("show", "--name-only", "--format=", "HEAD").trim().split("\n").sort();
+      expect(changed).toEqual(["draft-snapshots/.gitattributes", expect.stringMatching(/^draft-snapshots\/beta\/[a-f0-9-]+\.json$/), "threads/beta.md", "threads/who-teaches-in-march.md"]);
       expect(r.parsed("beta").state).toBe("parked");
       expect(r.parsed("who-teaches-in-march").state).toBe("active");
     } finally { r.repo.clean(); }

@@ -34,21 +34,20 @@ export interface DeskArea {
   color: string;
 }
 
-/** `label` is deprecated in favour of `id` for fixed wording, or `labelPhrase` for wording with parameters. Adapter capability labels are content. Served through 1.x; removed in 2.0. */
+/** A client phrases an action from its `id`, or from `labelPhrase` when the wording takes parameters or differs by card. `content` is wording shown as it is and never phrased: an adapter capability's own label. */
 export interface DeskAction {
   id: string;
-  label: string;
   labelPhrase?: DeskPhrase;
+  content?: string;
   role: "primary" | "secondary";
   wired: boolean;
   url?: string;
   target?: string;
 }
 
-/** `label` is deprecated in favour of `kind` and `url`, or `labelPhrase` for a task identifier. Served through 1.x; removed in 2.0. */
+/** A client phrases a link from its `kind` and `url`, or from `labelPhrase` for a task identifier. */
 export interface DeskLink {
   kind: "mail" | "issue" | "report" | "source" | "unsubscribe-page" | "task" | "meeting" | "meeting-join";
-  label: string;
   labelPhrase?: DeskPhrase;
   url: string;
 }
@@ -185,21 +184,19 @@ export interface DeskInterrupt {
   feedback?: InterruptFeedback;
 }
 
-/** `label` is deprecated in favour of `code` and, for VIP mail, `target` and the configured VIP label. Served through 1.x; removed in 2.0. */
+/** A client phrases a reason from its `code` and, for VIP mail, `target` and the configured VIP label. */
 export interface InterruptReasonView {
   code: InterruptReasonCode;
   target?: string;
-  label: string;
   on: boolean;
   available: boolean;
   setBy: "default" | "switch" | "feedback";
   changedAt?: number;
 }
 
-/** `label` is deprecated in favour of `kind`. Served through 1.x; removed in 2.0. */
+/** A client phrases a group from its `kind`. */
 export interface DeskFoldedGroup {
   kind: DeskItemKind;
-  label: string;
   count: number;
   example: string;
 }
@@ -281,8 +278,8 @@ export type DeskMailClassifier =
   | { kind: "endpoint"; host: string; model: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string; localProblem?: string }
   | { kind: "command"; command: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string; localProblem?: string };
 
-/** Each type's `label` and `note` are deprecated in favour of its `action` code. Served through 1.x; removed in 2.0. */
+/** A client phrases each type from its `action` code. */
 export interface DeskAutonomy {
-  types: { action: string; label: string; note: string; on: boolean }[];
+  types: { action: string; on: boolean }[];
   done: { key: string; action?: string; undo?: string; stop?: string; title: string; message: string; at: number; ok: boolean }[];
 }

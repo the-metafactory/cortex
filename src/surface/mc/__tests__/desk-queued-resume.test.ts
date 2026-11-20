@@ -3,6 +3,7 @@ import { handleDeskAction } from "../api/desk-action";
 import { HandledLedger, planRangerAction } from "../desk/actions";
 import { rankItems } from "../desk/rank";
 import type { RangerState } from "../desk/sources/ranger";
+import { actionText } from "../desk/wording";
 
 const CLI = { bin: "/opt/ranger/bin/ranger", config: "" };
 const KEY = "ranger:example/app#12";
@@ -40,6 +41,6 @@ describe("run both now", () => {
     const card = items.find((i) => i.key === KEY);
     expect(card?.why).toContain('behind "Holder task"');
     expect(card?.why).toContain("place 2");
-    expect(card?.actions.map((a) => [a.id, a.label])).toEqual([["ranger.run-now", "Run both now"], ["snooze", "Not now"]]);
+    expect(card?.actions.map((a) => [a.id, actionText(a)])).toEqual([["ranger.run-now", "Run both now"], ["snooze", "Not now"]]);
   });
 });

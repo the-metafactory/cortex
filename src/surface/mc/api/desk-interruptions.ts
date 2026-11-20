@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { NO_INTERRUPTIONS, type InterruptRules } from "../desk/interrupt";
-import { isMailReason, isReasonCode, listReasons, PER_VIP, readSwitches, reasonAvailable, reasonLabel, recordFeedback, setSwitch } from "../desk/interrupt-switches";
+import { isMailReason, isReasonCode, listReasons, PER_VIP, readSwitches, reasonAvailable, recordFeedback, setSwitch } from "../desk/interrupt-switches";
+import { reasonLabel } from "../desk/wording";
 import { listVips, type DeskVip } from "../desk/vips";
 import type { InterruptReasonCode } from "../desk/types";
 import { reply } from "./desk-reply";

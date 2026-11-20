@@ -56,7 +56,7 @@ type MappedRow = { kind: "item"; item: DeskItem; owner: string | null } | { kind
 
 function rowCapabilityActions(binding: ReadBinding, owner: string | null): DeskItem["actions"] {
   if (owner !== null) return [];
-  return (binding.capabilities ?? []).map(capability => ({ id: `${ADAPTER_CAPABILITY_ACTION}${capability.capabilityId}`, label: redactToolText(capability.label), role: "secondary" as const, wired: true, target: capability.capabilityId }));
+  return (binding.capabilities ?? []).map(capability => ({ id: `${ADAPTER_CAPABILITY_ACTION}${capability.capabilityId}`, content: redactToolText(capability.label), role: "secondary" as const, wired: true, target: capability.capabilityId }));
 }
 
 function mappedItem(row: ObservationView, binding: ReadBinding, now: number, ownerKinds?: ReadonlySet<string>): MappedRow {
@@ -92,7 +92,7 @@ function mappedItem(row: ObservationView, binding: ReadBinding, now: number, own
       detail: {
         summary: why.data,
         history: [`${freshnessLabel(status) ?? "Observed"}: last success ${new Date(row.lastSuccessAt).toISOString()}; last attempt ${row.lastAttemptAt === null ? "unavailable" : new Date(row.lastAttemptAt).toISOString()}.`],
-        refs: [key], links: url.data === null ? [] : [{ kind: "source" as const, label: "Open source", url: url.data }],
+        refs: [key], links: url.data === null ? [] : [{ kind: "source" as const, url: url.data }],
       },
     },
   };

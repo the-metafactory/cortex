@@ -1,5 +1,5 @@
 {
-  "version": "1.15.0",
+  "version": "2.1.0",
   "routes": [
     "DELETE /api/conversations/grants/{grantId}",
     "DELETE /api/desk/corrections",
@@ -53,6 +53,8 @@
     "GET /api/desk/studio",
     "GET /api/desk/studio/relations",
     "GET /api/desk/studio/{thread}/draft",
+    "GET /api/desk/studio/{thread}/draft/snapshots",
+    "GET /api/desk/studio/{thread}/draft/snapshots/{snapshot}",
     "GET /api/desk/unimportant",
     "GET /api/desk/vips",
     "GET /api/vigil/subjects",
@@ -194,6 +196,7 @@
     "day.task-fits",
     "goal.check-regressed",
     "goal.reading",
+    "goal.run-check",
     "handoff.done",
     "mail.assistant",
     "mail.attach-undone",
@@ -214,6 +217,7 @@
     "mail.invitation",
     "mail.invite-proposed",
     "mail.invite-replied",
+    "mail.junk-review",
     "mail.kept",
     "mail.link-undone",
     "mail.linked",
@@ -253,6 +257,8 @@
     "mailrule.release",
     "meeting.dismissed",
     "meeting.ended",
+    "meeting.join",
+    "meeting.open",
     "meeting.soon",
     "ranger.action-done",
     "ranger.action-queued",
@@ -266,6 +272,7 @@
     "ranger.resume-queued",
     "ranger.retried",
     "ranger.retry-failed",
+    "ranger.ruling",
     "ranger.stopped",
     "reminder.due",
     "routine.approval",
@@ -281,7 +288,9 @@
     "studio.done",
     "studio.spar-queued",
     "task.link",
-    "vip.add"
+    "vip.add",
+    "waiting.nudge",
+    "waiting.snooze"
   ],
   "vocabulary": [
     "ADAPTER_CAPABILITY_ACTION: \"adapter.capability:\"",

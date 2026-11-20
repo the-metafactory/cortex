@@ -73,8 +73,9 @@ export function fileBalanceInbox(state: AppState, meta: MyDayMeta, desk: DeskOpt
   meta.inbox.splice(index, 1);
   stampTouched(node, date);
 }
+const isCreditedResponse = (node: OutlineNode): boolean => node.id.startsWith("studio-response:") && node.done === true;
 function hasStudioOwner(node: OutlineNode, meta: MyDayMeta): boolean {
-  return studioOwned(meta, node.id) || node.children.some(child => hasStudioOwner(child, meta));
+  return studioOwned(meta, node.id) || node.children.some(child => !isCreditedResponse(child) && hasStudioOwner(child, meta));
 }
 function preserveFocusProject(parent: OutlineNode, date: string): void {
   if (parent.children.length === 1 && parent.focusMonth === date.slice(0, 7)) throw new Error("Remove monthly focus first, then move or remove this project's last child.");

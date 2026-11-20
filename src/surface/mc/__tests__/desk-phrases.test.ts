@@ -29,8 +29,9 @@ const iso = (at: number): string => new Date(at).toISOString();
 const WORDING = "A goal's original wording.";
 const DAY_MS = 24 * 3_600_000;
 const WHY_CODES = "ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon meeting.ended reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious".split(" ");
+const CARD_LABEL_CODES: readonly string[] = ["meeting.join", "meeting.open", "ranger.ruling", "mail.junk-review", "goal.run-check", "waiting.nudge", "waiting.snooze"];
 const LABEL_CODES: readonly string[] = [
-  "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "mail.put-away-time",
+  "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", ...CARD_LABEL_CODES, "mail.put-away-time",
   "mail.put-away-meeting", "mail.put-away-person", "correction.source", "mail.correction", "mail.sweep-category",
 ];
 const CLASSIFIER_REASON = "Original classifier content";
@@ -153,6 +154,8 @@ test("GET /api/desk serves every why phrase code beside its original sentence or
   const escalation = seedSubject("escalation", "example/other#6", "needs-principal", null);
   waiting.set("example/other#6", { kind: "open", title: "Escalated", question: "Original agent question?", url: "https://example.test/6" });
   let view = await read();
+  expect(item(view, "ranger:example/app#1").actions[0]).toMatchObject({ id: "open", labelPhrase: { code: "ranger.ruling" } });
+  expect(item(view, sensor).actions[0]).toMatchObject({ id: "goal.check", labelPhrase: { code: "goal.run-check" } });
   check(view, "ranger:example/app#1", "The agent in app cannot go on without a decision from you.", { code: "ranger.blocked", params: { repo: "app" } });
   check(view, "ranger:example/app#2", `It stopped today at ${clock(EARLIER)} in app, and nothing moves until it is retried or parked.`, { code: "ranger.stopped", params: { repo: "app", endedAt: iso(EARLIER), failed: true } });
   check(view, "ranger:example/app#3", "Ranger queued the resume, at place 2. It starts when the lane is free.", { code: "ranger.resume-queued", params: { position: 2 } });
@@ -246,7 +249,7 @@ const postSnooze = async (until: unknown): Promise<DeskPhrase | undefined> => {
   return (await response.json() as { labelPhrase?: DeskPhrase }).labelPhrase;
 };
 
-test("GET, a snooze answer and the classifier input serve every label phrase code", async () => {
+test("GET, a snooze answer and the classifier input serve every label phrase code except the card wordings, which the why-code GET test and the meeting, junk and waiting tests serve", async () => {
   const config = { ...CONFIG, maxPerPass: 1, sourcePolicy: "local" as const };
   const corrections: DeskPhrase[] = [];
   options().mailActions = { move: ["unused-move"], draft: ["unused-draft"], timeoutSeconds: 5 };
@@ -283,7 +286,7 @@ test("GET, a snooze answer and the classifier input serve every label phrase cod
   ];
   expect(snoozed.map(phrase => phrase?.code)).toEqual(["mail.put-away-time", "mail.put-away-meeting", "mail.put-away-person"]);
   expect(corrections.map(phrase => phrase.code)).toEqual(["mail.correction"]);
-  expect([...labelCodes(view), ...snoozed.flatMap(phrase => phrase ? [phrase.code] : []), ...corrections.map(phrase => phrase.code)].sort()).toEqual([...LABEL_CODES].sort());
+  expect([...labelCodes(view), ...snoozed.flatMap(phrase => phrase ? [phrase.code] : []), ...corrections.map(phrase => phrase.code)].sort()).toEqual(LABEL_CODES.filter(code => !CARD_LABEL_CODES.includes(code)).sort());
 });
 
 test("mixed mail wording separates prose, titles and URLs from named VIP and ISO parameters", () => {
@@ -344,8 +347,9 @@ test("a running stack serves why phrases, link kinds and action label phrases th
     const mail = item(view, "mail:label");
     const link = mail.detail.links[0];
     const action = [...mail.actions, ...(mail.more ?? [])].find(a => a.id === "vip.add");
-    expect(link).toEqual({ kind: "mail", label: "Open in Mail", url: "message://label" });
-    expect(action).toMatchObject({ label: "Always show mail from Sender", labelPhrase: { code: "vip.add", params: { name: "Sender" } } });
+    expect(link).toEqual({ kind: "mail", url: "message://label" });
+    expect(action).not.toHaveProperty("label");
+    expect(action).toMatchObject({ labelPhrase: { code: "vip.add", params: { name: "Sender" } } });
     console.log(JSON.stringify({ probe: "curl /api/desk", status: 200, why: found.why, whyPhrase: found.whyPhrase, reason: found.interrupt?.reason, link, action }));
   } finally {
     stack.stop(true);

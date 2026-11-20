@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { getStudioDraft, saveStudioDraft } from "../desk/studio/draft";
+import { readFile, readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { runStudioAct } from "../desk/studio/writer";
 import { directRequest, failureOf, studioConversationRig } from "./studio-conversation-rig";
 
@@ -35,17 +38,38 @@ describe("Studio close writer", () => {
     } finally { r.repo.clean(); }
   });
 
-  test("closes as shipped without an expectation, and a parked thread as dropped", async () => {
+  test("refuses shipped without draft text and closes a parked thread as dropped", async () => {
     const r = await rig();
     try {
-      r.created((await r.submit({ thread: "beta", outcome: "shipped", text: "It went out.", expect: "", reviewOn: "" })).reply);
-      const shipped = r.parsed("beta");
-      expect(shipped).toMatchObject({ state: "closed", outcome: "shipped", outcomeText: "It went out." });
-      expect(shipped.expect).toBeUndefined();
-      expect(shipped.reviewOn).toBeUndefined();
+      const refused = await r.submit({ thread: "beta", outcome: "shipped", text: "It went out.", expect: "", reviewOn: "" });
+      expect(refused.reply.status).toBe(409);
+      expect(failureOf(refused.reply.body.proposal)).toBe("A shipped outcome needs nonblank draft text. Nothing was created.");
+      expect(r.parsed("beta").state).toBe("active");
+      expect(r.commits()).toHaveLength(1);
 
       r.created((await r.submit({ thread: "gamma", outcome: " dropped ", text: "Not now." })).reply);
       expect(r.parsed("gamma")).toMatchObject({ state: "closed", outcome: "dropped" });
+    } finally { r.repo.clean(); }
+  });
+
+  test("carries the approved draft revision through a conversation close and preserves its shipped text", async () => {
+    const r = await rig();
+    try {
+      const input = { options: { dir: r.repo.dir, maxActive: 5 }, areas: [], assistantName: "Assistant", thread: "beta" };
+      const initial = await getStudioDraft(input);
+      if (!initial.ok) throw new Error(initial.error);
+      const saved = await saveStudioDraft({ ...input, text: "Full shipped answer and reasoning.", revision: initial.draft.revision, requestId: "save-conversation-draft" });
+      if (!saved.ok) throw new Error(saved.error);
+      const missing = await r.submit({ thread: "beta", outcome: "shipped", text: "Short summary." });
+      expect(missing.reply.status).toBe(409);
+      expect(r.parsed("beta").state).toBe("active");
+      const closed = await r.submit({ thread: "beta", outcome: "shipped", text: "Short summary.", draftRevision: saved.draft.revision });
+      r.created(closed.reply);
+      expect(r.parsed("beta")).toMatchObject({ state: "closed", outcome: "shipped", outcomeText: "Short summary." });
+      const folder = join(r.repo.dir, "draft-snapshots/beta");
+      const files = await readdir(folder);
+      expect(files).toHaveLength(1);
+      expect(await readFile(join(folder, files[0] ?? "missing"), "utf8")).toContain(saved.draft.text);
     } finally { r.repo.clean(); }
   });
 
@@ -89,7 +113,7 @@ describe("Studio close writer", () => {
     try {
       const listed = (await r.types()).find(t => t.type === "studio-close");
       expect(listed?.status).toBe("ready");
-      expect(listed?.fields.map(f => [f.name, f.required, f.destination ?? false])).toEqual([["thread", true, true], ["outcome", true, false], ["text", true, false], ["expect", false, false], ["reviewOn", false, false]]);
+      expect(listed?.fields.map(f => [f.name, f.required, f.destination ?? false])).toEqual([["thread", true, true], ["outcome", true, false], ["text", true, false], ["expect", false, false], ["reviewOn", false, false], ["draftRevision", false, false]]);
       expect(await bare.status("studio-close")).toBe("blocked:3139");
     } finally {
       r.repo.clean();

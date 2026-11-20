@@ -58,7 +58,7 @@ describe("/api/desk/interruptions", () => {
     expect(off.message).toBe("\"Other mail ranked for today\" no longer interrupts you; it waits in the list.");
     expect(reasonOf(off.reasons, "mail.ranked")).toMatchObject({ on: false, setBy: "switch", changedAt: NOW });
     const back = (await (await handleDeskInterruptions(post({ code: "mail.ranked", on: true }), db, runtime(), now)).json()) as { reasons: InterruptReasonView[] };
-    expect(reasonOf(back.reasons, "mail.ranked")).toEqual({ code: "mail.ranked", label: "Other mail ranked for today", on: true, available: true, setBy: "default" });
+    expect(reasonOf(back.reasons, "mail.ranked")).toEqual({ code: "mail.ranked", on: true, available: true, setBy: "default" });
     expect(readSwitches(db).size).toBe(0);
   });
 

@@ -5,7 +5,7 @@ import { submitMailAction } from "../lib/desk-action";
 import type { MailSweepView } from "../../desk/mail-sweep";
 
 const BUNDLE: MailSweepView = {
-  id: "bundle:archive:abc", kind: "bundle", basis: "similar", target: "archive", label: "similar content", title: "4 mails like “Weekly ITIL statistics”",
+  id: "bundle:archive:abc", kind: "bundle", basis: "similar", target: "archive", title: "4 mails like “Weekly ITIL statistics”",
   why: "Archived like 3 similar mails from OTRS.", area: "work",
   mails: ["a", "b", "c", "d"].map((id) => ({ key: `mail:${id}`, subject: `Statistics ${id}`, from: "OTRS", at: "2026-11-01T08:00:00.000Z" })),
 };

@@ -127,16 +127,16 @@ export function studioNoteWriter(deps: StudioWriterDeps): OwnerWriter {
   });
 }
 
-const CLOSE_LABELS = { thread: "The thread", outcome: "The outcome", text: "The outcome text", expect: "What you expect to happen", reviewOn: "The review date" };
+const CLOSE_LABELS = { thread: "The thread", outcome: "The outcome", text: "The outcome text", expect: "What you expect to happen", reviewOn: "The review date", draftRevision: "The draft revision" };
 const isOutcome = (outcome: string): outcome is ThreadOutcome => (THREAD_OUTCOMES as readonly string[]).includes(outcome);
 
 export function studioCloseWriter(deps: StudioWriterDeps): OwnerWriter {
   return studioConversationWriter(deps, {
     prepare: request => {
-      const { thread = "", outcome = "", text = "", expect = "", reviewOn = "" } = request.fields;
+      const { thread = "", outcome = "", text = "", expect = "", reviewOn = "", draftRevision } = request.fields;
       const chosen = outcome.trim();
       if (!isOutcome(chosen)) return `${chosen ? `${chosen} is not an outcome` : "The outcome is missing"}; use decided, shipped or dropped.`;
-      const act = studioAct({ act: "close", thread, outcome: chosen, text, ...(expect.trim() ? { expect } : {}), ...(reviewOn.trim() ? { reviewOn: reviewOn.trim() } : {}) }, CLOSE_LABELS);
+      const act = studioAct({ act: "close", thread, outcome: chosen, text, ...(draftRevision ? { draftRevision } : {}), ...(expect.trim() ? { expect } : {}), ...(reviewOn.trim() ? { reviewOn: reviewOn.trim() } : {}) }, CLOSE_LABELS);
       if (typeof act === "string") return act;
       return ctx => planAct(ctx, act, conversationVia(request));
     },

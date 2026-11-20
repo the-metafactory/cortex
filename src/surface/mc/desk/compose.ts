@@ -57,7 +57,7 @@ import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriterLabels, type DeskWriterOwners, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, quietAdapterInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
-import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry, type PromotableAction } from "./autonomy";
+import { listGrants, PROMOTABLE, readDone, type DoneEntry, type PromotableAction } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
 import { listReasons, readFeedback, readSwitches } from "./interrupt-switches";
 import { classifierStatus, isCommand, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type ClassifierMail, type MailClassification, type MailClassifier, type ModelConfig } from "./classify";
@@ -520,7 +520,7 @@ export async function composeDesk(
 function withOwnerRespond(item: DeskItem, owner: string | undefined, slugs: ReadonlyMap<string, string>, outline: OutlineNode): DeskItem {
   if (owner !== STUDIO_OWNER_KIND) return item;
   const slug = studioSlugOf(outline, adapterRowRef(item.key)?.canonicalId ?? "", slugs);
-  return { ...item, actions: [{ id: STUDIO_RESPOND_ACTION, label: "Respond in Studio", role: "primary", wired: slug !== undefined, ...(slug === undefined ? {} : { target: slug }) }] };
+  return { ...item, actions: [{ id: STUDIO_RESPOND_ACTION, role: "primary", wired: slug !== undefined, ...(slug === undefined ? {} : { target: slug }) }] };
 }
 
 function studioSlugOf(outline: OutlineNode, id: string, slugs: ReadonlyMap<string, string>): string | undefined {
@@ -639,7 +639,7 @@ function buildAutonomy(db: Database, done: DoneEntry[], caps: AutonomyCaps): Des
   };
   const ready = (a: PromotableAction): boolean => readiness[a]();
   return {
-    types: PROMOTABLE.filter(ready).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
+    types: PROMOTABLE.filter(ready).map((action) => ({ action, on: grants.has(action) })),
     done: shown.map((d) => {
       const rule = ruleOf.get(d.itemKey);
       return {
@@ -684,8 +684,8 @@ function reminderItems(reminders: DeskNote[], now: number): DeskItem[] {
     whyPhrase: { code: "reminder.due", params: { dueAt: new Date(r.dueAt).toISOString() } },
     score: 90,
     actions: [
-      { id: "reminder.done", label: "Done", role: "primary", wired: true, target: String(r.id) },
-      { id: "snooze", label: "Not now", role: "secondary", wired: true },
+      { id: "reminder.done", role: "primary", wired: true, target: String(r.id) },
+      { id: "snooze", role: "secondary", wired: true },
     ],
     detail: { summary: r.text, history: [`Set ${ago(now, r.createdAt)}`], refs: [`desk note ${r.id}`], links: [] },
     eventKey: `reminder:${r.id}`,

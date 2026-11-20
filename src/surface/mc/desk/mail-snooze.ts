@@ -16,7 +16,7 @@ import type { HiddenMail, SnoozeResult as WireSnoozeResult } from "../../../desk
 export type SnoozeKind = "time" | "meeting" | "person" | "hidden";
 export type SnoozeState = "snoozed" | "back";
 
-/** `label` is deprecated in favour of `labelPhrase`, or `kind` for hidden mail. Served through 1.x; removed in 2.0. */
+/** `label` is the stored English put-away wording; `labelPhrase` carries the same wording as a code, and `kind` names hidden mail. */
 export interface SnoozeRow {
   messageId: string;
   sourceId: string | null;

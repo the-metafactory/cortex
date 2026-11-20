@@ -1,9 +1,8 @@
 import { z } from "zod";
 import type { DeskRuntime } from "../desk/compose";
-import { assistantNameOf } from "../desk/assistant-name";
+import { studioDraftInput } from "./desk-studio-draft-input";
 import { getStudioDraft, saveStudioDraft, type DraftResult } from "../desk/studio/draft";
 import { STUDIO_DRAFT_MAX_BYTES } from "../desk/studio/draft-format";
-import { STUDIO_SLUG } from "../desk/studio/format";
 import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import type { DeskStudioDraftResponse, DeskStudioDraftWrite, TypedResponse } from "../../../desk-api";
 import { typedJson } from "../desk/typed-response";
@@ -15,10 +14,8 @@ const response = (result: DraftResult): TypedResponse<DeskStudioDraftResponse> =
 
 export async function handleDeskStudioDraft(req: Request, runtime: DeskRuntime | undefined, thread: string): Promise<Response> {
   if (req.method !== "GET" && req.method !== "PUT") return new Response(null, { status: 405, headers: { Allow: "GET, PUT" } });
-  if (!STUDIO_SLUG.test(thread)) return answer({ error: "Invalid Studio thread slug." }, 400);
-  const desk = runtime?.options;
-  if (!desk?.enabled || !desk.studio) return answer({ error: "The Studio is not set up on this stack." }, 409);
-  const input = { options: desk.studio, areas: desk.areas, assistantName: assistantNameOf(desk), thread };
+  const input = studioDraftInput(runtime, thread);
+  if ("error" in input) return answer({ error: input.error }, input.status);
   try {
     if (req.method === "GET") return response(await getStudioDraft(input));
     const body: unknown = await req.json().catch(() => null);

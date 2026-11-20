@@ -70,6 +70,47 @@ test("whole-thread summary can propose a stand without adopting it", async () =>
   expect(r.thread().stand).toBe("Try a broad wing."); expect(r.thread().notes.at(-1)?.kind).toBe("stand"); expect(r.thread().notes.at(-1)?.status).toBe("open");
 });
 
+test("question sessions refuse multiline stand proposals and rewordings without changing stored text", async () => {
+  for (const kind of ["propose", "reword"] as const) {
+    const r = rig("stand");
+    await r.start(kind === "propose" ? { kind: "thread" } : { kind: "ghost", note: NOTE });
+    await r.say();
+    const before = r.file();
+    const head = r.git("rev-parse", "HEAD");
+    const response = await r.post({ action: "end", outcome: { kind, text: "Answer.\n\nFull reasoning." } });
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).toContain("single-line answer so far");
+    expect(r.file()).toBe(before);
+    expect(r.git("rev-parse", "HEAD")).toBe(head);
+    expect((await r.post({ action: "end", outcome: { kind: "leave" } })).status).toBe(200);
+    expect(r.file()).toContain(result.summary);
+  }
+});
+
+test("a discussion of one idea refuses a multiline proposal as out of scope before checking the stand", async () => {
+  const r = rig("stand");
+  await r.start({ kind: "ghost", note: NOTE });
+  await r.say();
+  const response = await r.post({ action: "end", outcome: { kind: "propose", text: "Answer.\n\nFull reasoning." } });
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toContain("rewords its selected idea");
+});
+
+test("sessions think and save full reasoning without a stand, and can keep legacy multiline proposals unchanged", async () => {
+  const r = rig("stand");
+  writeFileSync(join(r.dir, "threads/alpha.md"), r.file().replace("## Where I stand\n\nTry a broad wing.\n\n", "").replace("Use a lighter paper wing.", "Legacy answer.\n\nFull reasoning."));
+  r.git("add", "."); r.git("commit", "-qm", "Legacy proposal without a stand");
+  expect(r.thread().stand).toBe("");
+  await r.start();
+  expect((await r.say(async (_config, prompt) => {
+    expect(prompt.stand).toBe("");
+    return { ...result, summary: "Full reasoning.\n\nFurther detail.", proposal: null };
+  })).status).toBe(200);
+  expect((await r.post({ action: "end", outcome: { kind: "keep" } })).status).toBe(200);
+  expect(r.thread().stand).toBe("Legacy answer.\n\nFull reasoning.");
+  expect(r.file()).toContain("Full reasoning.\n\nFurther detail.");
+});
+
 test("strictest current policy picks the model and the session never loses its local privacy pin", async () => {
   const r = rig(); await r.start(); const models: string[] = [];
   const model: SessionModel = async (config, prompt) => { models.push(classifierLabel(config)); expect(prompt.context).toBe(""); return result; };

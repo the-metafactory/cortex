@@ -121,6 +121,13 @@ export type DeskPhrase =
   | { code: "assistant.retry"; params: { name: string } }
   | { code: "vip.add"; params: { name?: string } }
   | { code: "task.link"; params: { id: string } }
+  | { code: "meeting.join" }
+  | { code: "meeting.open" }
+  | { code: "ranger.ruling" }
+  | { code: "mail.junk-review" }
+  | { code: "goal.run-check" }
+  | { code: "waiting.nudge" }
+  | { code: "waiting.snooze"; params: { days: number } }
   | { code: "mail.put-away-time"; params: { until: string } }
   | { code: "mail.put-away-meeting"; params: { title: string } }
   | { code: "mail.put-away-person"; params: { person: string } }

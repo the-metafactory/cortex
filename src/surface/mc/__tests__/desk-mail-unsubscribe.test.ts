@@ -190,7 +190,7 @@ describe("unsubscribe", () => {
     expect(archiveWhatArrives(db, listed(letter("new")), NOW)).toMatchObject({ ok: false, status: 409 });
     const card = mailItems({ now: NOW, mail: [{ ...listed(letter("new")), area: null }], events: [], vips: new Set(), unsubscribe: new Map([["new", { kind: "one-click", url: "https://lists.example/u/abc123", host: "lists.example", dismissed: 5, failed: "lists.example answered HTTP 500" }]]) })[0];
     expect(card?.why).toContain("The last unsubscribe attempt failed: lists.example answered HTTP 500.");
-    expect(card?.actions.find((a) => a.id === "mail.unsubscribe")).toMatchObject({ label: "Unsubscribe", target: "lists.example" });
+    expect(card?.actions.find((a) => a.id === "mail.unsubscribe")).toMatchObject({ target: "lists.example" });
   });
 
   it("never fetches a page unsubscribe and refuses an unsafe One-Click address before any request", async () => {
@@ -238,8 +238,8 @@ describe("Desk cards and API", () => {
     const { rt, view } = desk([page, phish]);
     const v = await view();
     const card = v.items.find((i) => i.key === "mail:page");
-    expect(card?.actions.find((a) => a.id === "mail.unsubscribe.page")).toMatchObject({ label: "Open unsubscribe page", url: "mailto:leave@lists.example" });
-    expect(card?.detail.links).toContainEqual({ kind: "unsubscribe-page", label: "Unsubscribe page: mailto:leave@lists.example", url: "mailto:leave@lists.example" });
+    expect(card?.actions.find((a) => a.id === "mail.unsubscribe.page")).toMatchObject({ url: "mailto:leave@lists.example" });
+    expect(card?.detail.links).toContainEqual({ kind: "unsubscribe-page", url: "mailto:leave@lists.example" });
     const suspicious = v.items.find((i) => i.key === "mail:phish");
     expect(suspicious?.suspicious).toBe(true);
     expect([...(suspicious?.actions ?? []), ...(suspicious?.more ?? [])].some((a) => a.id.startsWith("mail.unsubscribe"))).toBe(false);

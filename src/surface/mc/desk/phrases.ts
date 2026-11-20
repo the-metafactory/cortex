@@ -7,7 +7,8 @@ export const DESK_ITEM_PHRASE_CODES = [
   "ranger.retry-failed", "ranger.retried", "goal.check-regressed", "goal.reading", "meeting.soon", "meeting.ended", "reminder.due",
   "mail.meeting-today", "mail.deadline-today", "mail.vip", "mail.ranked", "mail.received", "mail.meeting-possible",
   "mail.meeting-linked", "mail.unimportant", "mail.precedent", "mail.unsubscribe", "mail.invitation", "mail.suspicious",
-  "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "mail.put-away-time",
+  "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "meeting.join", "meeting.open",
+  "ranger.ruling", "mail.junk-review", "goal.run-check", "waiting.nudge", "waiting.snooze", "mail.put-away-time",
   "mail.put-away-meeting", "mail.put-away-person", "correction.source", "mail.correction", "mail.sweep-category",
 ] as const satisfies readonly DeskPhrase["code"][];
 
