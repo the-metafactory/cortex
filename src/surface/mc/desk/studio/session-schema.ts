@@ -24,7 +24,7 @@ export const SessionRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("end"), id: z.uuid(), outcome: SessionEndSchema, draft: z.string().trim().max(4000).optional() }),
 ]);
 export const SessionAnswerSchema = z.object({ reply: words(3000), summary: words(3000), proposal: words(4000).nullable() });
-const TurnSchema = z.object({ id: z.uuid(), text: words(4000), answer: SessionAnswerSchema.nullable(), model: z.string(), policy: z.enum(["local", "cloud"]) });
+const TurnSchema = z.object({ id: z.uuid(), text: words(4000), answer: SessionAnswerSchema.nullable(), model: z.string(), policy: z.enum(["local", "cloud"]), draftRevision: z.string().optional() });
 export const StudioSessionSchema = z.object({
   id: z.uuid(), thread: z.string().regex(STUDIO_SLUG), scope: SessionScopeSchema, original: z.string(), stand: z.string(), policy: z.enum(["local", "cloud"]),
   turns: z.array(TurnSchema).max(30),

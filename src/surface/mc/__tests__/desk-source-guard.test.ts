@@ -211,7 +211,7 @@ describe("a fake codex is never spawned for work mail", () => {
   });
 
   it("in a Studio session on a local thread", async () => {
-    await expect(sessionModel({ ...codexModel(), maxPerPass: 1 }, { question: SECRET, stand: "", subject: "", context: "", exchange: [] }, sessionContent({ policy: "local" }), "Assistant")).rejects.toThrow(CloudRouteRefused);
+    await expect(sessionModel({ ...codexModel(), maxPerPass: 1 }, { question: SECRET, stand: "", subject: "", context: "", exchange: [], draft: { revision: "r", untrusted: true, text: "" } }, sessionContent({ policy: "local" }), "Assistant")).rejects.toThrow(CloudRouteRefused);
     expect(spawned()).toBe(false);
   });
 });

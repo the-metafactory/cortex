@@ -1,3 +1,4 @@
+import { trackAreaPolicies } from "../desk/studio/view";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import type { DeskStudioDraftWrite } from "../../../desk-api";
 import { startServer } from "../server";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
+import type { StudioOptions } from "../desk/types";
 
 export const DraftSchema = z.object({ text: z.string(), revision: z.string().min(1), editable: z.boolean() });
 
@@ -23,8 +25,8 @@ function rawDraftGit(dir: string, ...args: string[]): string {
 
 const draftGit = (dir: string, ...args: string[]): string => rawDraftGit(dir, ...args).trim();
 
-async function serveDraftFixture(root: string, studioDir: string): Promise<{ url: string; stop: () => Promise<void> }> {
-  const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir], { env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}` }, stdout: "pipe", stderr: "inherit" });
+async function serveDraftFixture(root: string, studioDir: string, filer?: StudioOptions["filer"]): Promise<{ url: string; stop: () => Promise<void> }> {
+  const child = Bun.spawn([process.execPath, import.meta.path, "--serve", root, studioDir, ...(filer ? [JSON.stringify(filer)] : [])], { env: { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH ?? ""}` }, stdout: "pipe", stderr: "inherit" });
   const readinessTimeout = setTimeout(() => { child.kill(); }, 10000);
   const reader = child.stdout.getReader();
   let output = "";
@@ -48,7 +50,7 @@ async function serveDraftFixture(root: string, studioDir: string): Promise<{ url
   } finally { clearTimeout(readinessTimeout); reader.releaseLock(); }
 }
 
-export async function openStudioDraftRig() {
+export async function openStudioDraftRig(options: { filer?: StudioOptions["filer"] } = {}) {
   const git = Bun.which("git");
   if (!git) throw new Error("The Studio draft fixture requires Git on PATH.");
   const dir = await mkdtemp(join(tmpdir(), "studio-draft-"));
@@ -61,7 +63,7 @@ export async function openStudioDraftRig() {
   draftGit(studioDir, "init", "-q");
   draftGit(studioDir, "add", "-A");
   draftGit(studioDir, "commit", "-qm", "seed");
-  let server = await serveDraftFixture(dir, studioDir);
+  let server = await serveDraftFixture(dir, studioDir, options.filer);
   const clients: { stop: () => Promise<void> }[] = [];
   const rig = {
     dir,
@@ -92,11 +94,11 @@ export async function openStudioDraftRig() {
       return DraftSchema.parse(await result.json());
     },
     anotherClient: async () => {
-      const client = await serveDraftFixture(dir, studioDir);
+      const client = await serveDraftFixture(dir, studioDir, options.filer);
       clients.push(client);
       return client.url;
     },
-    reopen: async () => { await server.stop(); server = await serveDraftFixture(dir, studioDir); },
+    reopen: async () => { await server.stop(); server = await serveDraftFixture(dir, studioDir, options.filer); },
     close: async () => { await server.stop(); for (const client of clients) await client.stop(); await rm(dir, { recursive: true, force: true }); },
   };
   return rig;
@@ -105,11 +107,12 @@ export async function openStudioDraftRig() {
 if (import.meta.main && process.argv[2] === "--serve") {
   const root = process.argv[3];
   const studioDir = process.argv[4];
+  const filer = process.argv[5] ? (JSON.parse(process.argv[5]) as StudioOptions["filer"]) : undefined;
   if (!root || !studioDir) throw new Error("The draft fixture requires disposable root and Studio paths.");
   const db = initDatabase(join(root, `${randomUUID()}.db`));
   const ctx = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: ["owner@example.org"], localPrincipal: "owner@example.org" } }, db, { desk: {
     enabled: true, displayName: "", assistantName: "Assistant", topN: 5, rangerUrl: "",
-    sources: [], areas: [{ id: "lab", label: "Lab", policy: "local", repos: [], goals: [], color: "" }], studio: { dir: studioDir, maxActive: 5 },
+    sources: [], areas: trackAreaPolicies([{ id: "lab", label: "Lab", policy: "local", repos: [], goals: [], color: "" }]), studio: { dir: studioDir, maxActive: 5, ...(filer ? { filer } : {}) },
   } });
   process.stdout.write(`studio-draft-url:http://localhost:${ctx.port}\n`);
 }

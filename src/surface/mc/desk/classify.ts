@@ -68,6 +68,8 @@ interface ModelAccess {
   apiKeyEnv?: string;
   apiKeyFile?: string;
   timeoutSeconds: number;
+  contextTokens?: number;
+  maxOutputTokens?: number;
 }
 
 export interface EndpointAccess extends ModelAccess {
