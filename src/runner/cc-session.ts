@@ -57,7 +57,7 @@ export interface CCSessionOpts {
    * Passed to path-guard.hook.ts / bash-guard.hook.ts's path checks via the
    * `CORTEX_PATH_GUARD` env var (mirrors `allowedDirs`'s own role there).
    * Distinct from `allowedDirs` so a write into one of these is DENIED
-   * (closes F6) while a read is permitted — see {@link resolvePathGuardEnv}.
+   * (closes R1-F6) while a read is permitted — see {@link resolvePathGuardEnv}.
    * EBH-1b (cortex#2352) threads a distinct value through every live
    * dispatch path (dispatch-handler.ts no longer flattens this into the
    * merged `allowedDirs` it builds for `CORTEX_PATH_GUARD` purposes —
@@ -344,7 +344,7 @@ export function resolveBashGuardEnv(
  * unchanged. Overlap rule: a dir present in both inputs resolves to
  * READ-ONLY in the emitted policy — the safe default.
  *
- * cortex#2359 round 2 (F1) note: this subtraction is EXACT-STRING only (see
+ * cortex#2341 round 2 finding R2-F1 (docs/security/reviews/2026-07-26-nws-round-2.md) note: this subtraction is EXACT-STRING only (see
  * {@link splitGuardDirs}) — it does NOT catch a `readOnlyDirs` entry that is
  * merely CONTAINED WITHIN a broader `allowedDirs` entry rather than equal to
  * it (`allowedDirs:["/repo"], readOnlyDirs:["/repo/.claude"]` subtracts
@@ -356,7 +356,7 @@ export function resolveBashGuardEnv(
  * doc, "Read-only vs. allowed on overlap") — so the nested case is closed at
  * the DECISION layer regardless of what this subtraction does or doesn't
  * catch. This function's exact-match subtraction is therefore no longer the
- * mechanism F6/F1 depend on; it remains as defense-in-depth (it keeps a
+ * mechanism R1-F6/R1-F1 depend on; it remains as defense-in-depth (it keeps a
  * read-only dir out of the emitted `allowedDirs` list at all, for any other
  * consumer — e.g. {@link deriveSandboxProfile} — that might read that field
  * without going through `decidePath`'s precedence logic). Made

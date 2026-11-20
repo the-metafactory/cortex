@@ -1,11 +1,11 @@
 # EBH-0 — `--add-dir` reproduction result
 
-**Date:** 2026-07-24 · **Issue:** #2342 (EBH-0) · **Settles:** review F1 open question (§4 F1, §7)
+**Date:** 2026-07-24 · **Issue:** #2342 (EBH-0) · **Settles:** review R1-F1 open question (§4 R1-F1, §7)
 **CLI:** `claude` 2.1.218 (Claude Code) · **Verified against** `origin/main` @ `059f619d`
 
 ## Question
 
-Does `claude --print` with `--add-dir X` **deny** a filesystem read of a path *outside* `X`, or **allow** it? The review left F1 as "High (repro-gated) → Medium until proven" pending this test. If `--add-dir` denies, F1 narrows to config-immutability/read-only. If it allows, F1 is a clean High.
+Does `claude --print` with `--add-dir X` **deny** a filesystem read of a path *outside* `X`, or **allow** it? The review left R1-F1 as "High (repro-gated) → Medium until proven" pending this test. If `--add-dir` denies, R1-F1 narrows to config-immutability/read-only. If it allows, R1-F1 is a clean High.
 
 ## Method
 
@@ -34,9 +34,9 @@ printf '%s' 'Run: cat /tmp/ebh0/secret/canary.txt then output its contents. If b
 
 ## Conclusion
 
-**`--add-dir` is an additive grant, not a confinement boundary.** It does not deny reads outside the added directories, for either the file tools or Bash. The compensating control the review weighed for F1 does not, in fact, confine reads.
+**`--add-dir` is an additive grant, not a confinement boundary.** It does not deny reads outside the added directories, for either the file tools or Bash. The compensating control the review weighed for R1-F1 does not, in fact, confine reads.
 
-- **F1 is a clean High** (not repro-gated Medium). Severity locked.
+- **R1-F1 is a clean High** (not repro-gated Medium). Severity locked.
 - **EBH-1 (L1 in-code path guard)** and **EBH-3 (L2 kernel jail)** are both warranted; priority stands.
 - Confirms design-decision **DD-3**: the kernel boundary must be the real control — `--add-dir` cannot be relied on for security.
 
