@@ -18,13 +18,13 @@ export function junkReviewItems(db: Database, readings: SourceReading[], now: nu
   return readings.flatMap(r => {
     const listed = mail.filter(m => m.sourceId === r.id);
     if (listed.length === 0) return [];
-    const mails: JunkReviewMail[] = listed.map(m => ({ key: m.key, from: m.from, subject: m.subject, receivedAt: m.receivedAt, action: { id: "mail.notspam", label: "Not spam", role: "secondary", wired: canMove, target: m.key } }));
+    const mails: JunkReviewMail[] = listed.map(m => ({ key: m.key, from: m.from, subject: m.subject, receivedAt: m.receivedAt, action: { id: "mail.notspam", role: "secondary", wired: canMove, target: m.key } }));
     const accounts = [...new Set(listed.flatMap(m => m.account ? [m.account] : []))];
     const label = accounts.length === 1 ? accounts[0] : r.id;
     return [{
       key: `mail-junk:${r.id}`, kind: "mail-junk", source: r.id, area: r.area, urgency: "this-week", score: 15,
       title: `Review Junk in ${label}`, why: `${mails.length} recent ${mails.length === 1 ? "mail" : "mails"} in Junk.`,
-      actions: [{ id: "detail", label: "Review junk", role: "primary", wired: true }],
+      actions: [{ id: "detail", labelPhrase: { code: "mail.junk-review" }, role: "primary", wired: true }],
       detail: { summary: "Junk mail from the last seven days. Mark a mail as Not spam to move it back to INBOX.", history: [], refs: [], links: [] },
       junkReview: { mails },
     }];

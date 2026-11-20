@@ -90,7 +90,7 @@ describe("interruption switches on the Desk", () => {
     addVip(db, "boss@example.com", "Boss", NOW);
     const before = await tick(new FakeTransport());
     expect(before.view.items.find((i) => i.key === "mail:vip")?.interrupt?.reason).toEqual({ code: "mail.vip", target: "boss@example.com", phrase: { code: "mail.vip", params: { target: "boss@example.com" } } });
-    expect(before.view.interruptions.filter((r) => r.code === "mail.vip")).toEqual([{ code: "mail.vip", target: "boss@example.com", label: "Mail from Boss", on: true, available: true, setBy: "default" }]);
+    expect(before.view.interruptions.filter((r) => r.code === "mail.vip")).toEqual([{ code: "mail.vip", target: "boss@example.com", on: true, available: true, setBy: "default" }]);
     db.query("DELETE FROM desk_deliveries").run();
     setSwitch(db, RULES, { code: "mail.vip", target: "boss@example.com", on: false, setBy: "switch" }, NOW);
     setSwitch(db, RULES, { code: "mail.ranked", target: "", on: false, setBy: "switch" }, NOW);

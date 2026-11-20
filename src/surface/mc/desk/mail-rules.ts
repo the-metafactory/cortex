@@ -308,9 +308,9 @@ export function proposalItems(proposals: RuleProposal[], now: number): DeskItem[
       why: `You ${verb} the last ${p.agreeing} and never did anything else with one. Nothing changes until you approve.`,
       score: 12,
       actions: [
-        { id: "mailrule.approve", label: "Approve", role: "primary", wired: true },
-        { id: "mailrule.later", label: "Not now", role: "secondary", wired: true },
-        { id: "mailrule.never", label: "Never", role: "secondary", wired: true },
+        { id: "mailrule.approve", role: "primary", wired: true },
+        { id: "mailrule.later", role: "secondary", wired: true },
+        { id: "mailrule.never", role: "secondary", wired: true },
       ],
       detail: {
         summary: `${sentence}. Each mail it moves shows in Done for you with Undo, and a VIP's mail is never touched.`,
@@ -334,9 +334,9 @@ export function heldItems(rules: readonly MailRule[], config: MailRulesConfig = 
     why: `${ruleSentence(r)}. The Desk asks first when one pass would handle more than ${config.maxPerPass}.`,
     score: 30,
     actions: [
-      { id: "mailrule.release", label: `Handle all ${r.held}`, labelPhrase: { code: "mailrule.release", params: { count: r.held } }, role: "primary", wired: true, target: r.id },
-      { id: "mailrule.stop", label: "Stop this rule", role: "secondary", wired: true, target: r.id },
-      { id: "snooze", label: "Not now", role: "secondary", wired: true },
+      { id: "mailrule.release", labelPhrase: { code: "mailrule.release", params: { count: r.held } }, role: "primary", wired: true, target: r.id },
+      { id: "mailrule.stop", role: "secondary", wired: true, target: r.id },
+      { id: "snooze", role: "secondary", wired: true },
     ],
     detail: { summary: `${ruleSentence(r)}. It has handled ${r.count} mails so far.`, history: [], refs: [], links: [] },
   }));

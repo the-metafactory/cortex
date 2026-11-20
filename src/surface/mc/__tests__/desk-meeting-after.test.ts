@@ -55,7 +55,7 @@ describe("Desk after-meeting card", () => {
       kind: "meeting-after",
       eventKey: `cal:${SOURCE}:b`,
       urgency: "today",
-      actions: [{ id: "meeting.dismiss", label: "Dismiss", role: "primary", wired: true }],
+      actions: [{ id: "meeting.dismiss", role: "primary", wired: true }],
     });
     expect(first?.title).toContain("Meeting b");
     expect(first?.whyPhrase).toEqual({ code: "meeting.ended", params: { endedAt: new Date(roundAt(16, 16, 9)).toISOString() } });

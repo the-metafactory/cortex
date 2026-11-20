@@ -173,13 +173,12 @@ export interface SweepMailView {
   unsubscribe?: UnsubscribeView;
 }
 
-/** `label` is deprecated in favour of `kind` and `basis`, or `labelPhrase` for a category. Served through 1.x; removed in 2.0. */
+/** A client phrases a group from its `kind` and `basis`, or from `labelPhrase` for a category. */
 export interface MailSweepView {
   id: string;
   kind: SweepKind;
   basis: SweepBasis;
   target: MoveTarget;
-  label: string;
   labelPhrase?: DeskPhrase;
   title: string;
   why: string;

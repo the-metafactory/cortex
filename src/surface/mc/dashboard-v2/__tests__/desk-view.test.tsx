@@ -11,6 +11,7 @@ import type { DeskProposal } from "../../desk/ask";
 import { openGroup, selectItems } from "../../desk/present";
 import { DeskWakeSchema } from "../../../../common/types/desk-wake";
 import type { MailSweepView } from "../../desk/mail-sweep";
+import { actionText } from "../../desk/wording";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
 
@@ -24,8 +25,8 @@ const item = (n: number, over: Partial<DeskItem> = {}): DeskItem => ({
   why: `It waited since this morning (${n}).`,
   score: 100 - n,
   actions: [
-    { id: "detail", label: "Look first", role: "primary", wired: true },
-    { id: "ranger.retry", label: "Let it retry", role: "secondary", wired: false },
+    { id: "detail", role: "primary", wired: true },
+    { id: "ranger.retry", role: "secondary", wired: false },
   ],
   detail: { summary: "s", history: [], refs: [`example/app#${n}`], links: [] },
   ...over,
@@ -93,7 +94,7 @@ describe("DeskBody", () => {
 });
 
 describe("sweeps and bundles", () => {
-  const sweep: MailSweepView = { id: "sweep:abc", kind: "sweep", basis: "list", target: "archive", label: "mailing list", title: "5 unread mails from the Build Bot list", why: "None is from a VIP or looks suspicious.", area: null, mails: [{ key: "mail:b1", subject: "Build 1", from: "Build Bot", at: "2026-10-30T08:00:00.000Z" }] };
+  const sweep: MailSweepView = { id: "sweep:abc", kind: "sweep", basis: "list", target: "archive", title: "5 unread mails from the Build Bot list", why: "None is from a VIP or looks suspicious.", area: null, mails: [{ key: "mail:b1", subject: "Build 1", from: "Build Bot", at: "2026-10-30T08:00:00.000Z" }] };
   const withSweep: DeskViewModel = { ...view, mailSweeps: [sweep] };
 
   it("stay out of the Day view", () => {
@@ -181,7 +182,7 @@ describe("DeskBody with calendar, mail and VIPs", () => {
   const mailItem = item(9, {
     key: "mail:m1", kind: "mail", urgency: "today", title: 'Ada Lovelace wrote: "Budget"', why: "Ada Lovelace is on your VIP list.",
     excerpt: "Could you look at the budget before Monday?",
-    actions: [{ id: "open", label: "Open in Mail", role: "primary", wired: true, url: "message://%3Cm1%3E" }],
+    actions: [{ id: "open", role: "primary", wired: true, url: "message://%3Cm1%3E" }],
   });
   const html = renderToStaticMarkup(
     <DeskBody
@@ -220,8 +221,8 @@ describe("DeskBody with calendar, mail and VIPs", () => {
     const other = item(10, {
       key: "mail:m2", kind: "mail", urgency: "today", title: 'Grace Hopper wrote: "Compilers"', why: "It arrived an hour ago.",
       actions: [
-        { id: "open", label: "Open in Mail", role: "primary", wired: true, url: "message://%3Cm2%3E" },
-        { id: "vip.add", label: "Always show mail from Grace", role: "secondary", wired: true, target: "grace@example.org" },
+        { id: "open", role: "primary", wired: true, url: "message://%3Cm2%3E" },
+        { id: "vip.add", labelPhrase: { code: "vip.add", params: { name: "Grace" } }, role: "secondary", wired: true, target: "grace@example.org" },
       ],
     });
     const page = renderCards([other]);
@@ -544,7 +545,7 @@ describe("a goal item's actions", () => {
   });
 
   it("asks once more before it pauses a goal", () => {
-    expect(withConfirm(goal, "goal.pause").actions.map((a) => a.label)).toEqual(["Check again now", "Yes, pause it"]);
+    expect(withConfirm(goal, "goal.pause").actions.map(actionText)).toEqual(["Check again now", "Yes, pause it"]);
     expect(renderToStaticMarkup(<ActionButton action={pause} onRun={() => {}} sending="goal.pause" />)).toContain(">Pausing…</button>");
   });
 });
@@ -556,8 +557,8 @@ describe("a mail item's actions", () => {
   const mail = item(11, { key: "mail:m3", kind: "mail", title: 'Grace Hopper wrote: "Compilers"', actions: [seen, del], more: [always] });
 
   it("asks once more before Delete, but not before Seen, delete", () => {
-    expect(withConfirm(mail, "mail.trash").actions.map((a) => a.label)).toEqual(["Seen, delete", "Yes, move it to Trash"]);
-    expect(withConfirm(mail, "mail.seen").actions.map((a) => a.label)).toEqual(["Seen, delete", "Delete"]);
+    expect(withConfirm(mail, "mail.trash").actions.map(actionText)).toEqual(["Seen, delete", "Yes, move it to Trash"]);
+    expect(withConfirm(mail, "mail.seen").actions.map(actionText)).toEqual(["Seen, delete", "Delete"]);
     expect(renderToStaticMarkup(<ActionButton action={seen} onRun={() => {}} sending="mail.seen" />)).toContain(">Deleting…</button>");
   });
 
@@ -590,7 +591,7 @@ describe("a mail item's actions", () => {
     const spam = (confirmBlock: boolean) => renderToStaticMarkup(<MailReceipt receipt={{ text: "Moved to Junk.", undo: "move-2", block: "@spam.example", confirmBlock }} onUndo={() => {}} onBlock={() => {}} />);
     expect(spam(false)).toContain(">Also block @spam.example</button>");
     expect(spam(true)).toContain(">Yes, block @spam.example</button>");
-    expect(withConfirm({ ...mail, actions: [{ id: "mail.spam", label: "Spam", role: "secondary", wired: true }] }, "mail.spam").actions[0]?.label).toBe("Yes, move it to Junk");
+    expect(withConfirm({ ...mail, actions: [{ id: "mail.spam", role: "secondary", wired: true }] }, "mail.spam").actions[0]?.content).toBe("Yes, move it to Junk");
   });
 });
 

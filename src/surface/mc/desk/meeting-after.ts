@@ -67,7 +67,7 @@ function candidates(events: readonly DeskEvent[], now: number): AfterMeetingCand
           why: `It ended ${minutesLine(e.end, now)}.`,
           whyPhrase: { code: "meeting.ended", params: { endedAt: new Date(e.end).toISOString() } },
           score: 95 - (now - e.end) / 60_000,
-          actions: [{ id: MEETING_DISMISS_ACTION, label: "Dismiss", role: "primary", wired: true }],
+          actions: [{ id: MEETING_DISMISS_ACTION, role: "primary", wired: true }],
           detail: {
             summary: e.title,
             history: [`Ended ${clock(e.end)}${e.note ? `, ${e.note}` : ""}`],

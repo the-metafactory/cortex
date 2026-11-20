@@ -15,6 +15,7 @@ import { readSnooze, snoozeMail, snoozeWhen, wakeSnoozes } from "../desk/mail-sn
 import { fold, mailItems } from "../desk/rank";
 import { SourceCache, type SourceMail, type SourceReading } from "../desk/sources/command";
 import type { DeskAction, DeskItem, DeskView } from "../desk/types";
+import { actionText, autonomyText, linkText } from "../desk/wording";
 
 const NOW = new Date(2026, 10, 15, 10).getTime();
 const iso = (at: number): string => new Date(at).toISOString();
@@ -36,28 +37,39 @@ afterEach(() => { db.close(); setSystemTime(); });
 const actions = (item: DeskItem): DeskAction[] => [...item.actions, ...(item.more ?? [])];
 const card = (): DeskItem => mailItems({ now: NOW, mail: [listed], events: [], vips: new Set(), handoff: true, assistantName: NAME })[0]!;
 
-test("fixed actions and folded kinds keep their labels without redundant phrases; named actions carry parameters", () => {
+test("fixed actions and folded kinds carry no label; named actions carry parameters; the bundled Desk phrases both", () => {
   const found = card();
-  expect(actions(found).find(a => a.id === "mail.assistant")).toEqual({ id: "mail.assistant", label: "Hand to Helper", role: "secondary", wired: true, labelPhrase: { code: "mail.assistant", params: { name: NAME } } });
-  expect(actions(found).find(a => a.id === "vip.add")).toEqual({ id: "vip.add", label: "Always show mail from Sender", role: "secondary", wired: true, target: mail.from.address, labelPhrase: { code: "vip.add", params: { name: "Sender" } } });
-  expect(actions(found).find(a => a.id === "open")).toEqual({ id: "open", label: "Open in Mail", role: "primary", wired: true, url: mail.url });
-  expect(fold([found])).toEqual([{ kind: "mail", label: "Mail you may want to read", count: 1, example: found.title }]);
+  const hand = actions(found).find(a => a.id === "mail.assistant");
+  const vip = actions(found).find(a => a.id === "vip.add");
+  const open = actions(found).find(a => a.id === "open");
+  expect(hand).toEqual({ id: "mail.assistant", role: "secondary", wired: true, labelPhrase: { code: "mail.assistant", params: { name: NAME } } });
+  expect(vip).toEqual({ id: "vip.add", role: "secondary", wired: true, target: mail.from.address, labelPhrase: { code: "vip.add", params: { name: "Sender" } } });
+  expect(open).toEqual({ id: "open", role: "primary", wired: true, url: mail.url });
+  expect([hand, vip, open].map(a => actionText(a!))).toEqual(["Hand to Helper", "Always show mail from Sender", "Open in Mail"]);
+  expect(fold([found])).toEqual([{ kind: "mail", count: 1, example: found.title }]);
   const unnamed = mailItems({ now: NOW, mail: [{ ...listed, from: { address: mail.from.address } }], events: [], vips: new Set() })[0]!;
-  expect(actions(unnamed).find(a => a.id === "vip.add")).toMatchObject({ label: "Always show mail from this sender", labelPhrase: { code: "vip.add", params: {} } });
+  const unnamedVip = actions(unnamed).find(a => a.id === "vip.add")!;
+  expect(unnamedVip).not.toHaveProperty("label");
+  expect(unnamedVip.labelPhrase).toEqual({ code: "vip.add", params: {} });
+  expect(actionText(unnamedVip)).toBe("Always show mail from this sender");
 });
 
 test("held counts, assistant retries and task link identifiers are phrase parameters", () => {
   const [held] = heldItems([{ id: "rule-1", match: "sender", value: mail.from.address, action: "archive", on: true, createdAt: NOW, lastRunAt: null, count: 0, held: 37, released: false, target: null }]);
-  expect(held?.actions[0]).toEqual({ id: "mailrule.release", label: "Handle all 37", labelPhrase: { code: "mailrule.release", params: { count: 37 } }, role: "primary", wired: true, target: "rule-1" });
+  expect(held?.actions[0]).toEqual({ id: "mailrule.release", labelPhrase: { code: "mailrule.release", params: { count: 37 } }, role: "primary", wired: true, target: "rule-1" });
+  expect(actionText(held!.actions[0]!)).toBe("Handle all 37");
   expect(held?.actions[1]).not.toHaveProperty("labelPhrase");
-  expect(withHandoff(card(), handoff, NOW, NAME).actions[0]).toMatchObject({ id: "assistant.retry", label: "Ask Helper again", target: handoff.id, labelPhrase: { code: "assistant.retry", params: { name: NAME } } });
+  const retry = withHandoff(card(), handoff, NOW, NAME).actions[0]!;
+  expect(retry).toMatchObject({ id: "assistant.retry", target: handoff.id, labelPhrase: { code: "assistant.retry", params: { name: NAME } } });
+  expect(actionText(retry)).toBe("Ask Helper again");
   for (const state of ["failed", "ready"] as const) {
     const [found] = handoffItems([{ ...handoff, state }], new Set(), NOW, NAME);
     expect(found?.detail.links).toEqual([
-      { kind: "mail", label: "Open in Mail", url: mail.url! },
-      { kind: "task", label: "Task example/tasks#1", url: handoff.taskUrl!, labelPhrase: { code: "task.link", params: { id: handoff.taskId } } },
+      { kind: "mail", url: mail.url! },
+      { kind: "task", url: handoff.taskUrl!, labelPhrase: { code: "task.link", params: { id: handoff.taskId } } },
     ]);
-    if (state === "failed") expect(found?.actions[0]).toMatchObject({ label: "Ask Helper again", labelPhrase: { code: "assistant.retry", params: { name: NAME } } });
+    expect(found?.detail.links.map(linkText)).toEqual(["Open in Mail", "Task example/tasks#1"]);
+    if (state === "failed") expect(found?.actions[0]).toMatchObject({ labelPhrase: { code: "assistant.retry", params: { name: NAME } } });
   }
 });
 
@@ -80,13 +92,16 @@ test("a moved meeting refreshes the put-away phrase and label together", () => {
   expect(readSnooze(db, mail.id)).toMatchObject({ label: "until “Renamed meeting” ends", labelPhrase: { code: "mail.put-away-meeting", params: { title: "Renamed meeting" } } });
 });
 
-test("mail, unsubscribe and meeting links name their destinations while preserving labels", () => {
+test("mail, unsubscribe and meeting links name their destinations by kind; the bundled Desk phrases them", () => {
   const [found] = mailItems({ now: NOW, mail: [listed], events: [], vips: new Set(), unsubscribe: new Map([[mail.id, { kind: "page", dismissed: 5, host: "example.test", url: "https://example.test/leave" }]]) });
-  expect(found?.detail.links).toEqual([{ kind: "mail", label: "Open in Mail", url: mail.url! }, { kind: "unsubscribe-page", label: "Unsubscribe page: https://example.test/leave", url: "https://example.test/leave" }]);
+  expect(found?.detail.links).toEqual([{ kind: "mail", url: mail.url! }, { kind: "unsubscribe-page", url: "https://example.test/leave" }]);
+  expect(found?.detail.links.map(linkText)).toEqual(["Open in Mail", "Unsubscribe page: https://example.test/leave"]);
   for (const online of [true, false]) {
     const [meeting] = meetingItems([{ key: "event-1", at: NOW + 60_000, kind: "meeting", title: "Meeting", area: null, url: "https://example.test/meeting", online }], NOW, 15);
-    expect(meeting?.detail.links).toEqual([{ kind: online ? "meeting-join" : "meeting", label: online ? "Join" : "Open", url: "https://example.test/meeting" }]);
-    expect(meeting?.actions[0]).not.toHaveProperty("labelPhrase");
+    expect(meeting?.detail.links).toEqual([{ kind: online ? "meeting-join" : "meeting", url: "https://example.test/meeting" }]);
+    expect(meeting?.detail.links.map(linkText)).toEqual([online ? "Join" : "Open"]);
+    expect(meeting?.actions[0]).toMatchObject({ id: "open", labelPhrase: { code: online ? "meeting.join" : "meeting.open" } });
+    expect(actionText(meeting!.actions[0]!)).toBe(online ? "Join" : "Open");
   }
 });
 
@@ -102,13 +117,9 @@ test("GET keeps configured content and code-only switches and autonomy, and phra
   expect(view.areas).toEqual([{ id: area.id, label: area.label, color: area.color }]);
   expect(view.corrections[0]).toEqual({ kind: "goal", source: "vigil", mode: "less", label: "Goals that need a look, from vigil", labelPhrase: { code: "correction.source", params: { kind: "goal", source: "vigil" } }, createdAt: NOW });
   expect(view.interruptions.length).toBeGreaterThan(0);
-  for (const reason of view.interruptions) expect(reason).not.toHaveProperty("labelPhrase");
-  expect(view.autonomy.types.length).toBeGreaterThan(0);
-  for (const type of view.autonomy.types) {
-    expect(type.action).toBeString();
-    expect(type).not.toHaveProperty("labelPhrase");
-    expect(type).not.toHaveProperty("notePhrase");
-  }
+  for (const reason of view.interruptions) expect(Object.keys(reason).filter(key => key.startsWith("label"))).toEqual([]);
+  expect(view.autonomy.types).toContainEqual({ action: "mail.link-meeting", on: true });
+  expect(autonomyText("mail.link-meeting").label).toBe("Link mail to its meeting");
 });
 
 test("mail correction wording carries the original subject and sender as content parameters", async () => {

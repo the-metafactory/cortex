@@ -118,7 +118,7 @@ describe("Hand a mail to Ivy", () => {
   it("names the configured assistant in the receipt, the refusal, the card label and the status line", async () => {
     options.assistantName = "Mira";
     const offeredCard = (await compose()).find((i) => i.key === "mail:w1");
-    expect([...(offeredCard?.actions ?? []), ...(offeredCard?.more ?? [])].find((a) => a.id === "mail.assistant")?.label).toBe("Hand to Mira");
+    expect([...(offeredCard?.actions ?? []), ...(offeredCard?.more ?? [])].find((a) => a.id === "mail.assistant")).toMatchObject({ labelPhrase: { code: "mail.assistant", params: { name: "Mira" } } });
     owner = () => new Promise(() => undefined);
     const first = await hand("mail:w1");
     expect(String(first.json.message)).toMatch(/^Handed to Mira as owner\/desk#9 on Desk tasks\. Mira's findings/);

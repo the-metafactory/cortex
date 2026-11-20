@@ -45,6 +45,8 @@ import { MicButton, VoicePanel, WakeStatus, WakeSwitch } from "./desk-voice";
 import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import { freshnessLabel } from "../../desk/types";
+import { actionText, autonomyText, linkText } from "../../desk/wording";
+import { FOLDED_LABELS } from "../../desk/rank";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
 import { CORRECTION_MOVES } from "../../desk/mail-correction-schema";
@@ -529,9 +531,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) {
       if (a.id === "open" && item.kind === "mail") noteMailOpened(item.key);
-      if (!openDeskLink(a.url)) setNote(`"${a.label}" has a link the Desk does not open.`);
+      if (!openDeskLink(a.url)) setNote(`"${actionText(a)}" has a link the Desk does not open.`);
     }
-    else setNote(`"${a.label}" is not connected yet.`);
+    else setNote(`"${actionText(a)}" is not connected yet.`);
   };
 
   const acknowledge = (item: DeskItem, a: DeskAction, report: string): void => void send(item, a, { request: () => submitDmarcAck(report) });
@@ -549,7 +551,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const confirmRuling = (item: DeskItem, draft: RulingDraft): void => {
-    const rule: DeskAction = { id: "ranger.rule", label: "Give your ruling", role: "primary", wired: true };
+    const rule: DeskAction = { id: "ranger.rule", role: "primary", wired: true };
     void send(item, rule, {
       request: async () => {
         const result = await submitRuling({ key: item.key, text: draft.text, requestId: draft.requestId });
@@ -569,7 +571,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const confirmStudio = (item: DeskItem, pick: StudioPick): void => {
-    const add: DeskAction = { id: "mail.studio", label: "Add to thread", role: "secondary", wired: true };
+    const add: DeskAction = { id: "mail.studio", role: "secondary", wired: true };
     void send(item, add, {
       keepVisible: true,
       request: async () => {
@@ -613,7 +615,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const confirmInvite = (item: DeskItem, ask: InviteAsk): void => {
     const reply = ask.reply;
     if (!reply) return;
-    const act: DeskAction = { id: `invite.${reply}`, label: reply === "accept" ? "Accept" : "Decline", role: "primary", wired: true };
+    const act: DeskAction = { id: `invite.${reply}`, role: "primary", wired: true };
     void send(item, act, {
       keepVisible: true,
       request: async () => {
@@ -630,7 +632,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const confirmSnooze = (item: DeskItem, until: SnoozeChoice): void => {
-    const act: DeskAction = { id: "mail.snooze", label: "Snooze", role: "secondary", wired: true };
+    const act: DeskAction = { id: "mail.snooze", role: "secondary", wired: true };
     void send(item, act, {
       request: async () => {
         const result = await submitMailAction({ action: "snooze", key: item.key, until });
@@ -657,7 +659,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const confirmHandoff = (item: DeskItem, ask: HandoffAsk): void => {
-    const hand: DeskAction = { id: "mail.assistant", label: `Hand to ${view.assistantName}`, role: "secondary", wired: true };
+    const hand: DeskAction = { id: "mail.assistant", labelPhrase: { code: "mail.assistant", params: { name: view.assistantName } }, role: "secondary", wired: true };
     void send(item, hand, {
       keepVisible: true,
       request: async () => {
@@ -669,7 +671,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const confirmReply = (item: DeskItem, draft: ReplyDraft): void => {
-    const save: DeskAction = { id: "mail.draft", label: "Draft a reply", role: "primary", wired: true };
+    const save: DeskAction = { id: "mail.draft", role: "primary", wired: true };
     void send(item, save, {
       keepVisible: true,
       request: async () => {
@@ -751,7 +753,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const correctMail = async (item: DeskItem, said: MailCorrection, correction?: number): Promise<void> => {
     const request = (): Promise<Outcome> => submitMailAction({ action: "correct", key: item.key, said, ...(correction !== undefined ? { correction } : {}) });
     if (CORRECTION_MOVES[said]) {
-      await send(item, { id: `mail.correct.${said}`, label: "Correct", role: "secondary", wired: true }, { request, failOnCard: (r) => correctionStep(said, r, false).note });
+      await send(item, { id: `mail.correct.${said}`, role: "secondary", wired: true }, { request, failOnCard: (r) => correctionStep(said, r, false).note });
       return;
     }
     setCardNote(item.key, null);
@@ -1127,7 +1129,7 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, chil
         <>
           <div className="desk-sec">Open in</div>
           <div className="desk-links">
-            {item.detail.links.map((l) => <DeskLink key={l.url} url={l.url}>{l.label}<span>↗</span></DeskLink>)}
+            {item.detail.links.map((l) => <DeskLink key={l.url} url={l.url}>{linkText(l)}<span>↗</span></DeskLink>)}
           </div>
         </>
       )}
@@ -1159,7 +1161,7 @@ export function RestGroups({ groups, active, onOpen }: { groups: DeskFoldedGroup
       {groups.map((g) => (
         <li key={g.kind}>
           <button type="button" className="desk-group" aria-pressed={active === g.kind} onClick={() => { onOpen(active === g.kind ? null : g.kind); }}>
-            <span className="n">{g.count}</span><div>{g.label}<small>{g.example}</small></div>
+            <span className="n">{g.count}</span><div>{FOLDED_LABELS[g.kind]}<small>{g.example}</small></div>
           </button>
         </li>
       ))}
@@ -1286,7 +1288,7 @@ export function correctionStep(said: MailCorrection, result: Outcome, canReply: 
   return { note: { text: result.text }, open };
 }
 
-const PLAN_THIS: DeskAction = { id: "todo", label: "Plan this", role: "secondary", wired: true };
+const PLAN_THIS: DeskAction = { id: "todo", role: "secondary", wired: true };
 
 function withPlanThis(item: DeskItem): DeskItem {
   return item.readOnly ? item : { ...item, more: [...(item.more ?? []), PLAN_THIS] };
@@ -1414,7 +1416,7 @@ const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsub
 const confirmLabel = (a: DeskAction): string | undefined => CONFIRM_LABEL[a.id] ?? (a.target ? CONFIRM_TARGET[a.id]?.(a.target) : undefined);
 
 export function withConfirm(item: DeskItem, actionId: string): DeskItem {
-  return { ...item, actions: item.actions.map((a) => { const label = a.id === actionId ? confirmLabel(a) : undefined; return label ? { ...a, label } : a; }) };
+  return { ...item, actions: item.actions.map((a) => { const content = a.id === actionId ? confirmLabel(a) : undefined; return content ? { ...a, content } : a; }) };
 }
 
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
@@ -1429,7 +1431,7 @@ export function ActionButton({ action, onRun, sending }: { action: DeskAction; o
       title={action.wired ? undefined : "Not connected yet"}
       onClick={() => { onRun(action); }}
     >
-      {busy ? BUSY_LABEL[action.id] ?? "Sending…" : action.label}
+      {busy ? BUSY_LABEL[action.id] ?? "Sending…" : actionText(action)}
     </button>
   );
 }
@@ -1481,8 +1483,8 @@ export function DoneForYou({ autonomy, onPromote, onUndo, onStop, routines, onCh
         {autonomy.types.map((t) => (
           <li key={t.action}>
             <div>
-              {t.label}
-              <small>{t.on ? `The Desk does this on its own. ${t.note}` : "The Desk asks you first."}</small>
+              {autonomyText(t.action).label}
+              <small>{t.on ? `The Desk does this on its own. ${autonomyText(t.action).note}` : "The Desk asks you first."}</small>
               <button type="button" className="desk-btn desk-promote" onClick={() => { onPromote(t.action, !t.on); }}>
                 {t.on ? "Stop doing this on your own" : "Handle this yourself"}
               </button>

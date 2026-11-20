@@ -1,4 +1,5 @@
 import { DESK_ITEM_KINDS, type DeskItem, type DeskItemKind } from "../../desk/types";
+import { linkText, sweepText } from "../../desk/wording";
 import type { MailSweepView } from "../../desk/mail-sweep";
 
 export type CatchupKind = "all" | DeskItemKind;
@@ -24,7 +25,7 @@ export function matchesCatchupItem(item: DeskItem, kind: CatchupKind, query: str
   return (kind === "all" || item.kind === kind) && matchesCatchupText(query, [
     item.title, item.why, item.excerpt, item.suggestion, item.source, item.goal,
     item.detail.summary, ...item.detail.history, ...item.detail.refs,
-    ...item.detail.links.map(link => link.label),
+    ...item.detail.links.map(linkText),
     ...(item.detail.evidence ?? []).map(evidence => evidence.title),
     ...(item.detail.precedents ?? []).map(precedent => precedent.subject),
     ...(item.detail.suspicion ?? []), item.question?.condition, item.question?.reason,
@@ -36,6 +37,6 @@ export function matchesCatchupItem(item: DeskItem, kind: CatchupKind, query: str
 export function catchupMailGroups<T extends MailSweepView>(groups: readonly T[], area: string, kind: CatchupKind, query: string): T[] {
   if (kind !== "all" && kind !== "mail") return [];
   return groups.filter(group => (!area || group.area === null || group.area === area) && matchesCatchupText(query, [
-    group.title, group.why, group.label, ...group.mails.flatMap(mail => [mail.subject, mail.from]),
+    group.title, group.why, sweepText(group), ...group.mails.flatMap(mail => [mail.subject, mail.from]),
   ]));
 }

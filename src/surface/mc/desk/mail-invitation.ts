@@ -13,6 +13,7 @@ import type { Commitment } from "./mail-yes-filter";
 import { CommandTimeout } from "../common/spawn";
 import type { MailInvitation, SourceReading } from "./sources/command";
 import { clock, DAY_MS, localDay, startOfDay } from "./time";
+import { calendarReasons } from "./calendar-reasons";
 import { DEFAULT_SLOTS, type InvitationSlotsConfig, type InvitationsConfig, type InviteReply, type InviteStatus } from "./mail-invitation-schema";
 
 export { DEFAULT_SLOTS, INVITATIONS_SQL, INVITE_REPLIES, type InvitationsConfig, type InviteReply } from "./mail-invitation-schema";
@@ -47,7 +48,7 @@ function qualifiedCalendars(calendar: CalendarAvailability, span: Slot): { cover
   const reasons: string[] = [];
   for (const source of calendar.sources) {
     if (source.kind === "attention") continue;
-    if (source.kind === "unknown") reasons.push(`${source.id}: ${source.reason}`);
+    if (source.kind === "unknown") reasons.push(`${source.id}: ${calendarReasons[source.reasonPhrase.code]}`);
     else if (source.from > span.at || source.to < span.end) reasons.push(`${source.id} is read only through ${new Date(source.to).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}.`);
     else covered.set(source.id, source.calendars);
   }
@@ -120,7 +121,7 @@ export function freeSlots(inv: Pick<MailInvitation, "summary" | "start" | "end" 
   const length = inv.allDay ? HOUR_MS : span.end - span.at;
   const sources = calendar.sources.filter((s) => s.kind !== "attention");
   const unknown = sources.flatMap((s) => (s.kind === "unknown" ? [s] : []))[0];
-  if (unknown) return { slots: [], reason: `${unknown.id}: ${unknown.reason}` };
+  if (unknown) return { slots: [], reason: `${unknown.id}: ${calendarReasons[unknown.reasonPhrase.code]}` };
   const read = sources.flatMap((s) => (s.kind === "calendar" ? [s] : []));
   if (read.length === 0) return { slots: [], reason: "No calendar reports which times are busy." };
   const through = Math.min(...read.map((s) => s.to));

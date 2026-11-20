@@ -10,6 +10,7 @@ import type { SourceReading } from "./sources/command";
 import { SWEEP_WORDS } from "./mail-sweep-schema";
 import { DAY_MS } from "./time";
 import { isVip } from "./vips";
+import { plural } from "./wording";
 import type { SweepBasis, SweepMailView, MailSweepView } from "../../../desk-api/wire/mail";
 export type { SweepMailView, MailSweepView };
 
@@ -39,7 +40,7 @@ const SAFE = "None is from a VIP or looks suspicious.";
 
 const hash = (text: string): string => textHash(text).slice(0, 16);
 export const senderOf = (m: SweepMember): string => m.from.name ?? m.from.address;
-export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+export { plural };
 export const commonArea = (members: readonly SweepMember[]): string | null => {
   const first = members[0]?.area ?? null;
   return members.every((m) => m.area === first) ? first : null;
@@ -56,12 +57,12 @@ function eligible(input: SweepInput): SweepMember[] {
     .sort(byAge);
 }
 
-function bundleTitle(basis: SweepBasis, members: readonly SweepMember[]): { label: string; title: string; about: string } {
+function bundleTitle(basis: SweepBasis, members: readonly SweepMember[]): { title: string; about: string } {
   const head = members[0];
   const n = members.length;
-  if (!head) return { label: "", title: "", about: "" };
-  const [label, about] = basis === "list" ? ["same mailing list", `from the ${senderOf(head)} list`] : basis === "sender" ? ["same sender", `from ${senderOf(head)}`] : ["similar content", `like ${quoted(head.subject)}`];
-  return { label, about, title: `${n} mails ${about}` };
+  if (!head) return { title: "", about: "" };
+  const about = basis === "list" ? `from the ${senderOf(head)} list` : basis === "sender" ? `from ${senderOf(head)}` : `like ${quoted(head.subject)}`;
+  return { about, title: `${n} mails ${about}` };
 }
 
 function learnedWhy(members: readonly SweepMember[], target: MoveTarget, classified: SweepInput["classified"]): string {
@@ -121,14 +122,14 @@ function sweeps(pool: readonly SweepMember[], input: SweepInput, bundled: readon
   for (const category of ["fyi", "bulk"] as const) {
     const members = quiet.filter((m) => input.classified.get(m.id)?.category === category && Date.parse(m.receivedAt) < old);
     if (members.length < SWEEP_LIMITS.minSweep) continue;
-    out.push(makeGroup({ id: `sweep:age:${category}`, kind: "sweep", basis: "age", target: "archive", label: category, labelPhrase: { code: "mail.sweep-category", params: { category } }, title: `${members.length} ${category} mails older than ${SWEEP_LIMITS.ageDays} days are still unread`, about: `older than ${SWEEP_LIMITS.ageDays} days (${category})`, why: SAFE }, members));
+    out.push(makeGroup({ id: `sweep:age:${category}`, kind: "sweep", basis: "age", target: "archive", labelPhrase: { code: "mail.sweep-category", params: { category } }, title: `${members.length} ${category} mails older than ${SWEEP_LIMITS.ageDays} days are still unread`, about: `older than ${SWEEP_LIMITS.ageDays} days (${category})`, why: SAFE }, members));
   }
   const same = (a: readonly SweepMember[], b: readonly SweepMember[]): boolean => a.length === b.length && a.every((m) => b.some((x) => x.id === m.id));
   for (const { key, basis, members } of byListOrSender(quiet.filter((x) => !PERSONAL.has(input.classified.get(x.id)?.category ?? "")))) {
     const head = members[0];
     if (!head || members.length < SWEEP_LIMITS.minSweep || bundled.some((g) => same(g.members, members))) continue;
     const about = basis === "list" ? `from the ${senderOf(head)} list` : `from ${senderOf(head)}`;
-    out.push(makeGroup({ id: `sweep:${hash(key)}`, kind: "sweep", basis, target: "archive", label: basis === "list" ? "mailing list" : "sender", title: `${members.length} unread mails ${about}`, about, why: SAFE }, members));
+    out.push(makeGroup({ id: `sweep:${hash(key)}`, kind: "sweep", basis, target: "archive", title: `${members.length} unread mails ${about}`, about, why: SAFE }, members));
   }
   return largestFirst(out, SWEEP_LIMITS.maxSweeps);
 }

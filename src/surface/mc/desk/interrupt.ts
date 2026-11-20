@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { clock } from "./time";
+import { actionText } from "./wording";
 import type { DeskAction, DeskEvent, DeskInterrupt, DeskInterruptReason, DeskItem, InterruptFeedback, MeetingHold } from "./types";
 import { currentGap, type CalendarAvailability } from "./calendar-availability";
 import type { DESK_TRANSPORTS } from "../../../common/types/config";
@@ -76,8 +77,8 @@ export function meetingItems(events: DeskEvent[], now: number, minutes: number):
     .filter((e) => e.kind === "meeting" && e.at > now && e.at - now <= minutes * MINUTE)
     .map((e): DeskItem => {
       const left = Math.max(1, Math.round((e.at - now) / MINUTE));
-      const join: DeskAction[] = e.url ? [{ id: "open", label: e.online ? "Join" : "Open", role: "primary", wired: true, url: e.url }] : [];
-      const look: DeskAction = { id: "detail", label: "Look first", role: join.length > 0 ? "secondary" : "primary", wired: true };
+      const join: DeskAction[] = e.url ? [{ id: "open", labelPhrase: { code: e.online ? "meeting.join" : "meeting.open" }, role: "primary", wired: true, url: e.url }] : [];
+      const look: DeskAction = { id: "detail", role: join.length > 0 ? "secondary" : "primary", wired: true };
       return {
         key: `meeting:${e.key}@${e.at}`,
         kind: "meeting",
@@ -93,7 +94,7 @@ export function meetingItems(events: DeskEvent[], now: number, minutes: number):
           summary: e.title,
           history: [`Starts ${clock(e.at)}${e.end ? `, ends ${clock(e.end)}` : ""}${e.note ? `, ${e.note}` : ""}`],
           refs: [e.key],
-          links: e.url ? [{ kind: e.online ? "meeting-join" : "meeting", label: e.online ? "Join" : "Open", url: e.url }] : [],
+          links: e.url ? [{ kind: e.online ? "meeting-join" : "meeting", url: e.url }] : [],
         },
         eventKey: e.key,
         since: e.at,
@@ -253,7 +254,7 @@ export function toPush(item: DeskItem): DeskPush {
   const reason = item.interrupt?.reason;
   const held = item.interrupt?.held;
   const why = held && item.since !== undefined ? `${item.why} ${waitedSentence(item.since, held)}` : item.why;
-  return { key: item.key, title: item.title, why, ...(primary?.url ? { action: { label: primary.label, url: primary.url } } : {}), ...(reason ? { reason } : {}), ...(held ? { held } : {}) };
+  return { key: item.key, title: item.title, why, ...(primary?.url ? { action: { label: actionText(primary), url: primary.url } } : {}), ...(reason ? { reason } : {}), ...(held ? { held } : {}) };
 }
 
 async function sendSafely(transport: DeskTransport, push: DeskPush): Promise<PushResult> {

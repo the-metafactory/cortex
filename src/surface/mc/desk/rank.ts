@@ -48,9 +48,9 @@ export interface GoalActionsInput {
   pausable: (goal: string) => boolean;
 }
 
-const action = (id: string, label: string, role: DeskAction["role"], wired: boolean): DeskAction => ({ id, label, role, wired });
-const LOOK = action("detail", "Look first", "secondary", true);
-const LATER = action("snooze", "Not now", "secondary", true);
+const action = (id: string, role: DeskAction["role"], wired: boolean): DeskAction => ({ id, role, wired });
+const LOOK = action("detail", "secondary", true);
+const LATER = action("snooze", "secondary", true);
 
 export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   adapter: "Connected items",
@@ -125,8 +125,8 @@ export const parsedOr = (iso: string | undefined, fallback: number): number => {
   return Number.isFinite(at) ? at : fallback;
 };
 
-const issueLinks = (url: string | undefined) => (url ? [{ kind: "issue" as const, label: "Issue", url }] : []);
-export const mailLink = (url: string): DeskLink => ({ kind: "mail", label: "Open in Mail", url });
+const issueLinks = (url: string | undefined) => (url ? [{ kind: "issue" as const, url }] : []);
+export const mailLink = (url: string): DeskLink => ({ kind: "mail", url });
 
 export function rankItems(input: RankInput): DeskItem[] {
   const items = new Map<string, DeskItem>();
@@ -163,8 +163,8 @@ export function rankItems(input: RankInput): DeskItem[] {
 }
 
 function rulingAction(n: RangerNeedsYou, url: string | undefined, rulingActions: boolean): DeskAction {
-  if (rulingActions && retryable(n)) return action(RULING_ACTION, "Give your ruling", "primary", true);
-  return { ...action("open", "Give your ruling", "primary", url !== undefined), ...(url ? { url } : {}) };
+  if (rulingActions && retryable(n)) return action(RULING_ACTION, "primary", true);
+  return { ...action("open", "primary", url !== undefined), labelPhrase: { code: "ranger.ruling" }, ...(url ? { url } : {}) };
 }
 
 function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, rulingActions = false, explanations }: RankInput, add: Add): void {
@@ -180,7 +180,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
       ? {
           why: `Ranger queued the resume${behind ? ` behind "${behind}"` : ""}, at place ${n.queued.position}. It starts when the lane is free.`,
           whyPhrase: { code: "ranger.resume-queued", params: { position: n.queued.position, ...(behind ? { behind } : {}) } } as const,
-          actions: [action("ranger.run-now", "Run both now", "primary", rangerActions && retryable(n)), LATER],
+          actions: [action("ranger.run-now", "primary", rangerActions && retryable(n)), LATER],
         }
       : {};
     const detail = {
@@ -211,7 +211,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
         why: `It stopped ${ago(now, endedAt)} in ${repoName(n.repo)}${failed ? ", and nothing moves until it is retried or parked" : ""}.`,
         whyPhrase: { code: "ranger.stopped", params: { repo: repoName(n.repo), endedAt: new Date(endedAt).toISOString(), failed } },
         score: (failed ? 60 : 40) - ageDays * 5,
-        actions: [action("ranger.retry", "Let it retry", "primary", rangerActions && retryable(n)), LOOK, action("ranger.park", "Park it", "secondary", false)],
+        actions: [action("ranger.retry", "primary", rangerActions && retryable(n)), LOOK, action("ranger.park", "secondary", false)],
         ...queuedCard,
         detail,
       });
@@ -236,7 +236,7 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
       kind: "decision", urgency: "this-week", score: 45,
       title: (t) => `"${t}" waits for your go-ahead.`,
       why: (repo) => `Agents in ${repo} will not start it without you.`,
-      primary: action("ranger.approve", "Approve", "primary", false),
+      primary: action("ranger.approve", "primary", false),
       wired: (input, map, node) => Boolean(input.rangerActions) && approvable(map, node),
     },
   },
@@ -246,7 +246,7 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
       kind: "grilling", urgency: "waiting", score: 25,
       title: (t) => `An agent wants to settle a question with you: "${t}"`,
       why: (repo) => `It blocks work in ${repo} until you have talked it through.`,
-      primary: action("ranger.grill", "Start the grilling", "primary", false),
+      primary: action("ranger.grill", "primary", false),
       wired: input => Boolean(input.conversations),
     },
   },
@@ -281,8 +281,8 @@ function rangerMapItems(input: RankInput, add: Add): void {
   }
 }
 
-const CHECK_AGAIN = action("goal.check", "Check again now", "primary", true);
-const PAUSE = action("goal.pause", "Pause this goal", "secondary", true);
+const CHECK_AGAIN = action("goal.check", "primary", true);
+const PAUSE = action("goal.pause", "secondary", true);
 
 function goalExtras(goals: GoalActionsInput | undefined, goalId: string): Pick<DeskItem, "goal" | "checking"> {
   return { goal: goalId, ...(goals?.checking.has(goalId) ? { checking: true } : {}) };
@@ -307,7 +307,7 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks, explanati
         why: `Without it, nobody can tell whether this goal is on track. It last ran ${ago(now, s.lastEndedAt)}.`,
         whyPhrase: { code: "goal.check-regressed", params: { lastRanAt: new Date(s.lastEndedAt).toISOString() } },
         score: 85,
-        actions: [action("goal.check", "Run the check now", "primary", canCheck(s.goalId)), LOOK, LATER],
+        actions: [{ ...action("goal.check", "primary", canCheck(s.goalId)), labelPhrase: { code: "goal.run-check" } }, LOOK, LATER],
         detail: { summary: wording ?? "This goal has no description.", history: [`Last run ${ago(now, s.lastEndedAt)}`], refs: [s.goalId, ...refs], links: [] },
         ...goalExtras(goalActions, s.goalId),
       });
@@ -345,7 +345,7 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks, explanati
         ...questionPhrase(task.kind === "unavailable" ? null : task.question, repo),
         ...(task.kind === "unavailable" ? { whyContent: { sourceStatusReason: task.reason } } : {}),
         score: s.value === "needs-principal" ? 50 : 35,
-        actions: [answerOnIssue === null ? action(RULING_ACTION, "Give your ruling", "primary", true) : action("detail", "Look first", "primary", true), ...(answerOnIssue === null ? [LOOK] : []), LATER],
+        actions: [answerOnIssue === null ? action(RULING_ACTION, "primary", true) : action("detail", "primary", true), ...(answerOnIssue === null ? [LOOK] : []), LATER],
         detail: { summary, history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url ?? escalationUrl(s.ref)) },
         ...(explanation ? { explanation } : {}),
       });
@@ -360,7 +360,7 @@ function questionPhrase(reason: string | null | undefined, repo: string): Pick<D
 export function fold(rest: DeskItem[]): DeskFoldedGroup[] {
   const groups = new Map<DeskItemKind, DeskFoldedGroup>();
   for (const item of rest) {
-    const g = groups.get(item.kind) ?? { kind: item.kind, label: FOLDED_LABELS[item.kind], count: 0, example: item.title };
+    const g = groups.get(item.kind) ?? { kind: item.kind, count: 0, example: item.title };
     g.count += 1;
     groups.set(item.kind, g);
   }
@@ -444,20 +444,20 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
   return { score: CATEGORY_SCORE[c.category], pressing: c.category === "action" || c.category === "reply", why: reason, whyContent: { reason: c.reason }, sorted: c.category };
 }
 
-const SEEN = action("mail.seen", "Seen, delete", "primary", true);
-const DELETE = action("mail.trash", "Delete", "secondary", true);
-const ARCHIVE = action("mail.archive", "Archive", "secondary", true);
-const SPAM = action("mail.spam", "Spam", "secondary", true);
-const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true);
-const REPORT = action("mail.report", "Report", "secondary", true);
-const NOT_PHISHING = action("mail.trust", "Not phishing", "secondary", true);
-const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
-const toAssistant = (name: string): DeskAction => ({ ...action("mail.assistant", `Hand to ${name}`, "secondary", true), labelPhrase: { code: "mail.assistant", params: { name } } });
-const SNOOZE = action("mail.snooze", "Snooze", "secondary", true);
+const SEEN = action("mail.seen", "primary", true);
+const DELETE = action("mail.trash", "secondary", true);
+const ARCHIVE = action("mail.archive", "secondary", true);
+const SPAM = action("mail.spam", "secondary", true);
+const UNIMPORTANT = action("mail.unimportant", "secondary", true);
+const REPORT = action("mail.report", "secondary", true);
+const NOT_PHISHING = action("mail.trust", "secondary", true);
+const TO_STUDIO = action("mail.studio", "secondary", true);
+const toAssistant = (name: string): DeskAction => ({ ...action("mail.assistant", "secondary", true), labelPhrase: { code: "mail.assistant", params: { name } } });
+const SNOOZE = action("mail.snooze", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
-const ACCEPT = action("invite.accept", "Accept", "primary", true);
-const DECLINE = action("invite.decline", "Decline", "secondary", true);
-const PROPOSE = action("invite.propose", "Propose times", "secondary", true);
+const ACCEPT = action("invite.accept", "primary", true);
+const DECLINE = action("invite.decline", "secondary", true);
+const PROPOSE = action("invite.propose", "secondary", true);
 const INVITE_SOON_MS = 3 * DAY_MS;
 
 function inviteLead(invite: InvitationView | undefined, invited: boolean, canDraft: boolean): DeskAction[] {
@@ -475,12 +475,11 @@ function inviteWhy(invite: InvitationView, now: number): string {
   if (!invite.attendee) return `${head} You are not listed as an attendee, so the Desk does not answer it.`;
   return `${head} ${invite.conflictLine}`;
 }
-const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", true);
-const DRAFT_LABEL = "Draft a reply";
+const SHOW_MEETING = action("meeting.show", "primary", true);
 const unsubscribeAction = (offer: UnsubscribeOffer): DeskAction => {
-  if (offer.kind === "one-click") return { ...action("mail.unsubscribe", "Unsubscribe", "secondary", true), target: offer.host };
-  if (offer.kind === "page") return { ...action("mail.unsubscribe.page", "Open unsubscribe page", "secondary", true), target: offer.host, url: offer.url };
-  return action("mail.unsubscribe.rule", "Archive what still arrives", "secondary", true);
+  if (offer.kind === "one-click") return { ...action("mail.unsubscribe", "secondary", true), target: offer.host };
+  if (offer.kind === "page") return { ...action("mail.unsubscribe.page", "secondary", true), target: offer.host, url: offer.url };
+  return action("mail.unsubscribe.rule", "secondary", true);
 };
 
 const unsubscribeLine = (offer: UnsubscribeOffer, now: number): string => {
@@ -577,10 +576,10 @@ export function mailItems(input: MailInput): DeskItem[] {
     const canDraft = draft && Boolean(m.account);
     const replyFirst = canDraft && (predicted ? predicted === "reply" : triage?.suggestedAction === "reply" && !quiet) && showMeeting.length === 0;
     const seenFirst = quiet && !moveFirst && predicted !== "keep" && !replyFirst;
-    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", seenFirst || moveFirst || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
+    const open: DeskAction[] = m.url ? [{ ...action("open", seenFirst || moveFirst || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
     const firstName = m.from.name?.split(" ")[0];
-    const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${firstName ?? "this sender"}`, "secondary", true), target: m.from.address, labelPhrase: { code: "vip.add", params: { ...(firstName === undefined ? {} : { name: firstName }) } } }];
-    const reply = action("mail.draft", DRAFT_LABEL, replyFirst ? "primary" : "secondary", true);
+    const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", "secondary", true), target: m.from.address, labelPhrase: { code: "vip.add", params: { ...(firstName === undefined ? {} : { name: firstName }) } } }];
+    const reply = action("mail.draft", replyFirst ? "primary" : "secondary", true);
     const replyLead = replyFirst ? [reply] : [];
     const replyTail = canDraft && !replyFirst ? [reply] : [];
     const lead = archiveFirst ? [{ ...ARCHIVE, role: "primary" as const }] : spamFirst ? [{ ...SPAM, role: "primary" as const }] : trashFirst ? [{ ...DELETE, role: "primary" as const }] : seenFirst ? [SEEN] : [];
@@ -621,7 +620,7 @@ export function mailItems(input: MailInput): DeskItem[] {
         summary: triage?.summary ?? m.firstParagraph ?? m.subject,
         history,
         refs: [m.from.address, m.id],
-        links: [...(m.url ? [mailLink(m.url)] : []), ...(unsubscribe?.kind === "page" ? [{ kind: "unsubscribe-page" as const, label: `Unsubscribe page: ${unsubscribe.url}`, url: unsubscribe.url }] : [])],
+        links: [...(m.url ? [mailLink(m.url)] : []), ...(unsubscribe?.kind === "page" ? [{ kind: "unsubscribe-page" as const, url: unsubscribe.url }] : [])],
         ...(evidence.length > 0 ? { evidence } : {}),
         ...(precedents.length > 0 ? { precedents } : {}),
       },
@@ -643,7 +642,7 @@ function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof
   const triage = input.classified?.get(m.id);
   const spam: DeskAction[] = can.spam ? [{ ...SPAM, role: "primary" }] : [];
   const report: DeskAction[] = can.report ? [REPORT] : [];
-  const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", spam.length > 0 ? "secondary" : "primary", true), url: m.url }] : [];
+  const open: DeskAction[] = m.url ? [{ ...action("open", spam.length > 0 ? "secondary" : "primary", true), url: m.url }] : [];
   const offered = [...spam, ...report, ...open, LOOK, NOT_PHISHING, SNOOZE];
   return {
     key: `mail:${m.id}`,

@@ -14,7 +14,7 @@ export function handoffWhen(at: number, now: number): string {
   return `${new Date(at).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} ${clock(at)}`;
 }
 
-export const handoffAction = (id: string, label: string, role: DeskAction["role"], target?: string): DeskAction => ({ id, label, role, wired: true, ...(target ? { target } : {}) });
+export const handoffAction = (id: string, role: DeskAction["role"], target?: string): DeskAction => ({ id, role, wired: true, ...(target ? { target } : {}) });
 
 export const HANDOFF_KEY_PREFIX = "assistant:";
 export const handoffKey = (id: string): string => `${HANDOFF_KEY_PREFIX}${id}`;

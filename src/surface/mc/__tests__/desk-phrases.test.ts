@@ -29,8 +29,9 @@ const iso = (at: number): string => new Date(at).toISOString();
 const WORDING = "A goal's original wording.";
 const DAY_MS = 24 * 3_600_000;
 const WHY_CODES = "ranger.resume-queued ranger.blocked ranger.stopped ranger.approval-needed ranger.discussion-needed ranger.map-read-only ranger.approval-unavailable ranger.question ranger.conversations-unavailable ranger.retry-failed ranger.retried goal.check-regressed goal.reading meeting.soon meeting.ended reminder.due mail.meeting-today mail.deadline-today mail.vip mail.ranked mail.received mail.meeting-possible mail.meeting-linked mail.unimportant mail.precedent mail.unsubscribe mail.invitation mail.suspicious".split(" ");
+const CARD_LABEL_CODES: readonly string[] = ["meeting.join", "meeting.open", "ranger.ruling", "mail.junk-review", "goal.run-check", "waiting.nudge", "waiting.snooze"];
 const LABEL_CODES: readonly string[] = [
-  "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", "mail.put-away-time",
+  "mailrule.release", "mail.assistant", "assistant.retry", "vip.add", "task.link", ...CARD_LABEL_CODES, "mail.put-away-time",
   "mail.put-away-meeting", "mail.put-away-person", "correction.source", "mail.correction", "mail.sweep-category",
 ];
 const CLASSIFIER_REASON = "Original classifier content";
@@ -283,7 +284,7 @@ test("GET, a snooze answer and the classifier input serve every label phrase cod
   ];
   expect(snoozed.map(phrase => phrase?.code)).toEqual(["mail.put-away-time", "mail.put-away-meeting", "mail.put-away-person"]);
   expect(corrections.map(phrase => phrase.code)).toEqual(["mail.correction"]);
-  expect([...labelCodes(view), ...snoozed.flatMap(phrase => phrase ? [phrase.code] : []), ...corrections.map(phrase => phrase.code)].sort()).toEqual([...LABEL_CODES].sort());
+  expect([...labelCodes(view), ...snoozed.flatMap(phrase => phrase ? [phrase.code] : []), ...corrections.map(phrase => phrase.code)].sort()).toEqual(LABEL_CODES.filter(code => !CARD_LABEL_CODES.includes(code)).sort());
 });
 
 test("mixed mail wording separates prose, titles and URLs from named VIP and ISO parameters", () => {
@@ -344,8 +345,9 @@ test("a running stack serves why phrases, link kinds and action label phrases th
     const mail = item(view, "mail:label");
     const link = mail.detail.links[0];
     const action = [...mail.actions, ...(mail.more ?? [])].find(a => a.id === "vip.add");
-    expect(link).toEqual({ kind: "mail", label: "Open in Mail", url: "message://label" });
-    expect(action).toMatchObject({ label: "Always show mail from Sender", labelPhrase: { code: "vip.add", params: { name: "Sender" } } });
+    expect(link).toEqual({ kind: "mail", url: "message://label" });
+    expect(action).not.toHaveProperty("label");
+    expect(action).toMatchObject({ labelPhrase: { code: "vip.add", params: { name: "Sender" } } });
     console.log(JSON.stringify({ probe: "curl /api/desk", status: 200, why: found.why, whyPhrase: found.whyPhrase, reason: found.interrupt?.reason, link, action }));
   } finally {
     stack.stop(true);

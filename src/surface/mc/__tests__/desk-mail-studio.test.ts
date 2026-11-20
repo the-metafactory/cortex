@@ -22,6 +22,7 @@ import type { CaptureModel, CaptureRequest } from "../desk/studio/capture";
 import { parseThreadFile } from "../desk/studio/format";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
 import type { ClassifierConfig } from "../desk/classify";
+import { actionText } from "../desk/wording";
 
 const NOW = Date.parse("2026-11-02T09:00:00.000Z");
 const CLOUD = { baseUrl: "https://filer.example.org/v1", model: "cloud-filer", timeoutSeconds: 5, maxPerPass: 10 };
@@ -75,7 +76,7 @@ describe("Add a mail to a Studio thread", () => {
     if (!options) throw new Error("no desk options");
     const view = await composeDesk(db, options, undefined, { now: NOW, handled: runtime.ledger, ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}) });
     const card = view.items.find((i) => i.key === "mail:w1");
-    expect([...(card?.actions ?? []), ...(card?.more ?? [])].some((a) => a.id === "mail.studio" && a.label === "Add to thread")).toBe(true);
+    expect([...(card?.actions ?? []), ...(card?.more ?? [])].some((a) => a.id === "mail.studio" && actionText(a) === "Add to thread")).toBe(true);
   });
 
   it("proposes the filer's thread with its reason and lists every thread the mail may go to", async () => {
