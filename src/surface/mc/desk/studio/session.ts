@@ -59,10 +59,6 @@ export function planExchangeEnd(ctx: ActContext, session: StudioExchange, outcom
   const thread = sessionThread(ctx, session.thread);
   const file = ctx.files.threads.find(f => f.path === thread?.path);
   if (!thread || !file) return refused("The thread is no longer readable. Your exchange is retained; restore the thread and retry.");
-  if (outcome.kind === "propose") {
-    const problem = newStandProblem(thread.type, outcome.text);
-    if (problem) return refused(problem);
-  }
   let text: string | null = file.text;
   if (session.scope.kind === "ghost" && outcome.kind !== "leave") {
     const note = thread.notes.find(n => n.at === (session.scope.kind === "ghost" ? session.scope.note : ""));
@@ -77,6 +73,10 @@ export function planExchangeEnd(ctx: ActContext, session: StudioExchange, outcom
     if (text !== null) text = setNoteStatus(text, note.at, outcome.kind === "dismiss" ? "dismissed" : "kept");
     if (text !== null && note.kind === "stand" && outcome.kind !== "dismiss") text = setSection(text, "stand", "Where I stand", outcome.kind === "reword" ? outcome.text : note.text);
   } else if (session.scope.kind === "thread" && outcome.kind !== "leave" && outcome.kind !== "propose") return refused("A whole-thread session can save a summary and optionally propose a stand.");
+  if (outcome.kind === "propose") {
+    const problem = newStandProblem(thread.type, outcome.text);
+    if (problem) return refused(problem);
+  }
   const trigger = session.scope.kind === "thread" ? "You talked it through" : "You discussed an idea";
   const latest = session.turns.at(-1);
   const at = new Date(ctx.now);

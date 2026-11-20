@@ -11,15 +11,15 @@ const StudioStandsSchema = z.object({ studio: z.object({ active: z.array(z.objec
 async function probe(): Promise<void> {
   const rig = await openStudioDraftRig();
   try {
+    const path = join(rig.studioDir, "threads/question.md");
+    const readStands = async () => {
+      const response = await fetch(`${rig.baseUrl()}/api/desk/studio`);
+      assert.equal(response.status, 200);
+      assert.ok(response.headers.get("x-desk-api-version"));
+      return StudioStandsSchema.parse(await response.json()).studio.active;
+    };
     for (const stand of [null, "", "Try a narrow fold.", "Legacy answer.\n\nFull reasoning stays here."]) {
-      const path = join(rig.studioDir, "threads/question.md");
       const file = await rig.setStand(stand);
-      const readStands = async () => {
-        const response = await fetch(`${rig.baseUrl()}/api/desk/studio`);
-        assert.equal(response.status, 200);
-        assert.ok(response.headers.get("x-desk-api-version"));
-        return StudioStandsSchema.parse(await response.json()).studio.active;
-      };
       const before = await readStands();
       assert.equal(before.find(thread => thread.slug === "question")?.stand, stand ?? "");
       const draft = await rig.read();

@@ -85,6 +85,15 @@ test("question sessions refuse multiline stand proposals and rewordings without 
   }
 });
 
+test("a discussion of one idea refuses a multiline proposal as out of scope before checking the stand", async () => {
+  const r = rig("stand");
+  await r.start({ kind: "ghost", note: NOTE });
+  await r.say();
+  const response = await r.post({ action: "end", outcome: { kind: "propose", text: "Answer.\n\nFull reasoning." } });
+  expect(response.status).toBe(409);
+  expect((await response.json()).error).toContain("rewords its selected idea");
+});
+
 test("sessions think and save full reasoning without a stand, and can keep legacy multiline proposals unchanged", async () => {
   const r = rig("stand");
   writeFileSync(join(r.dir, "threads/alpha.md"), r.file().replace("## Where I stand\n\nTry a broad wing.\n\n", "").replace("Use a lighter paper wing.", "Legacy answer.\n\nFull reasoning."));
